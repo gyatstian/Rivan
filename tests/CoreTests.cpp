@@ -429,6 +429,7 @@ void TestFilePreviewSettingRoundTrip() {
     settings.filePreviewEnabled = false;
     settings.startAtStartup = true;
     settings.exitToTray = true;
+    settings.discordShowGithubButton = true;
     std::string error;
     Check(writer.SetSettings(settings, &error), "file preview setting accepts false");
     Check(writer.SaveSettings(&error), "file preview setting saves");
@@ -443,6 +444,8 @@ void TestFilePreviewSettingRoundTrip() {
           "start at startup survives settings round-trip");
     Check(reader.Settings().exitToTray,
           "exit to tray survives settings round-trip");
+    Check(reader.Settings().discordShowGithubButton,
+          "Discord GitHub button setting survives settings round-trip");
 
     settings.filePreviewEnabled = true;
     settings.trackCoverArtEnabled = true;

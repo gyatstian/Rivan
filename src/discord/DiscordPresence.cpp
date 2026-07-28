@@ -23,6 +23,7 @@ constexpr std::uint32_t kOpcodePong = 4;
 
 constexpr DWORD kPipeBuffer = 64 * 1024;
 constexpr std::string_view kDiscordApplicationId = "1529189289429172324";
+constexpr std::string_view kGithubRepoUrl = "https://github.com/gyatstian/Rivan";
 
 std::string EscapeJson(std::string_view text) {
     std::string out;
@@ -247,6 +248,11 @@ bool DiscordPresence::PublishActivity(const PresenceActivity& activity) {
                 payload += std::to_string(activity.endUnix);
             }
             payload += '}';
+        }
+        if (activity.showGithubButton) {
+            payload += R"(,"buttons":[{"label":"Rivan","url":")";
+            payload += EscapeJson(kGithubRepoUrl);
+            payload += R"("}])";
         }
         payload += R"(}},"nonce":")";
         payload += std::to_string(nonce);

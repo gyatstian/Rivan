@@ -60,6 +60,7 @@ struct AppSettings final {
     // Optional Rich Presence fields. Discord's application label itself is not removable.
     bool discordShowArtist = true;
     bool discordShowImageText = true;
+    bool discordShowGithubButton = false;
 
     [[nodiscard]] static AppSettings Defaults();
 };

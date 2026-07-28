@@ -58,6 +58,7 @@ public:
                                           std::wstring& error) override;
     void SetDiscordShowArtist(bool enabled) override;
     void SetDiscordShowImageText(bool enabled) override;
+    void SetDiscordShowGithubButton(bool enabled) override;
     void SetYoutubeMusicSearch(bool enabled) override;
     void SetYoutubeDownloadMode(int mode) override;
     void SetYoutubeAudioQuality(int quality) override;

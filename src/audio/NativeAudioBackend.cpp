@@ -20,14 +20,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cwctype>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <span>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -47,6 +51,7 @@ using Microsoft::WRL::ComPtr;
 constexpr DWORD kAllStreams = 0xFFFFFFFEu;
 constexpr DWORD kFirstAudioStream = 0xFFFFFFFDu;
 constexpr DWORD kMediaSource = 0xFFFFFFFFu;
+constexpr REFERENCE_TIME kSharedRenderBufferDuration = 100LL * 10'000LL;
 
 [[nodiscard]] std::int64_t NativeCode(const HRESULT value) noexcept {
     return static_cast<std::int64_t>(static_cast<std::uint32_t>(value));
@@ -348,6 +353,7 @@ public:
             ActivateEndpoint();
             ConfigureDecoder();
             ConfigureRenderer();
+            StartDecoder();
             hasMedia_ = true;
         } catch (...) {
             Close();
@@ -365,6 +371,7 @@ public:
         started_ = false;
         elapsedBeforeStart_ = {};
         startClockPosition_ = 0;
+        StopDecoder();
 
         clock_.Reset();
         volumeControl_.Reset();
@@ -377,10 +384,16 @@ public:
         }
         reader_.Reset();
 
-        decoded_.ResetCapacity(0);
-        pendingSize_ = 0;
-        pendingOffset_ = 0;
-        decodeEos_ = false;
+        {
+            std::scoped_lock lock(bufferMutex_);
+            decoded_.ResetCapacity(0);
+            pendingSize_ = 0;
+            pendingOffset_ = 0;
+            decodeEos_ = false;
+            decoderError_ = nullptr;
+            ++decodeGeneration_;
+        }
+        decodeCv_.notify_all();
         hasMedia_ = false;
         duration_ = {};
         sampleRate_ = 0;
@@ -395,52 +408,34 @@ public:
 
     void PumpDecoded(const std::size_t maximumReads) {
         EnsureMedia("NativeAudioBackend::PumpDecoded");
-        FlushPending();
-        if (pendingSize_ != 0) {
-            return;
+        (void)maximumReads;
+        if (started_) {
+            RethrowDecoderErrorIfAvailable();
+        } else {
+            RethrowDecoderError();
         }
-
-        // Prefer filling free ring space over a fixed read count when already full.
-        constexpr std::size_t kMinFreeFramesToPump = 64;
-        if (blockAlign_ != 0 &&
-            decoded_.Free() / blockAlign_ < kMinFreeFramesToPump &&
-            decoded_.Size() != 0) {
-            return;
+        decodeCv_.notify_all();
+        if (!started_ && blockAlign_ != 0) {
+            const auto targetFrames = endpointBufferFrames_ != 0
+                                          ? static_cast<std::size_t>(endpointBufferFrames_)
+                                          : static_cast<std::size_t>(sampleRate_ / 20);
+            const auto targetBytes = (std::max)(static_cast<std::size_t>(blockAlign_),
+                                               targetFrames * blockAlign_);
+            std::unique_lock lock(bufferMutex_);
+            decodeCv_.wait_for(lock, std::chrono::milliseconds{150}, [this, targetBytes] {
+                return decoderError_ != nullptr || decodeEos_ || decoded_.Size() >= targetBytes;
+            });
         }
-
-        std::size_t reads = 0;
-        while (reads < maximumReads && !decodeEos_ && decoded_.Free() >= blockAlign_) {
-            DWORD streamIndex = 0;
-            DWORD flags = 0;
-            LONGLONG timestamp = 0;
-            ComPtr<IMFSample> sample;
-            Check(reader_->ReadSample(kFirstAudioStream, 0, &streamIndex,
-                                      &flags, &timestamp, &sample),
-                  "IMFSourceReader::ReadSample");
-            ++reads;
-
-            if ((flags & MF_SOURCE_READERF_ERROR) != 0) {
-                ThrowFailure(E_FAIL, "Media Foundation source stream");
-            }
-            if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
-                ThrowFailure(MF_E_TRANSFORM_STREAM_CHANGE,
-                             "Unexpected decoded audio format change");
-            }
-
-            if (sample) {
-                AppendSample(sample.Get());
-            }
-            if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
-                decodeEos_ = true;
-            }
-            if (pendingSize_ != 0) {
-                break;
-            }
+        if (started_) {
+            RethrowDecoderErrorIfAvailable();
+        } else {
+            RethrowDecoderError();
         }
     }
 
     [[nodiscard]] RenderResult Render() {
         EnsureMedia("NativeAudioBackend::Render");
+        RethrowDecoderErrorIfAvailable();
 
         UINT32 padding = 0;
         Check(audioClient_->GetCurrentPadding(&padding), "IAudioClient::GetCurrentPadding");
@@ -449,10 +444,22 @@ public:
         }
 
         const UINT32 availableFrames = endpointBufferFrames_ - padding;
-        const bool decodingComplete = decodeEos_ && pendingSize_ == 0;
-        const std::size_t queuedFrames = decoded_.Size() / blockAlign_;
         if (availableFrames == 0) {
-            return {decodingComplete && queuedFrames == 0 && padding == 0};
+            std::unique_lock lock(bufferMutex_, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                return {};
+            }
+            return {decodeEos_ && pendingSize_ == 0 && decoded_.Size() == 0 && padding == 0};
+        }
+
+        bool decodingComplete = false;
+        std::size_t queuedFrames = decoded_.Size() / blockAlign_;
+        {
+            std::unique_lock lock(bufferMutex_, std::try_to_lock);
+            if (lock.owns_lock()) {
+                decodingComplete = decodeEos_ && pendingSize_ == 0;
+                queuedFrames = decoded_.Size() / blockAlign_;
+            }
         }
 
         UINT32 requestedFrames = availableFrames;
@@ -471,6 +478,9 @@ public:
         const std::size_t requestedBytes = static_cast<std::size_t>(requestedFrames) * blockAlign_;
         const std::size_t copiedBytes = decoded_.Read(
             std::span<std::byte>{reinterpret_cast<std::byte*>(destination), requestedBytes});
+        if (copiedBytes != 0) {
+            decodeCv_.notify_all();
+        }
         if (copiedBytes < requestedBytes) {
             std::memset(destination + copiedBytes, 0, requestedBytes - copiedBytes);
         }
@@ -522,11 +532,17 @@ public:
             started_ = false;
         }
         Check(audioClient_->Reset(), "IAudioClient::Reset(seek)");
+        StopDecoder();
 
-        decoded_.Clear();
-        pendingSize_ = 0;
-        pendingOffset_ = 0;
-        decodeEos_ = false;
+        {
+            std::scoped_lock lock(bufferMutex_);
+            decoded_.Clear();
+            pendingSize_ = 0;
+            pendingOffset_ = 0;
+            decodeEos_ = false;
+            decoderError_ = nullptr;
+            ++decodeGeneration_;
+        }
         startClockPosition_ = 0;
         analysis_.Clear();
 
@@ -540,6 +556,7 @@ public:
         Check(reader_->SetCurrentPosition(GUID_NULL, target.Value()),
               "IMFSourceReader::SetCurrentPosition");
         elapsedBeforeStart_ = clamped;
+        StartDecoder();
     }
 
     void SetVolume(const float volume) {
@@ -689,7 +706,10 @@ private:
         constexpr DWORD streamFlags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
                                       AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
                                       AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-        Check(audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags, 0, 0,
+        // Music playback needs underrun margin more than ultra-low latency. The default
+        // shared buffer can be too short when UI or disk activity delays the audio thread.
+        Check(audioClient_->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags,
+                                       kSharedRenderBufferDuration, 0,
                                        waveFormat_.get(), nullptr),
               "IAudioClient::Initialize(shared event mode)");
         Check(audioClient_->SetEventHandle(renderEvent_.Get()),
@@ -734,7 +754,155 @@ private:
         waveFormat_.reset();
     }
 
-    void AppendSample(IMFSample* sample) {
+    void StartDecoder() {
+        if (decoderThread_.joinable()) {
+            return;
+        }
+
+        std::uint64_t generation = 0;
+        {
+            std::scoped_lock lock(bufferMutex_);
+            decoderStop_ = false;
+            decoderError_ = nullptr;
+            generation = decodeGeneration_;
+        }
+        decoderThread_ = std::jthread([this, generation](std::stop_token stop) {
+            DecoderMain(stop, generation);
+        });
+    }
+
+    void StopDecoder() noexcept {
+        {
+            std::scoped_lock lock(bufferMutex_);
+            decoderStop_ = true;
+            ++decodeGeneration_;
+        }
+        decodeCv_.notify_all();
+        if (decoderThread_.joinable()) {
+            CancelSynchronousIo(decoderThread_.native_handle());
+        }
+        if (decoderThread_.joinable()) {
+            decoderThread_.request_stop();
+            decoderThread_.join();
+        }
+    }
+
+    void DecoderMain(std::stop_token stop, const std::uint64_t generation) noexcept {
+        bool comInitialized = false;
+        try {
+            const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            if (FAILED(comResult)) {
+                ThrowFailure(comResult, "CoInitializeEx(decoder)");
+            }
+            comInitialized = true;
+
+            while (!stop.stop_requested()) {
+                {
+                    std::unique_lock lock(bufferMutex_);
+                    decodeCv_.wait(lock, [this, &stop, generation] {
+                        return stop.stop_requested() || decoderStop_ ||
+                               generation != decodeGeneration_ || decoderError_ != nullptr ||
+                               decodeEos_ ||
+                               (blockAlign_ != 0 && decoded_.Free() >= blockAlign_);
+                    });
+
+                    if (stop.stop_requested() || decoderStop_ ||
+                        generation != decodeGeneration_ || decoderError_ != nullptr ||
+                        decodeEos_) {
+                        break;
+                    }
+
+                    FlushPending();
+                    if (pendingSize_ != 0 || decoded_.Free() < blockAlign_) {
+                        continue;
+                    }
+                }
+
+                DWORD streamIndex = 0;
+                DWORD flags = 0;
+                LONGLONG timestamp = 0;
+                ComPtr<IMFSample> sample;
+                Check(reader_->ReadSample(kFirstAudioStream, 0, &streamIndex,
+                                          &flags, &timestamp, &sample),
+                      "IMFSourceReader::ReadSample");
+
+                if ((flags & MF_SOURCE_READERF_ERROR) != 0) {
+                    ThrowFailure(E_FAIL, "Media Foundation source stream");
+                }
+                if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
+                    ThrowFailure(MF_E_TRANSFORM_STREAM_CHANGE,
+                                 "Unexpected decoded audio format change");
+                }
+
+                if (sample) {
+                    AppendSample(sample.Get(), generation);
+                }
+                if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
+                    std::unique_lock lock(bufferMutex_);
+                    while (!stop.stop_requested() && !decoderStop_ &&
+                           generation == decodeGeneration_ && pendingSize_ != 0) {
+                        decodeCv_.wait(lock, [this, &stop, generation] {
+                            return stop.stop_requested() || decoderStop_ ||
+                                   generation != decodeGeneration_ ||
+                                   (blockAlign_ != 0 && decoded_.Free() >= blockAlign_);
+                        });
+                        FlushPending();
+                    }
+                    if (!stop.stop_requested() && !decoderStop_ && generation == decodeGeneration_) {
+                        decodeEos_ = true;
+                    }
+                    lock.unlock();
+                    decodeCv_.notify_all();
+                    break;
+                }
+            }
+        } catch (...) {
+            StoreDecoderError(std::current_exception(), generation);
+        }
+
+        if (comInitialized) {
+            CoUninitialize();
+        }
+    }
+
+    void StoreDecoderError(std::exception_ptr error, const std::uint64_t generation) noexcept {
+        try {
+            std::scoped_lock lock(bufferMutex_);
+            if (generation == decodeGeneration_ && decoderError_ == nullptr) {
+                decoderError_ = std::move(error);
+                decodeEos_ = true;
+            }
+        } catch (...) {
+        }
+        decodeCv_.notify_all();
+    }
+
+    void RethrowDecoderError() {
+        std::exception_ptr error;
+        {
+            std::scoped_lock lock(bufferMutex_);
+            error = decoderError_;
+        }
+        if (error) {
+            std::rethrow_exception(error);
+        }
+    }
+
+    void RethrowDecoderErrorIfAvailable() {
+        std::exception_ptr error;
+        {
+            std::unique_lock lock(bufferMutex_, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                return;
+            }
+            error = decoderError_;
+        }
+        if (error) {
+            std::rethrow_exception(error);
+        }
+    }
+
+    void AppendSample(IMFSample* sample, const std::uint64_t generation) {
         ComPtr<IMFMediaBuffer> buffer;
         Check(sample->ConvertToContiguousBuffer(&buffer),
               "IMFSample::ConvertToContiguousBuffer");
@@ -752,6 +920,10 @@ private:
 
         const auto source = std::span<const std::byte>{
             reinterpret_cast<const std::byte*>(locked.Data()), locked.Length()};
+        std::scoped_lock lock(bufferMutex_);
+        if (generation != decodeGeneration_ || decoderStop_) {
+            return;
+        }
         const auto written = decoded_.Write(source);
         if (written < source.size()) {
             const auto remainder = source.size() - written;
@@ -763,6 +935,7 @@ private:
             pendingSize_ = remainder;
             pendingOffset_ = 0;
         }
+        decodeCv_.notify_all();
     }
 
     void FlushPending() {
@@ -802,7 +975,12 @@ private:
     std::vector<std::byte> pending_;
     std::size_t pendingSize_{};
     std::size_t pendingOffset_{};
-
+    std::mutex bufferMutex_;
+    std::condition_variable decodeCv_;
+    std::jthread decoderThread_;
+    bool decoderStop_{};
+    std::uint64_t decodeGeneration_{};
+    std::exception_ptr decoderError_;
     std::chrono::nanoseconds duration_{};
     std::chrono::nanoseconds elapsedBeforeStart_{};
     UINT64 startClockPosition_{};

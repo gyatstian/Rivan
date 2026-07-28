@@ -85,6 +85,7 @@
     <ClInclude Include="src\core\FileSystemUtil.h" />
     <ClInclude Include="src\core\IniDocument.h" />
     <ClInclude Include="src\core\Text.h" />
+    <ClInclude Include="src\resource.h" />
     <ClInclude Include="src\discord\DiscordPresence.h" />
     <ClInclude Include="src\library\LibraryScanner.h" />
     <ClInclude Include="src\library\Track.h" />
@@ -141,6 +142,8 @@
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="src\app.manifest" />
+    <ResourceCompile Include="Rivan.rc" />
+    <Image Include="src\rivan.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

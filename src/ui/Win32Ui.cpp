@@ -35,7 +35,8 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
     windowClass.lpfnWndProc = WindowProcedure;
     windowClass.hInstance = instance;
     windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    windowClass.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    windowClass.hIcon = LoadRivanIcon(instance, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+    windowClass.hIconSm = LoadRivanIcon(instance, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
     windowClass.hbrBackground = nullptr;
     windowClass.lpszClassName = kWindowClassName;
     if (!RegisterClassExW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
@@ -51,6 +52,11 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
         CW_USEDEFAULT, CW_USEDEFAULT, rectangle.right - rectangle.left, rectangle.bottom - rectangle.top,
         options.owner, nullptr, instance, this);
     if (!impl_->window) return false;
+
+    SendMessageW(impl_->window, WM_SETICON, ICON_BIG,
+                 reinterpret_cast<LPARAM>(LoadRivanIcon(instance, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON))));
+    SendMessageW(impl_->window, WM_SETICON, ICON_SMALL,
+                 reinterpret_cast<LPARAM>(LoadRivanIcon(instance, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON))));
 
     if (options.acceptFileDrops) DragAcceptFiles(impl_->window, TRUE);
     // Force a non-client recalculation so WM_NCCALCSIZE removes the caption immediately.

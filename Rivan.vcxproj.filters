@@ -16,6 +16,12 @@
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="resources\app.manifest" />
+    <ResourceCompile Include="Rivan.rc">
+      <Filter>Pliki zasobów</Filter>
+    </ResourceCompile>
+    <Image Include="src\rivan.ico">
+      <Filter>Pliki zasobów</Filter>
+    </Image>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Main.cpp">
@@ -144,6 +150,9 @@
       <Filter>Pliki nagłówkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\core\Text.h">
+      <Filter>Pliki nagłówkowe</Filter>
+    </ClInclude>
+    <ClInclude Include="src\resource.h">
       <Filter>Pliki nagłówkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\discord\DiscordPresence.h">

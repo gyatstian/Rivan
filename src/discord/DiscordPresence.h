@@ -17,6 +17,7 @@ struct PresenceActivity final {
     std::string state;   // optional artist (UTF-8); empty = omit
     std::string imageUrl; // optional public http(s) image; empty uses the Rivan asset
     bool showImageText = true;
+    bool showGithubButton = false;
     bool playing = false;
     bool hasTrack = false;
     // Unix seconds; 0 = omit. Used for Discord progress when duration known.

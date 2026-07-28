@@ -3,6 +3,7 @@
 // Native Win32/Direct2D presentation styled after late-90s desktop audio players.
 #include "Win32Ui.h"
 
+#include "../resource.h"
 #include "../visualization/VisualizationRenderer.h"
 
 #ifndef NOMINMAX
@@ -84,6 +85,12 @@ constexpr std::size_t kMaximumTrackCoverCacheEntries = 96;
 // but the caption is removed visually via WM_NCCALCSIZE. This is the pixel thickness of
 // the invisible resize border reported by WM_NCHITTEST.
 constexpr int kResizeBorder = 6;
+
+[[nodiscard]] HICON LoadRivanIcon(HINSTANCE instance, int width, int height) noexcept {
+    HICON icon = reinterpret_cast<HICON>(LoadImageW(
+        instance, MAKEINTRESOURCEW(IDI_RIVAN), IMAGE_ICON, width, height, LR_DEFAULTCOLOR | LR_SHARED));
+    return icon ? icon : LoadIconW(nullptr, IDI_APPLICATION);
+}
 
 void PositionToolWindow(HWND tool, HWND owner, int verticalOffset) {
     RECT ownerRect{};

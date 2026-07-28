@@ -89,6 +89,18 @@ void App::SetDiscordShowImageText(bool enabled) {
     if (window_) window_->Refresh();
 }
 
+void App::SetDiscordShowGithubButton(bool enabled) {
+    auto settings = settings_.Settings();
+    if (settings.discordShowGithubButton == enabled) return;
+    settings.discordShowGithubButton = enabled;
+    std::string error;
+    if (!settings_.SetSettings(settings, &error)) return;
+    (void)settings_.SaveSettings(&error);
+    UpdateDiscordPresence();
+    ++revision_;
+    if (window_) window_->Refresh();
+}
+
 void App::StartLibraryScan() {
     if (scanThread_.joinable()) {
         scanThread_.request_stop();
@@ -190,6 +202,7 @@ void App::UpdateDiscordPresence() {
     if (settings_.Settings().discordShowArtist) activity.state = core::WideToUtf8(track->artist.empty() ? L"Unknown artist" : track->artist);
     activity.imageUrl = settings_.Settings().discordImageUrl;
     activity.showImageText = settings_.Settings().discordShowImageText;
+    activity.showGithubButton = settings_.Settings().discordShowGithubButton;
     const auto nowUnix = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     const auto positionSec = std::chrono::duration_cast<std::chrono::seconds>(live.position).count();
     const auto durationSec = std::chrono::duration_cast<std::chrono::seconds>(live.duration).count();

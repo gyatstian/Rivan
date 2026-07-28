@@ -389,6 +389,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
                                            L"Unable to decode error text");
     out.discordShowArtist = settings_.Settings().discordShowArtist;
     out.discordShowImageText = settings_.Settings().discordShowImageText;
+    out.discordShowGithubButton = settings_.Settings().discordShowGithubButton;
     out.youtubeMusicSearch = settings_.Settings().youtubeMusicSearch;
     out.youtubeDownloadMode = settings_.Settings().youtubeDownloadMode;
     out.youtubeAudioQuality = settings_.Settings().youtubeAudioQuality;

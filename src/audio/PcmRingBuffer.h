@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstring>
 #include <span>
@@ -36,9 +37,15 @@ public:
         Clear();
     }
 
-    void Clear() noexcept { read_ = write_ = size_ = 0; }
-    [[nodiscard]] std::size_t Size() const noexcept { return size_; }
-    [[nodiscard]] std::size_t Free() const noexcept { return data_.size() - size_; }
+    void Clear() noexcept {
+        read_.store(0, std::memory_order_relaxed);
+        write_.store(0, std::memory_order_relaxed);
+        size_.store(0, std::memory_order_release);
+    }
+    [[nodiscard]] std::size_t Size() const noexcept {
+        return size_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] std::size_t Free() const noexcept { return data_.size() - Size(); }
     [[nodiscard]] std::size_t Capacity() const noexcept { return data_.size(); }
 
     [[nodiscard]] std::size_t Write(std::span<const std::byte> source) noexcept {
@@ -47,29 +54,31 @@ public:
         if (count == 0 || data_.empty()) {
             return 0;
         }
-        const auto first = std::min(count, data_.size() - write_);
-        std::memcpy(data_.data() + write_, source.data(), first);
+        auto write = write_.load(std::memory_order_relaxed);
+        const auto first = std::min(count, data_.size() - write);
+        std::memcpy(data_.data() + write, source.data(), first);
         if (count > first) {
             std::memcpy(data_.data(), source.data() + first, count - first);
         }
-        Advance(write_, count);
-        size_ += count;
+        write_.store(Advance(write, count), std::memory_order_release);
+        size_.fetch_add(count, std::memory_order_release);
         return count;
     }
 
     [[nodiscard]] std::size_t Read(std::span<std::byte> destination) noexcept {
-        auto count = std::min(destination.size(), size_);
+        auto count = std::min(destination.size(), Size());
         count -= count % alignment_;
         if (count == 0 || data_.empty()) {
             return 0;
         }
-        const auto first = std::min(count, data_.size() - read_);
-        std::memcpy(destination.data(), data_.data() + read_, first);
+        auto read = read_.load(std::memory_order_relaxed);
+        const auto first = std::min(count, data_.size() - read);
+        std::memcpy(destination.data(), data_.data() + read, first);
         if (count > first) {
             std::memcpy(destination.data() + first, data_.data(), count - first);
         }
-        Advance(read_, count);
-        size_ -= count;
+        read_.store(Advance(read, count), std::memory_order_release);
+        size_.fetch_sub(count, std::memory_order_release);
         return count;
     }
 
@@ -94,21 +103,22 @@ private:
         return value + 1;
     }
 
-    void Advance(std::size_t& index, const std::size_t count) noexcept {
+    [[nodiscard]] std::size_t Advance(std::size_t index, const std::size_t count) const noexcept {
         if (useMask_) {
-            index = (index + count) & mask_;
+            return (index + count) & mask_;
         } else if (!data_.empty()) {
-            index = (index + count) % data_.size();
+            return (index + count) % data_.size();
         }
+        return index;
     }
 
     std::vector<std::byte> data_;
     std::size_t mask_{};
     std::size_t alignment_{1};
     bool useMask_{};
-    std::size_t read_{};
-    std::size_t write_{};
-    std::size_t size_{};
+    std::atomic<std::size_t> read_{0};
+    std::atomic<std::size_t> write_{0};
+    std::atomic<std::size_t> size_{0};
 };
 
 } // namespace rivan::audio::detail

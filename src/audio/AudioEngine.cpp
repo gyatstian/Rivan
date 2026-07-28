@@ -1,5 +1,5 @@
 // Rivan command-driven native audio engine.
-// The worker thread exclusively owns COM, Media Foundation, and WASAPI objects.
+// The worker thread owns the command/render path; the backend may run decoder work separately.
 #include "AudioEngine.h"
 
 #include "NativeAudioBackend.h"
@@ -352,8 +352,8 @@ private:
             state->status.state = PlaybackState::Ended;
             const auto duration = backend.Duration();
             state->status.position = duration.count() > 0
-                                         ? duration
-                                         : backend.PlaybackElapsed();
+                                          ? duration
+                                          : backend.PlaybackElapsed();
             PublishLive(state, state->status);
         }
         Emit(state, AudioEventType::EndOfStream);
@@ -524,6 +524,9 @@ private:
         DWORD mmcssTaskIndex = 0;
         const HANDLE mmcssHandle =
             AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmcssTaskIndex);
+        if (mmcssHandle != nullptr) {
+            AvSetMmThreadPriority(mmcssHandle, AVRT_PRIORITY_HIGH);
+        }
 
         detail::NativeAudioBackend backend(state->analysis,
                                            state->options.decodedBufferDuration,
@@ -588,10 +591,11 @@ private:
             if (handleCount == 2 && waitResult == WAIT_OBJECT_0 + 1 &&
                 current == PlaybackState::Playing) {
                 try {
-                    backend.PumpDecoded(32);
                     const auto renderResult = backend.Render();
                     UpdatePosition(state, backend);
-                    FinishIfDrained(state, current, backend, renderResult);
+                    if (!FinishIfDrained(state, current, backend, renderResult)) {
+                        backend.PumpDecoded(32);
+                    }
                 } catch (...) {
                     RecordCurrentException(state, current, backend);
                 }

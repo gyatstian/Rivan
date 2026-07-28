@@ -2546,10 +2546,19 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
                        model.discordShowArtist ? L"SHOW ARTIST: ON" : L"SHOW ARTIST: OFF",
                        20, b);
         SettingsButton(Rect(left + discordOptionWidth + 8, y, right, y + 24),
-                       model.discordShowImageText ? L"IMAGE TEXT: RIVAN"
-                                                  : L"IMAGE TEXT: OFF",
-                       21, b);
+                        model.discordShowImageText ? L"IMAGE TEXT: RIVAN"
+                                                   : L"IMAGE TEXT: OFF",
+                        21, b);
         y += 34;
+        SettingsButton(Rect(left, y, right, y + 24),
+                       model.discordShowGithubButton ? L"GITHUB BUTTON: ON"
+                                                     : L"GITHUB BUTTON: OFF",
+                       23, b);
+        y += 26;
+        Win32Ui::Impl::DrawText(
+            L"Visible to other users only; links to https://github.com/gyatstian/Rivan.",
+            Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+        y += 22;
 
         Win32Ui::Impl::DrawText(L"RICH PRESENCE IMAGE URL", Rect(left, y, right, y + 25),
                  b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -2972,7 +2981,7 @@ void Win32Ui::Impl::AddTrayIcon() {
         NOTIFYICONDATAW data = TrayIconData();
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = kTrayCallbackMessage;
-        data.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+        data.hIcon = LoadRivanIcon(instance, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
         lstrcpynW(data.szTip, L"Rivan", static_cast<int>(std::size(data.szTip)));
         if (Shell_NotifyIconW(NIM_ADD, &data)) trayIconAdded = true;
     }

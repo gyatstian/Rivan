@@ -146,6 +146,7 @@ struct UiModel {
     std::wstring discordImageUrl;
     bool discordShowArtist{true};
     bool discordShowImageText{true};
+    bool discordShowGithubButton{};
     // Youtube pane source: false = YouTube, true = YouTube Music search/download.
     bool youtubeMusicSearch{};
     // Download format: 0 = MP3 (ffmpeg transcode), 1 = Original (native m4a/opus,
@@ -231,6 +232,7 @@ public:
                                                    std::wstring& error) = 0;
     virtual void SetDiscordShowArtist(bool enabled) = 0;
     virtual void SetDiscordShowImageText(bool enabled) = 0;
+    virtual void SetDiscordShowGithubButton(bool enabled) = 0;
     // Youtube pane: search/download via YouTube Music (covers + often better audio).
     virtual void SetYoutubeMusicSearch(bool enabled) = 0;
     // Download format: 0 = MP3 (ffmpeg), 1 = Original (native), 2 = Video (mp4).
