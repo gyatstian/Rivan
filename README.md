@@ -3,8 +3,14 @@
 Rivan is a local windows music player built with C++20, Win32, Direct2D, Media Foundation, and WASAPI<br>
 More of a personal project, don't expect much. was made to be customizable and lightweight.
 
+<div align="center">
+  <img src="Rivan.png" alt="Screenshot" width="500">
+</div>
+yes the layout is basically a winamp rip off
+
 ## Features
 
+- Customization with an easy to share .rivanskin file
 - Folder-derived playlists, multiple library roots, recursive **All Music**, search, and recently played history
 - File-preview panel with expandable video preview
 - Optional YouTube/YouTube Music search and download through `yt-dlp`
