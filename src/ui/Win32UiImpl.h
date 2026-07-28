@@ -1,0 +1,906 @@
+// Win32UiImpl.h
+#pragma once
+// Native Win32/Direct2D presentation styled after late-90s desktop audio players.
+#include "Win32Ui.h"
+
+#include "../visualization/VisualizationRenderer.h"
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <d2d1.h>
+#include <d2d1helper.h>
+#include <dwrite.h>
+#include <dwrite_3.h>
+#include <commdlg.h>
+#include <shellapi.h>
+#include <shobjidl.h>
+#include <wincodec.h>
+#include <mfapi.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
+#include <mmsystem.h>
+#include <windowsx.h>
+#include <wrl/client.h>
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstdio>
+#include <cstring>
+#include <cwctype>
+#include <filesystem>
+#include <functional>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <new>
+#include <set>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+#pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "dwrite.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "mfplat.lib")
+#pragma comment(lib, "mfreadwrite.lib")
+#pragma comment(lib, "winmm.lib")
+
+namespace rivan::ui {
+namespace {
+
+using Microsoft::WRL::ComPtr;
+
+constexpr wchar_t kWindowClassName[] = L"Rivan.Direct2D.UiHost.v2";
+constexpr UINT_PTR kRefreshTimer = 1;
+// Debounced live search while typing in the Youtube browser (ms).
+constexpr UINT_PTR kYoutubeSearchDebounceTimer = 2;
+constexpr UINT kYoutubeSearchDebounceMs = 200;
+// Notification-area (system tray) icon for the exit-to-tray feature. The callback
+// message is delivered to the Main window; the menu command IDs drive restore/exit.
+constexpr UINT kTrayCallbackMessage = WM_APP + 41;
+constexpr UINT kTrayIconId = 1;
+constexpr UINT kTrayMenuOpen = 1;
+constexpr UINT kTrayMenuExit = 2;
+// Preview only presents already-decoded frames. 60 Hz avoids paint pressure without
+// making the audio-clock-driven preview visibly sluggish.
+constexpr UINT kRefreshPlayingMilliseconds = 16;
+constexpr UINT kRefreshIdleMilliseconds = 200;
+constexpr UINT kRefreshMilliseconds = kRefreshPlayingMilliseconds;
+constexpr double kPreviewSeekThresholdSeconds = 0.50;
+constexpr double kPreviewFrameLeadSeconds = 0.033;
+constexpr float kTrackRowHeight = 20.0F;
+constexpr UINT kTrackCoverSize = 18;
+constexpr std::size_t kMaximumTrackCoverCacheEntries = 96;
+// Borderless window: keep OVERLAPPEDWINDOW so Aero snap, resize, and min/max still work,
+// but the caption is removed visually via WM_NCCALCSIZE. This is the pixel thickness of
+// the invisible resize border reported by WM_NCHITTEST.
+constexpr int kResizeBorder = 6;
+
+void PositionToolWindow(HWND tool, HWND owner, int verticalOffset) {
+    RECT ownerRect{};
+    RECT toolRect{};
+    if (!GetWindowRect(owner, &ownerRect) || !GetWindowRect(tool, &toolRect)) return;
+    MONITORINFO monitor{sizeof(monitor)};
+    if (!GetMonitorInfoW(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &monitor)) return;
+    const int width = toolRect.right - toolRect.left;
+    const int height = toolRect.bottom - toolRect.top;
+    int x = ownerRect.right + 12;
+    if (x + width > monitor.rcWork.right) x = ownerRect.left - width - 12;
+    if (x < monitor.rcWork.left) x = monitor.rcWork.right - width;
+    const int y = std::clamp(ownerRect.top + verticalOffset, monitor.rcWork.top,
+                             std::max(monitor.rcWork.top, monitor.rcWork.bottom - height));
+    SetWindowPos(tool, nullptr, x, y, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+[[nodiscard]] D2D1_COLOR_F ToD2D(skin::Color color) noexcept {
+    return D2D1::ColorF(static_cast<float>(color.red) / 255.0F,
+                        static_cast<float>(color.green) / 255.0F,
+                        static_cast<float>(color.blue) / 255.0F,
+                        static_cast<float>(color.alpha) / 255.0F);
+}
+
+// Slightly darkens a color for bevel-dark / recessed screen fills.
+[[nodiscard]] skin::Color Darken(skin::Color color, float factor) noexcept {
+    const auto scale = [factor](std::uint8_t channel) {
+        return static_cast<std::uint8_t>(std::clamp(static_cast<float>(channel) * factor, 0.0F, 255.0F));
+    };
+    return {scale(color.red), scale(color.green), scale(color.blue), color.alpha};
+}
+
+[[nodiscard]] skin::Color HsvColor(float hue, float saturation, float value,
+                                   std::uint8_t alpha = 255) noexcept {
+    hue = hue - std::floor(hue);
+    saturation = std::clamp(saturation, 0.0F, 1.0F);
+    value = std::clamp(value, 0.0F, 1.0F);
+    const float scaled = hue * 6.0F;
+    const int sector = static_cast<int>(scaled) % 6;
+    const float fraction = scaled - std::floor(scaled);
+    const float p = value * (1.0F - saturation);
+    const float q = value * (1.0F - fraction * saturation);
+    const float t = value * (1.0F - (1.0F - fraction) * saturation);
+    float red{}, green{}, blue{};
+    switch (sector) {
+    case 0: red = value; green = t; blue = p; break;
+    case 1: red = q; green = value; blue = p; break;
+    case 2: red = p; green = value; blue = t; break;
+    case 3: red = p; green = q; blue = value; break;
+    case 4: red = t; green = p; blue = value; break;
+    default: red = value; green = p; blue = q; break;
+    }
+    const auto channel = [](float component) {
+        return static_cast<std::uint8_t>(std::lround(component * 255.0F));
+    };
+    return {channel(red), channel(green), channel(blue), alpha};
+}
+
+void ColorToHsv(skin::Color color, float& hue, float& saturation, float& value) noexcept {
+    const float red = static_cast<float>(color.red) / 255.0F;
+    const float green = static_cast<float>(color.green) / 255.0F;
+    const float blue = static_cast<float>(color.blue) / 255.0F;
+    const float maximum = std::max({red, green, blue});
+    const float minimum = std::min({red, green, blue});
+    const float delta = maximum - minimum;
+    value = maximum;
+    saturation = maximum > 0.0F ? delta / maximum : 0.0F;
+    if (delta == 0.0F) hue = 0.0F;
+    else if (maximum == red) hue = std::fmod((green - blue) / delta, 6.0F) / 6.0F;
+    else if (maximum == green) hue = ((blue - red) / delta + 2.0F) / 6.0F;
+    else hue = ((red - green) / delta + 4.0F) / 6.0F;
+    if (hue < 0.0F) hue += 1.0F;
+}
+
+[[nodiscard]] D2D1_RECT_F Rect(float left, float top, float right, float bottom) noexcept {
+    return D2D1::RectF(left, top, right, bottom);
+}
+
+[[nodiscard]] bool Contains(const D2D1_RECT_F& rectangle, float x, float y) noexcept {
+    return x >= rectangle.left && x <= rectangle.right &&
+           y >= rectangle.top && y <= rectangle.bottom;
+}
+
+[[nodiscard]] float Width(const D2D1_RECT_F& rectangle) noexcept {
+    return std::max(0.0F, rectangle.right - rectangle.left);
+}
+
+[[nodiscard]] float Height(const D2D1_RECT_F& rectangle) noexcept {
+    return std::max(0.0F, rectangle.bottom - rectangle.top);
+}
+
+[[nodiscard]] std::wstring FormatTime(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) seconds = 0.0;
+    const auto total = static_cast<unsigned long long>(seconds);
+    const auto hours = total / 3600ULL;
+    const auto minutes = (total / 60ULL) % 60ULL;
+    const auto remaining = total % 60ULL;
+    wchar_t buffer[32]{};
+    if (hours != 0) {
+        std::swprintf(buffer, std::size(buffer), L"%llu:%02llu:%02llu", hours, minutes, remaining);
+    } else {
+        std::swprintf(buffer, std::size(buffer), L"%llu:%02llu", minutes, remaining);
+    }
+    return buffer;
+}
+
+[[nodiscard]] const wchar_t* CategoryName(SettingCategory category) noexcept {
+    switch (category) {
+    case SettingCategory::General: return L"GENERAL";
+    case SettingCategory::Appearance: return L"APPEARANCE";
+    case SettingCategory::Discord: return L"DISCORD";
+    case SettingCategory::Downloading: return L"DOWNLOADING";
+    case SettingCategory::SkinManager: return L"SKIN MANAGER";
+    }
+    return L"SETTINGS";
+}
+
+[[nodiscard]] const wchar_t* RepeatLabel(RepeatMode mode) noexcept {
+    switch (mode) {
+    case RepeatMode::Off: return L"REPEAT";
+    case RepeatMode::All: return L"REPEAT ALL";
+    case RepeatMode::One: return L"REPEAT ONE";
+    }
+    return L"REPEAT";
+}
+
+[[nodiscard]] std::wstring Lowercase(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t character) {
+        return static_cast<wchar_t>(std::towlower(character));
+    });
+    return value;
+}
+
+[[nodiscard]] bool Matches(const TrackView& track, const std::wstring& query) {
+    if (query.empty()) return true;
+    const std::wstring needle = Lowercase(query);
+    return Lowercase(track.title).find(needle) != std::wstring::npos ||
+           Lowercase(track.artist).find(needle) != std::wstring::npos ||
+           Lowercase(track.album).find(needle) != std::wstring::npos;
+}
+
+[[nodiscard]] std::string Utf8(std::wstring_view text) {
+    if (text.empty()) return {};
+    const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+                                              static_cast<int>(text.size()), nullptr, 0,
+                                              nullptr, nullptr);
+    if (required <= 0) return {};
+    std::string result(static_cast<std::size_t>(required), '\0');
+    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
+                        result.data(), required, nullptr, nullptr);
+    return result;
+}
+
+} // namespace
+
+struct Win32Ui::Impl {
+    enum class HitKind : std::uint8_t {
+        Command, Playlist, PlaylistToggle, Track, Seek, Volume, Setting,
+        PlaylistSearch, WindowControl, Studio, Refresh, SettingsAction, TimeToggle,
+        YoutubeResult, FilePreviewToggle, FilePreviewFullscreen, FilePreviewExitFullscreen,
+        DiscordImageField,
+        // Playlist Editor bottom-row buttons and the tree "new playlist" (+) button.
+        EditorAdd, EditorRemove, NewPlaylist
+    };
+    enum class SearchTarget : std::uint8_t { None, Playlist };
+    enum class StudioAction : std::uint64_t {
+        AddRectangle = 20,
+        AddEllipse = 21,
+        AddLine = 22,
+        ToggleShapeFill = 23,
+        ImportImage = 30,
+        SelectColors = 80,
+        SelectGeneral = 81,
+        SelectElements = 84,
+        ShowElementEditor = 85,
+        ShowLayers = 86,
+        ToggleImageOverPanels = 122,
+        ToggleImageOverScreens = 123,
+        ToggleShapeOverScreens = 148,
+        ToggleShapeOverPanels = 149,
+        ScreenEyedropper = 91,
+        OpenShapeRecolor = 151,
+        OpenImageTint = 152,
+        ClearImageTint = 153,
+        ElementEyedropper = 154,
+        ElementHexEdit = 155,
+    };
+
+    // Color picker can edit palette slots (Colors section) or decor recolor/tint (Elements).
+    enum class StudioColorTarget : std::uint8_t { Palette, Shape, ImageTint };
+
+    static constexpr std::uint64_t kSelectColorBase = 300;
+    static constexpr std::uint64_t kOpenColorPickerBase = 400;
+    static constexpr std::uint64_t kSelectImageBase = 500;
+    static constexpr std::uint64_t kSelectShapeBase = 1000;
+    static constexpr std::uint64_t kSelectLayerBase = 1200;
+
+    [[nodiscard]] static constexpr std::uint64_t Action(StudioAction action) noexcept {
+        return static_cast<std::uint64_t>(action);
+    }
+
+    struct HitRegion {
+        D2D1_RECT_F bounds{};
+        HitKind kind{HitKind::Command};
+        Command command{Command::PlayPause};
+        std::uint64_t id{};
+        SettingCategory category{SettingCategory::General};
+        // Visible position of a track/playlist row (disambiguates duplicate ids and
+        // drives multi-select ranges and drag reordering). Meaningful for Track/Playlist.
+        std::size_t index{};
+    };
+
+    explicit Impl(IUiHost& callbackHost, WindowKind windowKind)
+        : host(callbackHost), windowKind(windowKind) {}
+
+    IUiHost& host;
+    WindowKind windowKind{WindowKind::Main};
+    WindowOptions options{};
+    HWND window{};
+    HINSTANCE instance{};
+    ComPtr<ID2D1Factory> d2dFactory;
+    ComPtr<IDWriteFactory> writeFactory;
+    ComPtr<ID2D1HwndRenderTarget> target;
+    ComPtr<IDWriteTextFormat> regularFormat;
+    ComPtr<IDWriteTextFormat> smallFormat;
+    ComPtr<IDWriteTextFormat> tinyFormat;
+    ComPtr<IDWriteTextFormat> headingFormat;
+    ComPtr<IDWriteTextFormat> digitalFormat;
+    ComPtr<IDWriteTextFormat> studioIconFormat;
+    ComPtr<IWICImagingFactory> wicFactory;
+    // Persistent solid brushes; colors updated in place each paint (no COM recreate).
+    std::array<ComPtr<ID2D1SolidColorBrush>, 14> solidBrushes;
+    visualization::VisualizationRenderer visualizationRenderer;
+    // Cache of decoded skin images keyed by resolved absolute path. Reset when the
+    // render target is recreated (device-dependent bitmaps).
+    std::map<std::wstring, ComPtr<ID2D1Bitmap>> imageCache;
+    struct TrackCoverCacheEntry {
+        ComPtr<ID2D1Bitmap> bitmap;
+        std::uint64_t lastUsed{};
+    };
+    // Covers are decoded directly to display size and bounded, including no-cover paths.
+    // This prevents repeated Shell extraction and retains only a small GPU cache.
+    std::map<std::wstring, TrackCoverCacheEntry> trackCoverCache;
+    std::uint64_t trackCoverUseCounter{};
+    // Shell artwork extraction can touch disk. Admit one uncached path per interval so
+    // scrolling remains responsive even when a library has no embedded covers.
+    std::chrono::steady_clock::time_point nextTrackCoverLookup{};
+    struct DecorRef {
+        bool image{};
+        std::size_t index{};
+        std::uint8_t priority{};
+    };
+    UINT currentTimerMs{};
+    ComPtr<ID2D1SolidColorBrush> decorBrush;
+    std::uint64_t cachedTrackRowsRevision{~std::uint64_t{0}};
+    std::wstring cachedTrackRowsQuery;
+    std::vector<const TrackView*> cachedTrackRows;
+    struct CachedSectionRow {
+        bool header{};
+        std::wstring label;
+        const TrackView* track{};
+    };
+    std::uint64_t cachedSectionRowsRevision{~std::uint64_t{0}};
+    std::wstring cachedSectionRowsQuery;
+    std::vector<CachedSectionRow> cachedSectionRows;
+    std::uint64_t cachedPlaylistDurationRevision{~std::uint64_t{0}};
+    double cachedPlaylistDuration{};
+    // Font signature (family|customFile|baseSize) used to rebuild text formats only
+    // when the active skin's typography actually changes.
+    std::wstring fontSignature;
+    UiModel model;
+    std::vector<HitRegion> hits;
+    struct ColorFocusRegion { D2D1_RECT_F bounds{}; std::size_t index{}; };
+    std::vector<ColorFocusRegion> colorFocusRegions;
+    std::array<ID2D1Brush*, 14> currentBrushes{};
+    std::vector<D2D1_RECT_F> screenBounds;
+    std::vector<D2D1_RECT_F> panelBounds;
+    std::vector<D2D1_RECT_F> decorControlBounds;
+    bool registerScreenBounds{true};
+    struct DeferredText {
+        std::wstring value;
+        D2D1_RECT_F bounds{};
+        ID2D1Brush* brush{};
+        IDWriteTextFormat* format{};
+        DWRITE_TEXT_ALIGNMENT alignment{DWRITE_TEXT_ALIGNMENT_LEADING};
+        DWRITE_PARAGRAPH_ALIGNMENT vertical{DWRITE_PARAGRAPH_ALIGNMENT_CENTER};
+    };
+    std::vector<DeferredText> deferredTexts;
+    bool deferTexts{};
+    std::wstring playlistQuery;
+    bool playlistQuerySelectAll{};
+    bool discordImageEditing{};
+    bool discordImageSelectAll{};
+    std::wstring discordImageBuffer;
+    bool filePreviewExpanded{};
+    bool previewFullscreen{};
+    std::wstring previewPath;
+    D2D1_RECT_F previewVideoBounds{};
+    D2D1_RECT_F previewFullscreenCloseBounds{};
+    ComPtr<ID2D1Bitmap> previewBitmap;
+    std::jthread previewWorker;
+    std::mutex previewFrameMutex;
+    std::mutex previewRequestMutex;
+    std::condition_variable_any previewWake;
+    std::wstring requestedPreviewPath;
+    std::uint64_t requestedPreviewGeneration{};
+    std::vector<BYTE> pendingPreviewPixels;
+    UINT pendingPreviewWidth{};
+    UINT pendingPreviewHeight{};
+    UINT pendingPreviewStride{};
+    std::atomic<double> previewWantedSeconds{0.0};
+    std::atomic<std::uint64_t> pendingPreviewFrameVersion{};
+    std::uint64_t uploadedPreviewFrameVersion{};
+    bool previewIsVideo{};
+    bool previewHasPresentedFrame{};
+    SearchTarget activeSearch{SearchTarget::None};
+    std::size_t playlistScroll{};
+    std::size_t playlistSearchScroll{};
+    std::size_t playlistRows{};
+    std::size_t playlistSearchRows{};
+    D2D1_RECT_F playlistListBounds{};
+    D2D1_RECT_F playlistSearchBounds{};
+    D2D1_RECT_F treeListBounds{};
+    // Folder-tree row hit target for expand/collapse; scroll offset for the tree list.
+    std::size_t treeScroll{};
+    // Draggable caption region (RIVAN panel title bar, excluding its buttons) reported as
+    // HTCAPTION so the borderless window can be moved by dragging it.
+    D2D1_RECT_F captionRect{};
+    bool draggingSeek{};
+    bool draggingVolume{};
+    // Player LCD time readout toggles between elapsed and remaining on click.
+    bool showRemaining{};
+    POINT mouse{-1, -1};
+
+    // ---- Track / playlist multi-selection, drag reorder, inline naming ------
+    // Selected track positions (indices into model.tracks). Shared by the Playlist
+    // Editor and the Library current-folder pane since both render the same list.
+    std::set<std::size_t> trackSelection;
+    // Anchor for shift-range track selection; npos when none.
+    std::size_t trackAnchor{static_cast<std::size_t>(-1)};
+    // Playlist id the current track selection belongs to; selection resets when it changes.
+    std::uint64_t trackSelectionPlaylist{};
+    // Model index of the row that was playing on the previous paint. Lets a click-to-play
+    // mono-selection follow playback instead of leaving a stale highlight behind when the
+    // transport auto-advances to the next track. npos when nothing was playing.
+    std::size_t lastPlayingModelIndex{static_cast<std::size_t>(-1)};
+    // Selected library-tree playlist ids (multi-select for reorder / delete).
+    std::set<std::uint64_t> playlistSelection;
+    std::uint64_t playlistAnchorId{};
+
+    // Pointer-drag state machine. A press on a row arms a "maybe" drag; motion past a
+    // threshold promotes it to an active drag; release either reorders (drag) or
+    // activates/selects (click).
+    enum class DragKind : std::uint8_t { None, Track, Playlist };
+    DragKind dragKind{DragKind::None};
+    bool dragActive{};  // promoted past the movement threshold
+    D2D1_POINT_2F dragStart{};
+    std::size_t dragTrackIndex{static_cast<std::size_t>(-1)};
+    std::uint64_t dragPlaylistId{};
+    // Sibling-group key of the dragged row, so reorder snaps only within its group.
+    std::uint64_t dragPlaylistParent{};
+    // Pending single-click activation resolved on release when no drag occurred.
+    bool pendingTrackActivate{};
+    std::uint64_t pendingTrackActivateId{};
+    // Current drop insertion row (track list) / target playlist id, for the indicator.
+    std::size_t dropTrackIndex{static_cast<std::size_t>(-1)};
+    std::uint64_t dropBeforePlaylistId{};
+    // Folder row accepting the dragged folder as a child. Mutually exclusive with
+    // dropBeforePlaylistId/dropAtPlaylistEnd, which represent sibling ordering.
+    std::uint64_t dropIntoPlaylistId{};
+    bool dropAtPlaylistEnd{};
+
+    // Inline playlist-name editor (create via + or rename via context menu).
+    bool playlistNameEditing{};
+    bool playlistNameRenaming{};       // true = rename existing, false = create new
+    std::uint64_t playlistRenameId{};  // target when renaming
+    std::wstring playlistNameBuffer;
+    D2D1_RECT_F newPlaylistButtonBounds{};
+    // Inline file-name editor opened from the song context menu.
+    bool trackNameEditing{};
+    std::size_t trackRenameIndex{static_cast<std::size_t>(-1)};
+    std::wstring trackNameBuffer;
+    std::size_t trackNameCursor{};
+    bool trackNameSelectAll{};
+
+    // Skin Studio editing state. draft is the working copy live-previewed through the
+    // host. studioOpen tracks whether the draft was seeded from the active skin.
+    skin::Skin studioDraft;
+    bool studioOpen{};
+    std::size_t studioColorIndex{};
+    // Active left-rail section of the redesigned Skin Studio.
+    enum class StudioSection : std::uint8_t { General, Colors, Elements };
+    StudioSection studioSection{StudioSection::General};
+    // HEX entry buffer for the color picker. Active when studioHexEditing is set; the
+    // user types a #RRGGBB[AA] value that is applied to the selected color on Enter.
+    std::wstring studioHex;
+    bool studioHexEditing{};
+    bool studioHexSelectAll{};
+    D2D1_RECT_F studioColorPickerBounds{};
+    D2D1_RECT_F studioHueBounds{};
+    bool studioColorPickerVisible{};
+    StudioColorTarget studioColorTarget{StudioColorTarget::Palette};
+    std::uint64_t seenColorFocusRevision{};
+    std::uint64_t seenElementFocusRevision{};
+    bool studioNameEditing{};
+    std::wstring studioName;
+    bool managerNameEditing{};
+    std::size_t managerSkinIndex{};
+    std::wstring managerSkinName;
+    bool draggingStudioColor{};
+    bool draggingStudioHue{};
+    // Screen-wide eyedropper: sample any desktop pixel into the selected studio color.
+    bool pickingScreenColor{};
+    bool eyedropperSkipUp{};
+    std::size_t studioImageIndex{};
+    std::size_t studioImageScroll{};
+    std::size_t studioImageRows{};
+    D2D1_RECT_F studioImageListBounds{};
+    std::size_t studioShapeIndex{};
+    bool studioImageFocused{};
+    bool studioShapeFocused{};
+    bool studioLayersTab{};
+    std::size_t studioLayerScroll{};
+    std::size_t studioLayerRows{};
+    D2D1_RECT_F studioLayerBounds{};
+    // Preferences detail pane: pixel scroll for General content that exceeds the window.
+    float settingsScrollY{};
+    float settingsContentHeight{};
+    D2D1_RECT_F settingsDetailsBounds{};
+    // Skin Manager saved-skins list row scroll.
+    std::size_t settingsSkinScroll{};
+    std::size_t settingsSkinRows{};
+    D2D1_RECT_F settingsSkinListBounds{};
+    int draggingLayer{};
+    std::size_t studioLayerDropPosition{};
+    bool studioFontDropdown{};
+    // Selected decor element for drag-move on the canvas: 0=none, else 1-based.
+    // Positive = shape index+1, negative = -(image index+1).
+    int draggingDecor{};
+    enum class DecorDragMode : std::uint8_t { Move, Resize, Rotate };
+    DecorDragMode decorDragMode{DecorDragMode::Move};
+    float dragStartAngle{};
+    float dragStartRotation{};
+    bool previewPending{};
+    ULONGLONG lastPreviewTick{};
+    D2D1_SIZE_F lastCanvas{};
+    D2D1_POINT_2F dragOffset{};
+    D2D1_RECT_F studioPanelBounds{};
+    std::unique_ptr<Win32Ui> settingsWindow;
+    std::unique_ptr<Win32Ui> studioWindow;
+    // True while the notification-area icon is live (exit-to-tray hid the window).
+    bool trayIconAdded{};
+
+    void ClearFilePreview() noexcept;
+
+    void StopPreviewWorker() noexcept;
+
+    [[nodiscard]] static bool IsVideoPath(const std::wstring& path);
+
+    [[nodiscard]] bool CreatePreviewBitmapFromBgra(UINT width, UINT height, const BYTE* data,
+                                                    UINT stride);
+
+    [[nodiscard]] bool CreatePreviewBitmapFromHBitmap(HBITMAP bitmap);
+
+    [[nodiscard]] bool CreatePreviewBitmapFromEncoded(const BYTE* data, std::size_t size);
+
+    // Pulls embedded album art from ID3v2 APIC frames when Shell thumbnails fail.
+    [[nodiscard]] bool LoadEmbeddedId3Cover(const std::wstring& path);
+
+    [[nodiscard]] bool LoadCoverArt(const std::wstring& path);
+
+    [[nodiscard]] bool OpenVideoPreview(const std::wstring& path);
+
+    [[nodiscard]] ComPtr<ID2D1Bitmap> CreateTrackCoverBitmapFromHBitmap(HBITMAP bitmap);
+
+    [[nodiscard]] ComPtr<ID2D1Bitmap> CreateTrackCoverBitmapFromEncoded(const BYTE* data,
+                                                                          std::size_t size);
+
+    [[nodiscard]] ComPtr<ID2D1Bitmap> LoadEmbeddedId3TrackCover(const std::wstring& path);
+
+    void TrimTrackCoverCache();
+
+    [[nodiscard]] ID2D1Bitmap* TrackCoverBitmap(const std::wstring& path);
+
+    void DrawTrackCover(const TrackView& track, const D2D1_RECT_F& row);
+
+    void UpdateVideoPreviewFrame();
+
+    void DrawPreviewBitmap(const D2D1_RECT_F& bounds);
+
+    void DrawPreviewFullscreenOverlay(const D2D1_SIZE_F size,
+                                      std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void LoadFilePreview(const std::wstring& path);
+
+    [[nodiscard]] std::wstring ActivePreviewPath() const;
+
+    void ExitPreviewFullscreen() noexcept;
+
+    void EnterPreviewFullscreen() noexcept;
+
+    void SyncFilePreview(bool advanceVideo = true);
+    // Small palette of retro-friendly system fonts to cycle without a font dialog.
+    static constexpr std::array<const wchar_t*, 6> kFontChoices{
+        L"Segoe UI", L"Tahoma", L"Verdana", L"Lucida Console", L"Consolas", L"Courier New"};
+
+    void SelectStudioSection(StudioSection section);
+
+    [[nodiscard]] skin::Color* ActiveStudioColor();
+
+    void OpenElementColorPicker(StudioColorTarget colorTarget);
+
+    void DrawStudioColorPicker(float left, float right, float& y, const std::function<D2D1_RECT_F()>& row,
+                               std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b,
+                               std::uint64_t eyedropperAction, std::uint64_t hexAction);
+
+    [[nodiscard]] bool CreateDeviceIndependentResources();
+
+    [[nodiscard]] ComPtr<IDWriteFontCollection1> CustomFontCollection(
+        const std::filesystem::path& file);
+
+    [[nodiscard]] ComPtr<IDWriteTextFormat> BuildTextFormat(
+        const std::wstring& family, float size, DWRITE_FONT_WEIGHT weight,
+        const std::filesystem::path& customFile = {});
+
+    [[nodiscard]] std::optional<std::wstring> FontFamilyFromFile(
+        const std::filesystem::path& file);
+
+    // Rebuilds UI text formats from active skin typography. Custom files use a private
+    // DirectWrite collection because FR_PRIVATE fonts are absent from its system collection.
+    void ApplySkinFonts();
+
+    [[nodiscard]] bool CreateTarget();
+
+    void DiscardTarget() noexcept;
+
+    void SyncRefreshTimer() noexcept;
+
+    void AddHit(const D2D1_RECT_F& bounds, Command command);
+
+    void AddIdHit(const D2D1_RECT_F& bounds, HitKind kind, std::uint64_t id);
+
+    void AddSimpleHit(const D2D1_RECT_F& bounds, HitKind kind);
+
+    void AddSettingHit(const D2D1_RECT_F& bounds, SettingCategory category);
+
+    [[nodiscard]] const HitRegion* HitTest(float x, float y) const noexcept;
+
+    void DrawText(const std::wstring& textValue, const D2D1_RECT_F& bounds,
+                  ID2D1Brush* brush, IDWriteTextFormat* format,
+                  DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING,
+                  DWRITE_PARAGRAPH_ALIGNMENT vertical = DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+    // Horizontally scrolling single-line text, like an HTML <marquee> moving to the
+    // right. The glyphs travel from the left edge toward the right and wrap around.
+    void DrawMarquee(const D2D1_RECT_F& bounds, const std::wstring& textValue, ID2D1Brush* brush);
+
+    void FlushDeferredTexts();
+
+    void DrawBevel(const D2D1_RECT_F& bounds, ID2D1Brush* fill, ID2D1Brush* light,
+                   ID2D1Brush* dark, bool inset = false, float thickness = 1.0F);
+
+    // Panels honor appearance toggles:
+    //  * panelOpacity < 1 lets skin decor (images/shapes) show through the panel fill.
+    //  * showTitleBars=false drops the raised metallic bar behind titles; the title text
+    //    then sits directly on the panel background.
+    //  * showPanelBorders=false removes the magnetic raised frame around each panel.
+    [[nodiscard]] D2D1_RECT_F DrawPanel(const D2D1_RECT_F& bounds, const std::wstring& titleValue,
+                                        ID2D1Brush* metal, ID2D1Brush* raised, ID2D1Brush* light,
+                                         ID2D1Brush* dark, ID2D1Brush* green, ID2D1Brush* /*stripe*/);
+
+    // Transparent buttons drop the beveled metal background and use the larger regular
+    // font so they read as plain text; the label brightens on hover / active. Classic
+    // beveled buttons remain available when the skin disables transparent buttons.
+    void DrawButton(const D2D1_RECT_F& bounds, const wchar_t* label, Command command,
+                     ID2D1Brush* fill, ID2D1Brush* hotFill, ID2D1Brush* light,
+                     ID2D1Brush* dark, ID2D1Brush* textBrush, bool active = false);
+
+    void DrawStaticButton(const D2D1_RECT_F& bounds, const wchar_t* label,
+                          ID2D1Brush* fill, ID2D1Brush* light, ID2D1Brush* dark,
+                          ID2D1Brush* textBrush);
+
+    void DrawWindowButton(const D2D1_RECT_F& bounds, const wchar_t* label, std::uint64_t action,
+                          ID2D1Brush* fill, ID2D1Brush* light, ID2D1Brush* dark,
+                          ID2D1Brush* textBrush);
+
+    void DrawSlider(const D2D1_RECT_F& bounds, float value, HitKind kind,
+                    ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* silver,
+                    ID2D1Brush* light, ID2D1Brush* dark);
+
+    [[nodiscard]] bool IsYoutubeBrowsingNow();
+
+    void ArmYoutubeSearchDebounce();
+
+    void FlushYoutubeSearchDebounce();
+
+    void DrawSearch(const D2D1_RECT_F& bounds, const std::wstring& query, SearchTarget search,
+                    ID2D1Brush* screen, ID2D1Brush* light, ID2D1Brush* dark,
+                    ID2D1Brush* green, ID2D1Brush* dim);
+
+    [[nodiscard]] const std::vector<const TrackView*>& Filtered(const std::vector<TrackView>& source,
+                                                                  const std::wstring& query);
+
+    // Position of a TrackView (borrowed from model.tracks) within that vector. Selection
+    // and drag reorder key off this stable model index, not the filtered row index, so
+    // duplicate entries and search filtering stay unambiguous.
+    [[nodiscard]] std::size_t ModelTrackIndex(const TrackView* track) const noexcept;
+
+    // Thin horizontal insertion bar drawn between rows while a track drag is active.
+    void DrawTrackDropIndicator(const D2D1_RECT_F& row, bool below, ID2D1Brush* brush);
+
+    void DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<const TrackView*>& tracks,
+                       std::size_t& scroll, std::size_t& visibleRows,
+                       ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* greenDim,
+                        ID2D1Brush* selection, ID2D1Brush* white, ID2D1Brush* dim,
+                        bool showArtist = true);
+    void DrawTrackRenameField(const D2D1_RECT_F& bounds, ID2D1Brush* textBrush);
+
+    // Renders the current folder view: the selected folder's loose tracks first (no
+    // header) followed by one separator header per subfolder section. Falls back to a
+    // plain flat list when the model provides no sections. Search filters tracks by
+    // title/artist/album and hides sections left empty.
+    void DrawSectionedTracks(const D2D1_RECT_F& bounds, std::size_t& scroll,
+                             std::size_t& visibleRows,
+                             ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* greenDim,
+                             ID2D1Brush* selection, ID2D1Brush* white, ID2D1Brush* dim);
+
+    [[nodiscard]] std::wstring SelectedPlaylistName() const;
+
+    void DrawPlayer(const D2D1_RECT_F& bounds,
+                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void DrawPlaylistEditor(const D2D1_RECT_F& bounds,
+                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void DrawEqualizer(const D2D1_RECT_F& bounds,
+                       std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void DrawLibrary(const D2D1_RECT_F& bounds,
+                     std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void DrawMini(const D2D1_SIZE_F size,
+                   std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    // Decodes a skin image file into a device bitmap, caching by absolute path.
+    [[nodiscard]] ID2D1Bitmap* LoadSkinBitmap(const std::filesystem::path& relative);
+
+    std::uint64_t decorOrderRevision{~std::uint64_t{0}};
+    std::vector<DecorRef> decorOrder;
+
+    [[nodiscard]] static std::vector<DecorRef> DecorOrder(const skin::Skin& value);
+
+    [[nodiscard]] const std::vector<DecorRef>& CachedDecorOrder();
+
+    // Layer 0 draws on window background. Layers 1 and 2 replay enabled decor over
+    // panels and screens while control holes keep sliders usable and visible.
+    void DrawSkinDecor(const D2D1_SIZE_F size, int layer = 0);
+
+    void DrawImageSelection(const D2D1_SIZE_F size);
+
+    void DrawFull(const D2D1_SIZE_F size,
+                  std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void DrawSettings(const D2D1_SIZE_F size,
+                      std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    // General pane: music folder list. Show every configured root, then one empty
+    // slot so the next folder can be chosen. After each choice another empty slot
+    // appears (no limit). Subfolders of all roots become playlists.
+    void DrawGeneralPane(const D2D1_RECT_F& details,
+                         std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    // Skin Manager pane: two side-by-side actions on top (open the skin studio / open the
+    // skins folder), and a scrollable-ish list of saved and built-in skins below. Clicking
+    // a skin applies it immediately.
+    void DrawSkinManagerPane(const D2D1_RECT_F& details,
+                             std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    // ---- Skin Studio (implementations in Win32Ui.SkinStudio.cpp) ------------
+
+    struct ColorField { const wchar_t* name; skin::Color skin::SkinPalette::* member; };
+    [[nodiscard]] static const std::array<ColorField, 13>& StudioColorFields();
+    void EnsureStudioDraft();
+    void PushPreview();
+    void QueuePreview();
+    void StudioButton(const D2D1_RECT_F& bounds, const std::wstring& label, std::uint64_t action,
+                      std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b, bool active = false,
+                      IDWriteTextFormat* format = nullptr);
+    void SettingsButton(const D2D1_RECT_F& bounds, const std::wstring& label, std::uint64_t action,
+                        std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void HandleSettingsAction(std::uint64_t action);
+    [[nodiscard]] std::optional<std::filesystem::path> PickFolder();
+    void StudioRailButton(const D2D1_RECT_F& bounds, const wchar_t* icon, const wchar_t* label,
+                          StudioSection section, std::uint64_t action,
+                          std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawSkinStudio(const D2D1_SIZE_F size,
+                        std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    template <typename LabelFn, typename RowFn>
+    void DrawStudioColors(float left, float right, float& y, LabelFn label, RowFn row,
+                          std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    template <typename LabelFn, typename RowFn>
+    void DrawStudioFont(float left, float right, float& y, LabelFn label, RowFn row,
+                        std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    template <typename LabelFn, typename RowFn>
+    void DrawStudioToggles(float left, float right, float& y, LabelFn label, RowFn row,
+                           std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    template <typename LabelFn, typename RowFn>
+    void DrawStudioElements(float left, float right, float& y, LabelFn label, RowFn row,
+                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    [[nodiscard]] std::filesystem::path PickFile(const COMDLG_FILTERSPEC* filters, UINT filterCount);
+    void StepColorChannel(int channelPair);
+    [[nodiscard]] static std::wstring ToHexW(skin::Color color);
+    void SampleScreenColorAtCursor();
+    void BeginScreenEyedropper();
+    void CancelScreenEyedropper();
+    void ApplyStudioHex();
+    void CopyStudioHex();
+    void PasteStudioHex();
+    void PastePlaylistQuery();
+    void PasteDiscordImageUrl();
+    void CopyTrackName();
+    void PasteTrackName();
+    void CommitDiscordImageUrl();
+    void ImportStudioImage();
+    void ImportStudioFont();
+    void HandleStudioAction(std::uint64_t action);
+
+
+    // Brushes are derived from the active skin palette so appearance is never hard-coded.
+    // Index legend (kept for the existing draw call sites):
+    //  0 windowBg 1 panelBg 2 controlBg 3 bevelLight 4 bevelDark 5 screen 6 accent
+    //  7 hoverBg 8 accent 9 textPrimary 10 textSecondary 11 selection 12 textPrimary
+    //  13 controls (seek/vol fill, titlebars, window chrome text, transport labels, EQ ON/AUTO)
+    // Reuses solidBrushes; returns references for Draw* call sites that expect ComPtr array.
+    [[nodiscard]] std::array<ComPtr<ID2D1SolidColorBrush>, 14>& UpdateBrushes();
+
+    // Keeps a click-to-play mono-selection in sync with the transport. A plain track click
+    // both selects and plays the row, so the played track lands in trackSelection. When the
+    // transport auto-advances, the new track's `playing` flag already highlights it; without
+    // this the previous row would keep its selection fill and look like it is still active.
+    // Only the lone auto-selection of the previously playing row is moved; genuine multi- or
+    // ctrl-selections are left untouched.
+    void SyncSelectionToPlayback();
+
+    void Paint();
+
+    void Resize(UINT width, UINT height);
+
+    void InvokeSafely(Command command);
+
+    // ---- Notification-area (system tray) support ----------------------------
+
+    [[nodiscard]] NOTIFYICONDATAW TrayIconData() const noexcept;
+
+    void AddTrayIcon();
+
+    void RemoveTrayIcon();
+
+    // Restores the hidden main window and drops the tray icon.
+    void RestoreFromTray();
+
+    // Right-click tray menu: Open restores the window, Exit closes for real.
+    void ShowTrayMenu();
+
+    // ---- Input (implementations in Win32Ui.Input.cpp) -----------------------
+
+    void SetSlider(const HitRegion& hit, float x);
+    // Keeps the focused element draggable through overlapping decor, then falls back to
+    // the topmost element under the pointer. Returns false if nothing was hit.
+    [[nodiscard]] bool BeginDecorDrag(float x, float y);
+    void MoveDecor(float x, float y);
+    void UpdateStudioColor(float x, float y, bool hueOnly);
+    void UpdateLayerDrag(float y);
+    void PointerDown(float x, float y);
+    void PointerMove(float x, float y);
+    void PointerUp() noexcept;
+    // Provides resize borders and a draggable caption for the borderless window.
+    [[nodiscard]] LRESULT HitTestNonClient(int screenX, int screenY) const;
+    [[nodiscard]] static bool IsImageDrop(const std::filesystem::path& path);
+    void DropFiles(HDROP drop);
+    void AddDroppedImages(const std::vector<std::wstring>& paths, POINT dropPoint);
+    void ActivateFirstSearchResult();
+    void Character(wchar_t character);
+    void KeyDown(WPARAM key);
+    void Scroll(float x, float y, int direction);
+    // Right-click context menu (tracks / playlists) + selection helpers.
+    void PointerRightDown(float x, float y);
+    void ApplyTrackClickSelection(std::size_t modelIndex, bool ctrl, bool shift);
+    void ApplyPlaylistClickSelection(std::uint64_t id, std::size_t treeIndex, bool ctrl, bool shift);
+    void ResetTrackSelectionForPlaylist(std::uint64_t playlistId);
+    [[nodiscard]] std::vector<std::size_t> SelectedTrackIndicesSorted() const;
+    void ShowTrackContextMenu(std::size_t modelIndex);
+    void ShowPlaylistContextMenu(std::uint64_t playlistId);
+    void SyncMouseFromCursor();
+    void CommitPlaylistName();
+    void CancelPlaylistName();
+    void CommitTrackName();
+    void CancelTrackName();
+    void BeginTrackRename(std::size_t modelIndex);
+    [[nodiscard]] std::size_t ResolveTrackDrop(float y) const;
+    void ResolvePlaylistDrop(float y);
+    void FinishTrackDrag();
+    void FinishPlaylistDrag();
+    // Press / drag lifecycle for track rows and tree playlist rows.
+    void BeginTrackPress(const HitRegion& hit, float x, float y);
+    void BeginPlaylistPress(const HitRegion& hit, float x, float y);
+    void UpdateRowDrag(float x, float y);
+    void FinishRowDrag() noexcept;
+    void RemoveSelectedTracks();
+    void BeginCreatePlaylist();
+    // True when the tree row at model.playlists index is a user (editable) playlist.
+    [[nodiscard]] bool IsUserPlaylistId(std::uint64_t id) const noexcept;
+    // True when the tree row can be drag-reordered (any Directory folder or User playlist).
+    [[nodiscard]] bool IsReorderablePlaylistId(std::uint64_t id) const noexcept;
+    // Sibling-group key used to scope a folder/playlist reorder.
+    [[nodiscard]] std::uint64_t PlaylistReorderParent(std::uint64_t id) const noexcept;
+};
+
+} // namespace rivan::ui

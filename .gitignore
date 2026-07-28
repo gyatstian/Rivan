@@ -1,0 +1,28 @@
+.vs/
+
+# Visual Studio user-specific files
+*.user
+*.suo
+*.VC.db
+*.VC.db-shm
+*.VC.db-wal
+
+# Build outputs
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+*.obj
+*.pdb
+*.idb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.exp
+*.tlog
+*.lastbuildstate
+*.recipe
+*.ipch

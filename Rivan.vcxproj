@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{D341949A-0D03-40DC-8732-C2BC45B602D3}</ProjectGuid>
+    <RootNamespace>Rivan</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/permissive- /Zc:__cplusplus /utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d2d1.lib;dwrite.lib;windowscodecs.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;ole32.lib;shell32.lib;shlwapi.lib;propsys.lib;avrt.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Manifest>
+      <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
+    </Manifest>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <FloatingPointModel>Fast</FloatingPointModel>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="src\App.h" />
+    <ClInclude Include="src\audio\AudioAnalysisBuffer.h" />
+    <ClInclude Include="src\audio\AudioEngine.h" />
+    <ClInclude Include="src\audio\AudioTypes.h" />
+    <ClInclude Include="src\audio\NativeAudioBackend.h" />
+    <ClInclude Include="src\audio\PcmRingBuffer.h" />
+    <ClInclude Include="src\config\SettingsManager.h" />
+    <ClInclude Include="src\core\AppPaths.h" />
+    <ClInclude Include="src\core\FileSystemUtil.h" />
+    <ClInclude Include="src\core\IniDocument.h" />
+    <ClInclude Include="src\core\Text.h" />
+    <ClInclude Include="src\discord\DiscordPresence.h" />
+    <ClInclude Include="src\library\LibraryScanner.h" />
+    <ClInclude Include="src\library\Track.h" />
+    <ClInclude Include="src\playlist\PlaybackQueue.h" />
+    <ClInclude Include="src\playlist\Playlist.h" />
+    <ClInclude Include="src\playlist\PlaylistManager.h" />
+    <ClInclude Include="src\plugin\PluginApi.h" />
+    <ClInclude Include="src\plugin\PluginHost.h" />
+    <ClInclude Include="src\skin\Skin.h" />
+    <ClInclude Include="src\skin\SkinArchive.h" />
+    <ClInclude Include="src\skin\SkinManager.h" />
+    <ClInclude Include="src\ui\UiHost.h" />
+    <ClInclude Include="src\ui\Win32Ui.h" />
+    <ClInclude Include="src\ui\Win32UiImpl.h" />
+    <ClInclude Include="src\visualization\Visualization.h" />
+    <ClInclude Include="src\visualization\VisualizationRenderer.h" />
+    <ClInclude Include="src\youtube\YoutubeService.h" />
+    <ClInclude Include="resources\resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Main.cpp" />
+    <ClCompile Include="src\App.cpp" />
+    <ClCompile Include="src\AppYoutube.cpp" />
+    <ClCompile Include="src\AppSkins.cpp" />
+    <ClCompile Include="src\AppPlaylists.cpp" />
+    <ClCompile Include="src\AppLibrary.cpp" />
+    <ClCompile Include="src\AppPersistence.cpp" />
+    <ClCompile Include="src\audio\AudioAnalysisBuffer.cpp" />
+    <ClCompile Include="src\audio\AudioEngine.cpp" />
+    <ClCompile Include="src\audio\NativeAudioBackend.cpp" />
+    <ClCompile Include="src\config\SettingsManager.cpp" />
+    <ClCompile Include="src\core\AppPaths.cpp" />
+    <ClCompile Include="src\core\IniDocument.cpp" />
+    <ClCompile Include="src\discord\DiscordPresence.cpp" />
+    <ClCompile Include="src\library\LibraryScanner.cpp" />
+    <ClCompile Include="src\library\Track.cpp" />
+    <ClCompile Include="src\playlist\PlaybackQueue.cpp" />
+    <ClCompile Include="src\playlist\PlaylistManager.cpp" />
+    <ClCompile Include="src\plugin\PluginHost.cpp" />
+    <ClCompile Include="src\skin\Skin.cpp" />
+    <ClCompile Include="src\skin\SkinArchive.cpp" />
+    <ClCompile Include="src\skin\SkinManager.cpp" />
+    <ClCompile Include="src\skin\miniz\miniz.c" />
+    <ClCompile Include="src\ui\Win32Ui.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Rendering.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Input.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.SkinStudio.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Library.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Preview.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Settings.cpp" />
+    <ClCompile Include="src\visualization\Visualization.cpp" />
+    <ClCompile Include="src\visualization\VisualizationRenderer.cpp" />
+    <ClCompile Include="src\youtube\YoutubeService.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="src\app.manifest" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

@@ -1,0 +1,8 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="Win32" />
+  </Configurations>
+  <Project Path="Rivan.vcxproj" Id="d341949a-0d03-40dc-8732-c2bc45b602d3" />
+  <Project Path="Rivan.Tests.vcxproj" Id="7a685d63-7b74-4be3-b9c0-419176031b93" />
+</Solution>
