@@ -147,7 +147,6 @@ struct UiModel {
     bool youtubeEnabled{};
     // Discord Rich Presence preference (IPC worker runs only when true).
     bool discordEnabled{};
-    std::wstring discordImageUrl;
     bool discordShowArtist{true};
     bool discordShowImageText{true};
     bool discordShowGithubButton{};
@@ -235,8 +234,6 @@ public:
     // Enables/disables Discord Rich Presence. Off = clear activity and stop IPC.
     virtual void SetDiscordEnabled(bool enabled) = 0;
     // Empty restores the built-in Rivan asset. Returns validation failures to the UI.
-    [[nodiscard]] virtual bool SetDiscordImageUrl(std::wstring url,
-                                                   std::wstring& error) = 0;
     virtual void SetDiscordShowArtist(bool enabled) = 0;
     virtual void SetDiscordShowImageText(bool enabled) = 0;
     virtual void SetDiscordShowGithubButton(bool enabled) = 0;

@@ -21,6 +21,7 @@ enum class ModuleId : std::uint8_t {
     AllMusic,
     GraphicEqualizer,
     RivanLibrary,
+    VideoPreview,
 };
 
 // Floating modules can be placed freely.  A side drop changes the placement to
@@ -175,28 +176,30 @@ struct ModuleLayoutItem final {
 };
 
 struct ModuleLayout final {
-    std::array<ModuleLayoutItem, 4> items{};
+    std::array<ModuleLayoutItem, 5> items{};
     // A non-empty group contains the visible modules sharing one tab strip. The
     // first id is the active tab for that group.
-    std::array<ModuleId, 4> tabOrder{};
+    std::array<ModuleId, 5> tabOrder{};
     std::size_t tabCount{};
     std::size_t activeTab{};
     // A snapped module points at the module which owns its snap group.  The owner
     // is the target of the side drop, so dragging that module moves the whole group;
     // dragging another member detaches only that member.  A module points to itself
     // while it is not part of a snap group.
-    std::array<ModuleId, 4> snapGroup{
-        ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer, ModuleId::RivanLibrary};
+    std::array<ModuleId, 5> snapGroup{
+        ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
+        ModuleId::RivanLibrary, ModuleId::VideoPreview};
 
     [[nodiscard]] static ModuleLayout Defaults() noexcept {
         return ModuleLayout{
             {{{ModuleId::Rivan, 0.0F, 0.0F, 0.44F, 0.30F, true, ModuleDockState::Floating},
               {ModuleId::AllMusic, 0.0F, 0.33F, 0.44F, 0.49F, true, ModuleDockState::Floating},
               {ModuleId::GraphicEqualizer, 0.0F, 0.84F, 0.44F, 0.16F, true, ModuleDockState::Floating},
-              {ModuleId::RivanLibrary, 0.46F, 0.0F, 0.54F, 1.0F, true, ModuleDockState::Floating}}},
+              {ModuleId::RivanLibrary, 0.46F, 0.0F, 0.54F, 0.66F, true, ModuleDockState::Floating},
+              {ModuleId::VideoPreview, 0.46F, 0.68F, 0.54F, 0.30F, true, ModuleDockState::Floating}}},
              {}, 0, 0,
               {ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
-               ModuleId::RivanLibrary}};
+               ModuleId::RivanLibrary, ModuleId::VideoPreview}};
     }
 
     [[nodiscard]] ModuleLayoutItem* Find(ModuleId id) noexcept {
@@ -302,6 +305,16 @@ struct ModuleLayout final {
         item.collapseTargetIsWindow = targetIsWindow;
         item.collapsed = true;
         item.dockState = ModuleDockState::Snapped;
+    }
+
+    // Keep the rectangle restored by a later collapse in sync with an expanded
+    // collapsible module's current geometry.
+    static void SyncExpandedGeometry(ModuleLayoutItem& item) noexcept {
+        if (item.collapseMode == ModuleCollapseMode::None || item.collapsed) return;
+        item.expandedX = item.x;
+        item.expandedY = item.y;
+        item.expandedWidth = item.width;
+        item.expandedHeight = item.height;
     }
 
     // Collapse a module to a narrow handle on a client-window edge. Its stored geometry
@@ -548,7 +561,7 @@ struct ModuleLayout final {
                first.top < second.bottom && first.bottom > second.top;
     }
 
-    [[nodiscard]] static bool Contains(const std::array<ModuleId, 4>& ids,
+    [[nodiscard]] static bool Contains(const std::array<ModuleId, 5>& ids,
                                        std::size_t count, ModuleId id) noexcept {
         for (std::size_t index = 0; index < count; ++index) {
             if (ids[index] == id) return true;
@@ -561,7 +574,7 @@ struct ModuleLayout final {
     // one visible rectangle.  The result is also used as the set excluded from
     // occupancy checks, so a module can be moved out of the space it currently owns.
     [[nodiscard]] std::size_t MovingMembers(ModuleId id,
-                                             std::array<ModuleId, 4>& members) const noexcept {
+                                             std::array<ModuleId, 5>& members) const noexcept {
         std::size_t count = 0;
         const auto append = [&](ModuleId candidate) {
             if (Contains(members, count, candidate) || count >= members.size()) return;
@@ -610,9 +623,9 @@ struct ModuleLayout final {
             return false;
         }
 
-        std::array<ModuleId, 4> moving{};
+        std::array<ModuleId, 5> moving{};
         const auto movingCount = MovingMembers(source, moving);
-        std::array<ModuleNormalizedRect, 4> obstacles{};
+        std::array<ModuleNormalizedRect, 5> obstacles{};
         std::size_t obstacleCount = 0;
         for (const auto& item : items) {
             if (!item.visible || Contains(moving, movingCount, item.id)) continue;
@@ -724,7 +737,7 @@ struct ModuleLayout final {
     void DetachSnapModule(ModuleId id) noexcept {
         if (!IsSnapGrouped(id)) return;
         const auto oldRoot = SnapRoot(id);
-        std::array<ModuleId, 4> remaining{};
+        std::array<ModuleId, 5> remaining{};
         std::size_t remainingCount = 0;
         for (const auto& item : items) {
             if (item.visible && item.id != id && SnapRoot(item.id) == oldRoot) {
@@ -854,6 +867,7 @@ struct ModuleLayout final {
             item.y = newTop + (item.y - groupTop) * scaleY;
             item.width *= scaleX;
             item.height *= scaleY;
+            SyncExpandedGeometry(item);
         }
     }
 
@@ -881,7 +895,7 @@ struct ModuleLayout final {
         if (!IsTabbed(id)) return;
         ModuleLayoutItem groupGeometry{};
         if (const auto* root = Find(tabOrder[0])) groupGeometry = *root;
-        std::array<ModuleId, 4> remaining{};
+        std::array<ModuleId, 5> remaining{};
         std::size_t remainingCount = 0;
         const auto tabCountValue = TabCount();
         for (std::size_t i = 0; i < tabCountValue; ++i) {
@@ -911,7 +925,7 @@ struct ModuleLayout final {
         const ModuleId geometryId = TabRoot(target);
         ModuleLayoutItem groupGeometry{};
         if (const auto* root = Find(geometryId)) groupGeometry = *root;
-        std::array<ModuleId, 4> group{};
+        std::array<ModuleId, 5> group{};
         std::size_t count = 0;
         const auto append = [&](ModuleId id) {
             for (std::size_t i = 0; i < count; ++i) {
@@ -983,7 +997,7 @@ struct ModuleLayout final {
         if (sourceSnapRoot == targetSnapRoot) return false;
         const auto* targetItem = Find(targetRoot);
         if (!targetItem || targetItem->collapsed || !Find(sourceTabRoot)) return false;
-        std::array<ModuleId, 4> sourceMembers{};
+        std::array<ModuleId, 5> sourceMembers{};
         const std::size_t sourceMemberCount = MovingMembers(source, sourceMembers);
         const ModuleLayoutItem targetGeometry = *targetItem;
         if ((zone == ModuleDropZone::Left || zone == ModuleDropZone::Right) &&
@@ -1111,7 +1125,7 @@ struct ModuleLayout final {
         const bool freeDestination = FindplusWindowRectangle(
             source, region, pointerX, pointerY, 0.10F, 0.10F, destination);
 
-        std::array<ModuleId, 4> moving{};
+        std::array<ModuleId, 5> moving{};
         const auto movingCount = MovingMembers(source, moving);
         ModuleId targetRoot{};
         bool splitTargetFound = false;
@@ -1296,10 +1310,11 @@ private:
         UiModule{ModuleId::AllMusic, "all_music", L"ALL MUSIC"},
         UiModule{ModuleId::GraphicEqualizer, "graphic_equalizer", L"GRAPHIC EQUALIZER"},
         UiModule{ModuleId::RivanLibrary, "rivan_library", L"RIVAN LIBRARY"},
+        UiModule{ModuleId::VideoPreview, "video_preview", L"VIDEO PREVIEW"},
     };
 };
 
-static_assert(UiModuleRegistry::Modules().size() == 4,
-              "The initial main-window module catalog must contain four sections.");
+static_assert(UiModuleRegistry::Modules().size() == 5,
+              "The initial main-window module catalog must contain five sections.");
 
 } // namespace rivan::ui

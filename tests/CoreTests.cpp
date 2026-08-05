@@ -478,7 +478,7 @@ void TestUiModuleRegistry() {
     using rivan::ui::UiModuleRegistry;
 
     const auto modules = UiModuleRegistry::Modules();
-    Check(modules.size() == 4, "the built-in UI module registry contains four sections");
+    Check(modules.size() == 5, "the built-in UI module registry contains five sections");
     Check(UiModuleRegistry::Get(ModuleId::Rivan).Key() == "rivan",
           "the Rivan section has a stable key");
     Check(UiModuleRegistry::Get(ModuleId::AllMusic).Title() == L"ALL MUSIC",
@@ -487,10 +487,20 @@ void TestUiModuleRegistry() {
           "the graphic equalizer section has a stable key");
     Check(UiModuleRegistry::Find(ModuleId::RivanLibrary) != nullptr,
            "the Rivan Library section is discoverable by identity");
+    Check(UiModuleRegistry::Get(ModuleId::VideoPreview).Key() == "video_preview",
+          "the video preview section has a stable key");
+    Check(UiModuleRegistry::Get(ModuleId::VideoPreview).Title() == L"VIDEO PREVIEW",
+          "the video preview section has a stable title");
 
     auto layout = rivan::ui::ModuleLayout::Defaults();
     Check(layout.Find(ModuleId::Rivan)->width > 0.0F,
           "module defaults provide normalized geometry");
+    const auto* videoPreview = layout.Find(ModuleId::VideoPreview);
+    Check(videoPreview != nullptr && std::abs(videoPreview->x - 0.46F) < 0.001F &&
+              std::abs(videoPreview->y - 0.68F) < 0.001F &&
+              std::abs(videoPreview->width - 0.54F) < 0.001F &&
+              std::abs(videoPreview->height - 0.30F) < 0.001F,
+          "module defaults reserve a standalone video preview section");
     layout.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
     Check(layout.tabCount == 2 && layout.IsTabbed(ModuleId::AllMusic),
           "module layout can create a tab group");
@@ -569,6 +579,41 @@ void TestUiModuleRegistry() {
               std::abs(resized.Find(ModuleId::Rivan)->width -
                        resized.Find(ModuleId::AllMusic)->width) < 0.001F,
           "resizing a snapped group updates every member");
+
+    auto collapsibleResize = rivan::ui::ModuleLayout::Defaults();
+    for (auto& item : collapsibleResize.items) item.visible = false;
+    collapsibleResize.Find(ModuleId::Rivan)->visible = true;
+    collapsibleResize.Find(ModuleId::Rivan)->x = 0.0F;
+    collapsibleResize.Find(ModuleId::Rivan)->y = 0.0F;
+    collapsibleResize.Find(ModuleId::Rivan)->width = 0.50F;
+    collapsibleResize.Find(ModuleId::Rivan)->height = 1.0F;
+    collapsibleResize.Find(ModuleId::AllMusic)->visible = true;
+    collapsibleResize.Find(ModuleId::AllMusic)->x = 0.50F;
+    collapsibleResize.Find(ModuleId::AllMusic)->y = 0.0F;
+    collapsibleResize.Find(ModuleId::AllMusic)->width = 0.50F;
+    collapsibleResize.Find(ModuleId::AllMusic)->height = 1.0F;
+    Check(collapsibleResize.CollapseToModule(ModuleId::Rivan, ModuleId::AllMusic,
+                                              rivan::ui::ModuleCollapseSide::Left,
+                                              rivan::ui::ModuleCollapseMode::Outside),
+          "a module can collapse outside another module before resizing");
+    Check(collapsibleResize.ToggleCollapsedModule(ModuleId::Rivan),
+          "an outside-collapsed module can be expanded before resizing");
+    Check(collapsibleResize.SnapTo(ModuleId::Rivan, ModuleId::AllMusic,
+                                   ModuleDropZone::Left),
+          "an expanded collapsible module can join a snap group");
+    const auto oldExpandedWidth = collapsibleResize.Find(ModuleId::Rivan)->expandedWidth;
+    collapsibleResize.ResizeSnapGroup(ModuleId::AllMusic, 0.40F, 0.5F,
+                                      false, false, true, false);
+    const auto* resizedCollapsible = collapsibleResize.Find(ModuleId::Rivan);
+    Check(resizedCollapsible != nullptr &&
+              std::abs(resizedCollapsible->width - oldExpandedWidth) > 0.001F,
+          "resizing a snapped group changes the collapsible member's visible width");
+    Check(resizedCollapsible != nullptr &&
+              std::abs(resizedCollapsible->expandedX - resizedCollapsible->x) < 0.001F &&
+              std::abs(resizedCollapsible->expandedY - resizedCollapsible->y) < 0.001F &&
+              std::abs(resizedCollapsible->expandedWidth - resizedCollapsible->width) < 0.001F &&
+              std::abs(resizedCollapsible->expandedHeight - resizedCollapsible->height) < 0.001F,
+          "resizing a snapped group keeps an expanded collapsible member's geometry in sync");
 }
 
 void TestWindowSnapping() {
@@ -735,6 +780,33 @@ void TestCollapsibleSnapping() {
                        (outside.Find(ModuleId::Rivan)->x + outside.Find(ModuleId::Rivan)->width)) < 0.001F &&
               !outside.HasConflictingGeometry(),
           "outside collapse places its handle beside the target without overlap");
+
+    auto resizedCollapsible = ModuleLayout::Defaults();
+    for (auto& item : resizedCollapsible.items) item.visible = false;
+    auto* collapsible = resizedCollapsible.Find(ModuleId::Rivan);
+    collapsible->visible = true;
+    collapsible->x = 0.20F;
+    collapsible->y = 0.20F;
+    collapsible->width = 0.40F;
+    collapsible->height = 0.40F;
+    Check(resizedCollapsible.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Right) &&
+              resizedCollapsible.ToggleCollapsedModule(ModuleId::Rivan),
+          "a collapsed module can be reopened before resizing");
+    collapsible = resizedCollapsible.Find(ModuleId::Rivan);
+    collapsible->x = 0.58F;
+    collapsible->y = 0.12F;
+    collapsible->width = 0.32F;
+    collapsible->height = 0.46F;
+    ModuleLayout::SyncExpandedGeometry(*collapsible);
+    Check(resizedCollapsible.ToggleCollapsedModule(ModuleId::Rivan) &&
+              resizedCollapsible.ToggleCollapsedModule(ModuleId::Rivan),
+          "a resized collapsible module can be collapsed and reopened");
+    collapsible = resizedCollapsible.Find(ModuleId::Rivan);
+    Check(std::abs(collapsible->x - 0.58F) < 0.001F &&
+              std::abs(collapsible->y - 0.12F) < 0.001F &&
+              std::abs(collapsible->width - 0.32F) < 0.001F &&
+              std::abs(collapsible->height - 0.46F) < 0.001F,
+          "collapsible geometry survives a collapse and expand cycle after resizing");
 }
 
 void TestModuleLayoutSessionRoundTrip() {
@@ -765,6 +837,33 @@ void TestModuleLayoutSessionRoundTrip() {
     Check(reader.Session().moduleLayout.Find(rivan::ui::ModuleId::Rivan)->dockState ==
               rivan::ui::ModuleDockState::Snapped,
           "module dock state survives session round-trip");
+
+    auto resizable = writer.Session();
+    resizable.moduleLayout = rivan::ui::ModuleLayout::Defaults();
+    auto* collapsible = resizable.moduleLayout.Find(rivan::ui::ModuleId::RivanLibrary);
+    Check(collapsible != nullptr &&
+              resizable.moduleLayout.CollapseToWindow(rivan::ui::ModuleId::RivanLibrary,
+                                                      rivan::ui::ModuleCollapseSide::Right) &&
+              resizable.moduleLayout.ToggleCollapsedModule(rivan::ui::ModuleId::RivanLibrary),
+          "a collapsible module can be prepared for persistence");
+    collapsible = resizable.moduleLayout.Find(rivan::ui::ModuleId::RivanLibrary);
+    collapsible->x = 0.50F;
+    collapsible->y = 0.08F;
+    collapsible->width = 0.34F;
+    collapsible->height = 0.40F;
+    rivan::ui::ModuleLayout::SyncExpandedGeometry(*collapsible);
+    Check(writer.SetSession(resizable, &error) && writer.SaveSession(&error),
+          "resized collapsible module session saves");
+    Check(reader.LoadSession(&error), "resized collapsible module session reloads");
+    const auto* loadedCollapsible =
+        reader.Session().moduleLayout.Find(rivan::ui::ModuleId::RivanLibrary);
+    Check(loadedCollapsible != nullptr &&
+              std::abs(loadedCollapsible->expandedX - 0.50F) < 0.001F &&
+              std::abs(loadedCollapsible->expandedY - 0.08F) < 0.001F &&
+              std::abs(loadedCollapsible->expandedWidth - 0.34F) < 0.001F &&
+              std::abs(loadedCollapsible->expandedHeight - 0.40F) < 0.001F,
+          "resized collapsible geometry survives a session round-trip");
+
     std::filesystem::remove_all(root, ec);
 }
 

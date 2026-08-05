@@ -56,8 +56,6 @@ struct AppSettings final {
     bool duplicateAsFile = false;
     // Optional Discord Rich Presence (IPC). Off by default; no Discord I/O when false.
     bool discordEnabled = false;
-    // Optional public http(s) image URL for Rich Presence. Empty uses the Rivan asset.
-    std::string discordImageUrl;
     // Optional Rich Presence fields. Discord's application label itself is not removable.
     bool discordShowArtist = true;
     bool discordShowImageText = true;

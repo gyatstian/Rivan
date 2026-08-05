@@ -97,62 +97,110 @@ constexpr float kModuleCollapseZonePixels = 12.0F;
     // available panel dimension and using the same compact 18-pixel thickness.
 constexpr float kModuleCollapseHandleWidthFraction = 0.20F;
 constexpr float kModuleCollapseHandleHeight = 18.0F;
+constexpr float kCollapsedHandleDragThreshold = 8.0F;
 
-[[nodiscard]] D2D1_RECT_F ModulePixelBounds(const ModuleLayoutItem& item,
-                                              D2D1_SIZE_F size) noexcept {
+[[nodiscard]] D2D1_RECT_F ModuleRawPixelBounds(const ModuleLayoutItem& item,
+                                                 D2D1_SIZE_F size) noexcept {
     const float width = std::max(0.0F, size.width);
     const float height = std::max(0.0F, size.height);
-    float left = item.x * width;
-    float top = item.y * height;
-    float right = (item.x + item.width) * width;
-    float bottom = (item.y + item.height) * height;
+    const float left = item.x * width;
+    const float top = item.y * height;
+    const float right = (item.x + item.width) * width;
+    const float bottom = (item.y + item.height) * height;
+    return D2D1::RectF(left, top, std::max(left, right), std::max(top, bottom));
+}
+
+[[nodiscard]] D2D1_RECT_F ModulePixelBounds(const ModuleLayoutItem& item,
+                                             D2D1_SIZE_F size) noexcept {
+    auto bounds = ModuleRawPixelBounds(item, size);
 
     // Layout coordinates are normalized and may have accumulated tiny floating
     // point errors after a drag. Treat values very close to the boundary as
     // touching it, while leaving adjacent module edges unchanged.
     constexpr float kBoundaryTolerance = 0.0001F;
+    const float width = std::max(0.0F, size.width);
+    const float height = std::max(0.0F, size.height);
     const float horizontalGap = std::min(kModuleWindowGap, width * 0.25F);
     const float verticalGap = std::min(kModuleWindowGap, height * 0.25F);
-    if (item.x <= kBoundaryTolerance) left += horizontalGap;
-    if (item.y <= kBoundaryTolerance) top += verticalGap;
-    if (item.x + item.width >= 1.0F - kBoundaryTolerance) right -= horizontalGap;
-    if (item.y + item.height >= 1.0F - kBoundaryTolerance) bottom -= verticalGap;
-    return D2D1::RectF(left, top, std::max(left, right), std::max(top, bottom));
+    if (item.x <= kBoundaryTolerance) bounds.left += horizontalGap;
+    if (item.y <= kBoundaryTolerance) bounds.top += verticalGap;
+    if (item.x + item.width >= 1.0F - kBoundaryTolerance) bounds.right -= horizontalGap;
+    if (item.y + item.height >= 1.0F - kBoundaryTolerance) bounds.bottom -= verticalGap;
+    return D2D1::RectF(bounds.left, bounds.top,
+                       std::max(bounds.left, bounds.right),
+                       std::max(bounds.top, bounds.bottom));
 }
 
 [[nodiscard]] D2D1_RECT_F ModuleCollapseHandleBounds(const ModuleLayoutItem& item,
                                                      D2D1_SIZE_F size) noexcept {
     const float width = std::max(1.0F, size.width);
     const float height = std::max(1.0F, size.height);
-    const float normalizedX = item.collapsed ? item.x : item.handleX;
-    const float normalizedY = item.collapsed ? item.y : item.handleY;
-    const float normalizedWidth = item.collapsed ? item.width : item.handleWidth;
-    const float normalizedHeight = item.collapsed ? item.height : item.handleHeight;
-    if (!(normalizedWidth > 0.0F) || !(normalizedHeight > 0.0F)) return {};
-    const auto handleRegion = D2D1::RectF(normalizedX * width, normalizedY * height,
-                                           (normalizedX + normalizedWidth) * width,
-                                           (normalizedY + normalizedHeight) * height);
-    const float centerX = (handleRegion.left + handleRegion.right) * 0.5F;
-    const float centerY = (handleRegion.top + handleRegion.bottom) * 0.5F;
-    const float regionWidth = std::max(0.0F, handleRegion.right - handleRegion.left);
-    const float regionHeight = std::max(0.0F, handleRegion.bottom - handleRegion.top);
-    const float expandedWidth = item.expandedWidth > 0.0F
-        ? item.expandedWidth * width : regionWidth;
-    const float expandedHeight = item.expandedHeight > 0.0F
-        ? item.expandedHeight * height : regionHeight;
     const bool verticalHandle = item.collapseSide == ModuleCollapseSide::Left ||
                                 item.collapseSide == ModuleCollapseSide::Right;
-    // Side handles are vertical and top/bottom handles are horizontal. Keep the
-    // same compact thickness in the short direction, but use the module's dimension
-    // in the long direction so the affordance communicates which edge it belongs to.
-    const float actualWidth = verticalHandle
-        ? std::min(width, kModuleCollapseHandleHeight)
-        : std::min(width, expandedWidth * kModuleCollapseHandleWidthFraction);
-    const float actualHeight = verticalHandle
-        ? std::min(height, expandedHeight * kModuleCollapseHandleWidthFraction)
-        : std::min(height, kModuleCollapseHandleHeight);
-    float left = centerX - actualWidth * 0.5F;
-    float top = centerY - actualHeight * 0.5F;
+
+    float left = 0.0F;
+    float top = 0.0F;
+    float actualWidth = 0.0F;
+    float actualHeight = 0.0F;
+    if (item.collapsed) {
+        if (!(item.width > 0.0F) || !(item.height > 0.0F)) return {};
+        // A collapsed module's current rectangle is the persisted handle rectangle.
+        // Keep this path independent from the expanded module so the handle remains
+        // in the exact place where the collapse operation put it.
+        ModuleLayoutItem handleGeometry = item;
+        const auto handleRegion = ModuleRawPixelBounds(handleGeometry, size);
+        const float centerX = (handleRegion.left + handleRegion.right) * 0.5F;
+        const float centerY = (handleRegion.top + handleRegion.bottom) * 0.5F;
+        const float regionWidth = std::max(0.0F, handleRegion.right - handleRegion.left);
+        const float regionHeight = std::max(0.0F, handleRegion.bottom - handleRegion.top);
+        const float expandedWidth = item.expandedWidth > 0.0F
+            ? item.expandedWidth * width : regionWidth;
+        const float expandedHeight = item.expandedHeight > 0.0F
+            ? item.expandedHeight * height : regionHeight;
+        actualWidth = verticalHandle
+            ? std::min(width, kModuleCollapseHandleHeight)
+            : std::min(width, expandedWidth * kModuleCollapseHandleWidthFraction);
+        actualHeight = verticalHandle
+            ? std::min(height, expandedHeight * kModuleCollapseHandleWidthFraction)
+            : std::min(height, kModuleCollapseHandleHeight);
+        left = centerX - actualWidth * 0.5F;
+        top = centerY - actualHeight * 0.5F;
+    } else {
+        // Once expanded, the handle follows the live module rectangle and moves to
+        // the opposite edge from the side where the module collapses.
+        const auto moduleRegion = ModuleRawPixelBounds(item, size);
+        const float moduleWidth = std::max(0.0F, moduleRegion.right - moduleRegion.left);
+        const float moduleHeight = std::max(0.0F, moduleRegion.bottom - moduleRegion.top);
+        actualWidth = verticalHandle
+            ? std::min(width, kModuleCollapseHandleHeight)
+            : std::min(width, moduleWidth * kModuleCollapseHandleWidthFraction);
+        actualHeight = verticalHandle
+            ? std::min(height, moduleHeight * kModuleCollapseHandleWidthFraction)
+            : std::min(height, kModuleCollapseHandleHeight);
+        switch (item.collapseSide) {
+        case ModuleCollapseSide::Left:
+            left = moduleRegion.right - actualWidth;
+            top = (moduleRegion.top + moduleRegion.bottom - actualHeight) * 0.5F;
+            break;
+        case ModuleCollapseSide::Right:
+            left = moduleRegion.left;
+            top = (moduleRegion.top + moduleRegion.bottom - actualHeight) * 0.5F;
+            break;
+        case ModuleCollapseSide::Top:
+            left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
+            top = moduleRegion.bottom - actualHeight;
+            break;
+        case ModuleCollapseSide::Bottom:
+            left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
+            top = moduleRegion.top;
+            break;
+        case ModuleCollapseSide::None:
+            left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
+            top = (moduleRegion.top + moduleRegion.bottom - actualHeight) * 0.5F;
+            break;
+        }
+    }
+    if (!(actualWidth > 0.0F) || !(actualHeight > 0.0F)) return {};
     left = std::clamp(left, 0.0F, std::max(0.0F, width - actualWidth));
     top = std::clamp(top, 0.0F, std::max(0.0F, height - actualHeight));
     return D2D1::RectF(left, top, left + actualWidth, top + actualHeight);
@@ -348,8 +396,7 @@ struct Win32Ui::Impl {
     enum class HitKind : std::uint8_t {
         Command, Playlist, PlaylistToggle, Track, Seek, Volume, Setting,
         PlaylistSearch, WindowControl, Studio, Refresh, SettingsAction, TimeToggle,
-        YoutubeResult, FilePreviewToggle, FilePreviewFullscreen, FilePreviewExitFullscreen,
-        DiscordImageField,
+        YoutubeResult, FilePreviewFullscreen, FilePreviewExitFullscreen,
         ModuleTitle,
         ModuleTab,
         ModuleCollapseToggle,
@@ -491,10 +538,7 @@ struct Win32Ui::Impl {
     bool deferTexts{};
     std::wstring playlistQuery;
     bool playlistQuerySelectAll{};
-    bool discordImageEditing{};
-    bool discordImageSelectAll{};
-    std::wstring discordImageBuffer;
-    bool filePreviewExpanded{};
+
     bool previewFullscreen{};
     std::wstring previewPath;
     D2D1_RECT_F previewVideoBounds{};
@@ -729,6 +773,11 @@ struct Win32Ui::Impl {
     void DrawPreviewFullscreenOverlay(const D2D1_SIZE_F size,
                                       std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
 
+    void DrawVideoPreview(const D2D1_RECT_F& bounds,
+                          std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    [[nodiscard]] bool IsVideoPreviewModuleVisible() const noexcept;
+
     void LoadFilePreview(const std::wstring& path);
 
     [[nodiscard]] std::wstring ActivePreviewPath() const;
@@ -959,10 +1008,8 @@ struct Win32Ui::Impl {
     void CopyStudioHex();
     void PasteStudioHex();
     void PastePlaylistQuery();
-    void PasteDiscordImageUrl();
     void CopyTrackName();
     void PasteTrackName();
-    void CommitDiscordImageUrl();
     void ImportStudioImage();
     void ImportStudioFont();
     void HandleStudioAction(std::uint64_t action);

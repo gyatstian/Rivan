@@ -233,11 +233,8 @@ bool DiscordPresence::PublishActivity(const PresenceActivity& activity) {
             payload += EscapeJson(activity.state);
             payload += '"';
         }
-        // External image URLs are supported by current Discord clients. Keep the
-        // uploaded application asset as a reliable fallback when no URL is configured.
-        payload += R"(,"assets":{"large_image":")";
-        payload += EscapeJson(activity.imageUrl.empty() ? "rivan" : activity.imageUrl);
-        payload += '"';
+        // Use the uploaded application asset; Discord does not reliably resolve external image URLs.
+        payload += R"(,"assets":{"large_image":"rivan")";
         if (activity.showImageText) payload += R"(,"large_text":"Rivan")";
         payload += '}';
         if (activity.playing && activity.startUnix > 0) {

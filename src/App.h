@@ -55,8 +55,6 @@ public:
     void SetYoutubeEnabled(bool enabled) override;
     void SetModuleLayout(ui::ModuleLayout layout) override;
     void SetDiscordEnabled(bool enabled) override;
-    [[nodiscard]] bool SetDiscordImageUrl(std::wstring url,
-                                          std::wstring& error) override;
     void SetDiscordShowArtist(bool enabled) override;
     void SetDiscordShowImageText(bool enabled) override;
     void SetDiscordShowGithubButton(bool enabled) override;

@@ -415,8 +415,6 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.exitToTray = settings_.Settings().exitToTray;
     out.youtubeEnabled = settings_.Settings().youtubeEnabled;
     out.discordEnabled = settings_.Settings().discordEnabled;
-    out.discordImageUrl = core::Utf8ToWide(settings_.Settings().discordImageUrl,
-                                           L"Unable to decode error text");
     out.discordShowArtist = settings_.Settings().discordShowArtist;
     out.discordShowImageText = settings_.Settings().discordShowImageText;
     out.discordShowGithubButton = settings_.Settings().discordShowGithubButton;
@@ -459,6 +457,7 @@ void App::SetModuleLayout(ui::ModuleLayout layout) {
         item.height = std::clamp(item.height, item.collapsed ? 0.01F : 0.10F, 1.0F);
         item.x = std::min(item.x, 1.0F - item.width);
         item.y = std::min(item.y, 1.0F - item.height);
+        ui::ModuleLayout::SyncExpandedGeometry(item);
     }
     if (layout.tabCount > layout.tabOrder.size()) layout.tabCount = layout.tabOrder.size();
     layout.activeTab = std::min(layout.activeTab, layout.tabCount == 0 ? 0U : layout.tabCount - 1U);

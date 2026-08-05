@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
-#include <cwctype>
 #include <span>
 #include <string>
 #include <vector>
@@ -41,28 +40,6 @@ void App::SetDiscordEnabled(bool enabled) {
     }
     ++revision_;
     if (window_) window_->Refresh();
-}
-
-bool App::SetDiscordImageUrl(std::wstring url, std::wstring& error) {
-    while (!url.empty() && std::iswspace(url.front())) url.erase(url.begin());
-    while (!url.empty() && std::iswspace(url.back())) url.pop_back();
-
-    auto settings = settings_.Settings();
-    settings.discordImageUrl = core::WideToUtf8(url);
-    std::string narrowError;
-    if (!settings_.SetSettings(settings, &narrowError)) {
-        error = core::Utf8ToWide(narrowError, L"Unable to decode error text");
-        return false;
-    }
-    if (!settings_.SaveSettings(&narrowError)) {
-        error = core::Utf8ToWide(narrowError, L"Unable to decode error text");
-        return false;
-    }
-    error.clear();
-    UpdateDiscordPresence();
-    ++revision_;
-    if (window_) window_->Refresh();
-    return true;
 }
 
 void App::SetDiscordShowArtist(bool enabled) {
@@ -203,7 +180,6 @@ void App::UpdateDiscordPresence() {
     activity.playing = true;
     activity.details = core::WideToUtf8(track->title.empty() ? track->filePath.stem().wstring() : track->title);
     if (settings_.Settings().discordShowArtist) activity.state = core::WideToUtf8(track->artist.empty() ? L"Unknown artist" : track->artist);
-    activity.imageUrl = settings_.Settings().discordImageUrl;
     activity.showImageText = settings_.Settings().discordShowImageText;
     activity.showGithubButton = settings_.Settings().discordShowGithubButton;
     const auto nowUnix = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();

@@ -168,7 +168,7 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         if (impl_->windowKind == WindowKind::Main && impl_->previewIsVideo &&
-            impl_->filePreviewExpanded &&
+            impl_->IsVideoPreviewModuleVisible() &&
             Contains(impl_->previewVideoBounds, x, y)) {
             impl_->EnterPreviewFullscreen();
             return 0;

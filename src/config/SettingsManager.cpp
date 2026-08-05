@@ -24,7 +24,6 @@ namespace {
 
 constexpr std::size_t kMaximumIdentifierBytes = 64;
 constexpr std::size_t kMaximumSelectionBytes = 4096;
-constexpr std::size_t kMaximumUrlBytes = 2048;
 constexpr std::uint64_t kMaximumPositionMilliseconds = 30ULL * 24ULL * 60ULL * 60ULL * 1000ULL;
 
 void SetError(std::string* error, std::string message) {
@@ -64,18 +63,6 @@ bool IsIdentifier(std::string_view value) noexcept {
                (character >= '0' && character <= '9') ||
                character == '-' || character == '_';
     });
-}
-
-bool IsHttpUrl(std::string_view value) noexcept {
-    if (value.empty()) return true;
-    if (value.size() > kMaximumUrlBytes ||
-        !(value.starts_with("https://") || value.starts_with("http://"))) {
-        return false;
-    }
-    return IsValidUtf8(value) &&
-           std::all_of(value.begin(), value.end(), [](unsigned char character) {
-               return character > 0x20 && character != 0x7f;
-           });
 }
 
 std::optional<std::string> PathToUtf8(const std::filesystem::path& path) {
@@ -316,7 +303,6 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
                  std::to_string(settings.youtubeMp4VideoQuality));
     document.Set("library", "duplicate_as_file", BoolText(settings.duplicateAsFile));
     document.Set("discord", "enabled", BoolText(settings.discordEnabled));
-    document.Set("discord", "image_url", settings.discordImageUrl);
     document.Set("discord", "show_artist", BoolText(settings.discordShowArtist));
     document.Set("discord", "show_image_text", BoolText(settings.discordShowImageText));
     document.Set("discord", "show_github_button",
@@ -508,13 +494,6 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
     ReadIntegerField(*document, "youtube", "mp4_video_quality", 0, 5,
                      settings_.youtubeMp4VideoQuality, warnings);
     ReadBoolField(*document, "discord", "enabled", settings_.discordEnabled, warnings);
-    if (const auto imageUrl = document->Get("discord", "image_url")) {
-        if (IsHttpUrl(*imageUrl)) {
-            settings_.discordImageUrl = std::string(*imageUrl);
-        } else {
-            AddWarning(warnings, "Ignoring invalid discord.image_url");
-        }
-    }
     ReadBoolField(*document, "discord", "show_artist",
                   settings_.discordShowArtist, warnings);
     ReadBoolField(*document, "discord", "show_image_text",
@@ -575,6 +554,8 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
     }
 
     auto layout = ui::ModuleLayout::Defaults();
+    const bool hasVideoPreviewGeometry =
+        document->Get("modules", "module_4_x").has_value();
     for (std::size_t i = 0; i < layout.items.size(); ++i) {
         auto& item = layout.items[i];
         const std::string key = "module_" + std::to_string(i) + "_";
@@ -641,7 +622,42 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
                        item.handleHeight, warnings);
         item.x = std::min(item.x, 1.0F - item.width);
         item.y = std::min(item.y, 1.0F - item.height);
+        ui::ModuleLayout::SyncExpandedGeometry(item);
     }
+
+    // Sessions written before the standalone video-preview module used the full
+    // right half for Rivan Library. Preserve custom legacy layouts by hiding the
+    // new module, but split the old built-in default so upgraded users get the new
+    // preview without overlapping their library.
+    if (!hasVideoPreviewGeometry) {
+        auto* library = layout.Find(ui::ModuleId::RivanLibrary);
+        auto* videoPreview = layout.Find(ui::ModuleId::VideoPreview);
+        const bool legacyDefaultLibrary = library != nullptr && library->visible &&
+            !library->collapsed && std::abs(library->x - 0.46F) < 0.0001F &&
+            std::abs(library->y) < 0.0001F && std::abs(library->width - 0.54F) < 0.0001F &&
+            std::abs(library->height - 1.0F) < 0.0001F;
+        if (legacyDefaultLibrary && videoPreview != nullptr) {
+            const auto defaults = ui::ModuleLayout::Defaults();
+            if (const auto* defaultLibrary = defaults.Find(ui::ModuleId::RivanLibrary)) {
+                library->x = defaultLibrary->x;
+                library->y = defaultLibrary->y;
+                library->width = defaultLibrary->width;
+                library->height = defaultLibrary->height;
+            }
+            if (const auto* defaultPreview = defaults.Find(ui::ModuleId::VideoPreview)) {
+                *videoPreview = *defaultPreview;
+            }
+        } else if (videoPreview != nullptr) {
+            videoPreview->visible = false;
+            videoPreview->dockState = ui::ModuleDockState::Floating;
+            videoPreview->collapseMode = ui::ModuleCollapseMode::None;
+            videoPreview->collapseSide = ui::ModuleCollapseSide::None;
+            videoPreview->collapseTarget = ui::ModuleId::VideoPreview;
+            videoPreview->collapseTargetIsWindow = false;
+            videoPreview->collapsed = false;
+        }
+    }
+
     if (const auto count = document->Get("modules", "tab_count")) {
         if (const auto parsed = ParseInteger<std::size_t>(*count)) {
             layout.tabCount = std::min(*parsed, layout.tabOrder.size());
@@ -754,10 +770,6 @@ bool SettingsManager::Validate(const AppSettings& settings, std::string* error) 
     }
     if (!IsIdentifier(settings.skinId)) {
         SetError(error, "Skin identifier must contain 1-64 ASCII letters, digits, '-' or '_'");
-        return false;
-    }
-    if (!IsHttpUrl(settings.discordImageUrl)) {
-        SetError(error, "Discord image URL must be empty or a valid http(s) URL up to 2048 bytes");
         return false;
     }
     if (error != nullptr) {

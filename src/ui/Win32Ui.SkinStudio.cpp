@@ -118,9 +118,8 @@ void Win32Ui::Impl::SettingsButton(const D2D1_RECT_F& bounds, const std::wstring
 // 4 toggle YouTube, 5 install yt-dlp, 6 install ffmpeg, 7/8 YT audio quality (shared),
 // 9 cycle download format (MP3/Original/Video), 10/11 video height, 14 file preview,
 // 15 start at startup, 16 exit to tray, 17 duplicate mode, 18 Discord rich presence,
-// 19 clear the optional Discord image URL, 20 artist, 21 image tooltip text,
-// 22 track covers, 23 Discord GitHub repo button, 60-63 module visibility,
-// 64 restores the default module layout.
+// 22 track covers, 23 Discord GitHub repo button, 60-64 module visibility,
+// 65 restores the default module layout.
 void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
     try {
         if (action >= 100 && action < 200) {
@@ -188,17 +187,6 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 18:
             host.SetDiscordEnabled(!model.discordEnabled);
             break;
-        case 19: {
-            std::wstring error;
-            if (!host.SetDiscordImageUrl(L"", error) && !error.empty()) {
-                MessageBoxW(window, error.c_str(), L"Discord image URL",
-                            MB_OK | MB_ICONWARNING);
-            }
-            discordImageEditing = false;
-            discordImageSelectAll = false;
-            discordImageBuffer.clear();
-            break;
-        }
         case 20:
             host.SetDiscordShowArtist(!model.discordShowArtist);
             break;
@@ -214,7 +202,8 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 60:
         case 61:
         case 62:
-        case 63: {
+        case 63:
+        case 64: {
             auto layout = model.moduleLayout;
             const auto id = static_cast<ModuleId>(action - 60);
             if (auto* item = layout.Find(id)) {
@@ -227,7 +216,7 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
             }
             break;
         }
-        case 64:
+        case 65:
             host.SetModuleLayout(ModuleLayout::Defaults());
             break;
         case 50:
@@ -1009,26 +998,6 @@ void Win32Ui::Impl::PastePlaylistQuery() {
     InvalidateRect(window, nullptr, FALSE);
 }
 
-void Win32Ui::Impl::PasteDiscordImageUrl() {
-    if (!OpenClipboard(window)) return;
-    const HANDLE data = GetClipboardData(CF_UNICODETEXT);
-    if (data) {
-        const auto* text = static_cast<const wchar_t*>(GlobalLock(data));
-        if (text) {
-            if (discordImageSelectAll) discordImageBuffer.clear();
-            for (const wchar_t* cursor = text;
-                 *cursor != L'\0' && discordImageBuffer.size() < 2048; ++cursor) {
-                const wchar_t ch = *cursor;
-                if (ch >= L' ' && ch != 0x7FU) discordImageBuffer.push_back(ch);
-            }
-            GlobalUnlock(data);
-        }
-    }
-    CloseClipboard();
-    discordImageSelectAll = false;
-    InvalidateRect(window, nullptr, FALSE);
-}
-
 void Win32Ui::Impl::CopyTrackName() {
     if (!OpenClipboard(window)) return;
     const std::size_t bytes = (trackNameBuffer.size() + 1) * sizeof(wchar_t);
@@ -1069,24 +1038,6 @@ void Win32Ui::Impl::PasteTrackName() {
     trackNameSelectAll = false;
     InvalidateRect(window, nullptr, FALSE);
 }
-
-void Win32Ui::Impl::CommitDiscordImageUrl() {
-    if (!discordImageEditing) return;
-    std::wstring error;
-    if (!host.SetDiscordImageUrl(discordImageBuffer, error)) {
-        if (!error.empty()) {
-            MessageBoxW(window, error.c_str(), L"Discord image URL",
-                        MB_OK | MB_ICONWARNING);
-        }
-        return;
-    }
-    discordImageEditing = false;
-    discordImageSelectAll = false;
-    discordImageBuffer.clear();
-    InvalidateRect(window, nullptr, FALSE);
-}
-
-
 
 void Win32Ui::Impl::ImportStudioImage() {
     static const COMDLG_FILTERSPEC filters[] = {

@@ -27,6 +27,7 @@ void Win32Ui::Impl::ClearFilePreview() noexcept {
         }
         previewFullscreen = false;
         previewFullscreenCloseBounds = {};
+        previewVideoBounds = {};
     }
 
 void Win32Ui::Impl::StopPreviewWorker() noexcept {
@@ -666,8 +667,7 @@ void Win32Ui::Impl::DrawPreviewFullscreenOverlay(const D2D1_SIZE_F size,
 void Win32Ui::Impl::LoadFilePreview(const std::wstring& path) {
         const bool keepFullscreen = previewFullscreen && IsVideoPath(path);
         ClearFilePreview();
-        if (path.empty() || !filePreviewExpanded || !model.filePreviewEnabled ||
-            windowKind != WindowKind::Main) return;
+        if (path.empty() || !IsVideoPreviewModuleVisible()) return;
         previewPath = path;
         previewFullscreen = keepFullscreen;
         if (IsVideoPath(path)) {
@@ -695,19 +695,13 @@ void Win32Ui::Impl::ExitPreviewFullscreen() noexcept {
     }
 
 void Win32Ui::Impl::EnterPreviewFullscreen() noexcept {
-        if (!previewIsVideo || !filePreviewExpanded || !model.filePreviewEnabled) return;
+        if (!previewIsVideo || !IsVideoPreviewModuleVisible()) return;
         previewFullscreen = true;
         InvalidateRect(window, nullptr, FALSE);
     }
 
 void Win32Ui::Impl::SyncFilePreview(bool advanceVideo) {
-        if (!model.filePreviewEnabled) {
-            filePreviewExpanded = false;
-            previewFullscreen = false;
-            if (!previewPath.empty() || previewBitmap) ClearFilePreview();
-            return;
-        }
-        if (!filePreviewExpanded || model.miniPlayer) {
+        if (!IsVideoPreviewModuleVisible()) {
             previewFullscreen = false;
             if (!previewPath.empty() || previewBitmap) ClearFilePreview();
             return;
@@ -1060,7 +1054,7 @@ void Win32Ui::Impl::SyncRefreshTimer() noexcept {
         // Video preview needs ~30 Hz while expanded even if transport is idle.
         const UINT desired = (moduleGesture != ModuleGesture::None ||
                               model.playback == PlaybackState::Playing ||
-                              (filePreviewExpanded && previewIsVideo) || previewFullscreen)
+                              (IsVideoPreviewModuleVisible() && previewIsVideo) || previewFullscreen)
             ? kRefreshPlayingMilliseconds
             : kRefreshIdleMilliseconds;
         if (desired == currentTimerMs) return;
@@ -1621,13 +1615,13 @@ void Win32Ui::Impl::DrawPlayer(const D2D1_RECT_F& bounds,
                                  b[1].Get(), b[2].Get(), b[3].Get(), b[4].Get(),
                                  b[13].Get(), b[7].Get(), ModuleId::Rivan);
         const auto titleBar = Rect(bounds.left + 4, bounds.top + 4, bounds.right - 4, bounds.top + 22);
-        // Settings gear on the left of the RIVAN panel title bar opens the preferences window.
-        const auto gear = Rect(titleBar.left + 2, titleBar.top + 2, titleBar.left + 22, titleBar.bottom - 2);
+        // Three-bar settings icon on the left of the RIVAN panel title bar opens the preferences window.
+        const auto settingsIcon = Rect(titleBar.left + 2, titleBar.top + 2, titleBar.left + 22, titleBar.bottom - 2);
         {
-            const bool hot = Contains(gear, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
-            Win32Ui::Impl::DrawText(L"\u2699", gear, hot ? b[8].Get() : b[13].Get(), headingFormat.Get(),
+            const bool hot = Contains(settingsIcon, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
+            Win32Ui::Impl::DrawText(L"\u2630", settingsIcon, hot ? b[8].Get() : b[13].Get(), headingFormat.Get(),
                      DWRITE_TEXT_ALIGNMENT_CENTER);
-            Win32Ui::Impl::AddHit(gear, Command::ToggleSettings);
+            Win32Ui::Impl::AddHit(settingsIcon, Command::ToggleSettings);
         }
         float right = titleBar.right - 3;
         Win32Ui::Impl::DrawWindowButton(Rect(right - 16, titleBar.top + 2, right, titleBar.bottom - 2), L"X", 3,
@@ -1638,8 +1632,8 @@ void Win32Ui::Impl::DrawPlayer(const D2D1_RECT_F& bounds,
         right -= 19;
         Win32Ui::Impl::DrawWindowButton(Rect(right - 16, titleBar.top + 2, right, titleBar.bottom - 2), L"_", 1,
                          b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
-        // The strip between the gear and the window buttons is the window drag handle.
-        captionRect = Rect(gear.right + 2, titleBar.top, right - 19, titleBar.bottom);
+        // The strip between the settings icon and the window buttons is the window drag handle.
+        captionRect = Rect(settingsIcon.right + 2, titleBar.top, right - 19, titleBar.bottom);
 
         const float bandTop = content.top + 3;
         const float bandBottom = std::min(content.top + 88, content.bottom - 88);
@@ -2076,46 +2070,10 @@ void Win32Ui::Impl::DrawLibrary(const D2D1_RECT_F& bounds,
         // SCREEN: Current-folder search field.
         Win32Ui::Impl::DrawSearch(localSearch, playlistQuery, SearchTarget::Playlist, b[5].Get(), b[3].Get(), b[4].Get(),
                     b[6].Get(), b[6].Get());
-        // Sticky file preview at bottom of CURRENT FOLDER; track list scrolls above it.
-        constexpr float previewHandleHeight = 18.0F;
-        const float previewHeight = model.filePreviewEnabled && filePreviewExpanded
-                                        ? std::clamp(Height(right) * 0.34F, 130.0F, 260.0F)
-                                        : 0.0F;
-        const float previewTop = right.bottom - previewHandleHeight - previewHeight;
-        playlistSearchBounds = Rect(right.left, localSearch.bottom + 3, right.right,
-                                    model.filePreviewEnabled ? previewTop : right.bottom);
+        playlistSearchBounds = Rect(right.left, localSearch.bottom + 3, right.right, right.bottom);
         // SCREEN: Current-folder track list with per-subfolder section headers.
         Win32Ui::Impl::DrawSectionedTracks(playlistSearchBounds, playlistSearchScroll, playlistSearchRows,
                             b[5].Get(), b[6].Get(), b[6].Get(), b[11].Get(), b[12].Get(), b[10].Get());
-        previewVideoBounds = {};
-        if (model.filePreviewEnabled) {
-            const auto handle = Rect(right.left + Width(right) * 0.40F, previewTop,
-                                     right.left + Width(right) * 0.60F,
-                                     previewTop + previewHandleHeight);
-            Win32Ui::Impl::DrawBevel(handle, b[2].Get(), b[3].Get(), b[4].Get(), false);
-            Win32Ui::Impl::DrawText(filePreviewExpanded ? L"\u25BC" : L"\u25B2", handle, b[9].Get(),
-                     tinyFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
-            Win32Ui::Impl::AddSimpleHit(handle, HitKind::FilePreviewToggle);
-            if (filePreviewExpanded) {
-                const auto preview = Rect(right.left, handle.bottom, right.right, right.bottom);
-                Win32Ui::Impl::DrawBevel(preview, b[5].Get(), b[3].Get(), b[4].Get(), true, 2.0F);
-                previewVideoBounds = Rect(preview.left + 3, preview.top + 3,
-                                          preview.right - 3, preview.bottom - 3);
-                if (previewBitmap) {
-                    Win32Ui::Impl::DrawPreviewBitmap(previewVideoBounds);
-                    if (previewIsVideo) {
-                        Win32Ui::Impl::AddSimpleHit(previewVideoBounds, HitKind::FilePreviewFullscreen);
-                    }
-                } else {
-                    const wchar_t* message = L"NOTHING PLAYING";
-                    if (!ActivePreviewPath().empty()) {
-                        message = previewIsVideo ? L"LOADING PREVIEW..." : L"NO COVER AVAILABLE";
-                    }
-                    Win32Ui::Impl::DrawText(message, previewVideoBounds, b[10].Get(), smallFormat.Get(),
-                             DWRITE_TEXT_ALIGNMENT_CENTER);
-                }
-            }
-        }
     }
 
 void Win32Ui::Impl::DrawMini(const D2D1_SIZE_F size,
@@ -2403,6 +2361,7 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
         panelBounds.clear();
         moduleRegions.clear();
         decorControlBounds.clear();
+        previewVideoBounds = {};
          const auto& layout = moduleGesture != ModuleGesture::None
                                   ? moduleLayoutDraft : model.moduleLayout;
           const auto boundsFor = [size](const ModuleLayoutItem& item) {
@@ -2421,6 +2380,7 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
              case ModuleId::AllMusic: DrawPlaylistEditor(bounds, b); break;
              case ModuleId::GraphicEqualizer: DrawEqualizer(bounds, b); break;
              case ModuleId::RivanLibrary: DrawLibrary(bounds, b); break;
+             case ModuleId::VideoPreview: DrawVideoPreview(bounds, b); break;
              }
          };
 
@@ -2752,7 +2712,8 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
         };
         constexpr std::array moduleIds{
             ModuleId::Rivan, ModuleId::AllMusic,
-            ModuleId::GraphicEqualizer, ModuleId::RivanLibrary};
+            ModuleId::GraphicEqualizer, ModuleId::RivanLibrary,
+            ModuleId::VideoPreview};
         for (std::size_t i = 0; i < moduleIds.size(); i += 2) {
             const float optionWidth = (right - left - 8.0F) * 0.5F;
             SettingsButton(Rect(left, y, left + optionWidth, y + 24),
@@ -2763,7 +2724,7 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
             }
             y += 30;
         }
-        SettingsButton(Rect(left, y, right, y + 24), L"RESET MODULE LAYOUT", 64, b);
+        SettingsButton(Rect(left, y, right, y + 24), L"RESET MODULE LAYOUT", 65, b);
         y += 34;
          Win32Ui::Impl::DrawText(L"Drag a title to move. Center drops create tabs; side drops snap.",
                   Rect(left, y, right, y + 28), b[6].Get(), tinyFormat.Get());
@@ -2810,33 +2771,6 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
         y += 22;
 
-        Win32Ui::Impl::DrawText(L"RICH PRESENCE IMAGE URL", Rect(left, y, right, y + 25),
-                 b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        const float clearW = 60.0F;
-        const auto imageBox = Rect(left, y, right - clearW - 4, y + 24);
-        const bool imageActive = discordImageEditing;
-        Win32Ui::Impl::DrawBevel(imageBox, imageActive ? b[7].Get() : b[5].Get(), b[3].Get(),
-                  b[4].Get(), true, 2.0F);
-        const std::wstring& shownUrl = imageActive ? discordImageBuffer
-                                                   : model.discordImageUrl;
-        Win32Ui::Impl::DrawText(shownUrl.empty() ? L"https://... (default Rivan image)" : shownUrl,
-                 Rect(imageBox.left + 5, imageBox.top, imageBox.right - 4, imageBox.bottom),
-                 shownUrl.empty() ? b[10].Get() : b[6].Get(), regularFormat.Get());
-        const float clipTop = settingsDetailsBounds.top + 15.0F;
-        const float clipBottom = settingsDetailsBounds.bottom - 4.0F;
-        if (imageBox.bottom > clipTop && imageBox.top < clipBottom) {
-            HitRegion imageHit;
-            imageHit.bounds = Rect(imageBox.left, std::max(imageBox.top, clipTop),
-                                   imageBox.right, std::min(imageBox.bottom, clipBottom));
-            imageHit.kind = HitKind::DiscordImageField;
-            hits.push_back(imageHit);
-        }
-        SettingsButton(Rect(right - clearW, y, right, y + 24), L"CLEAR", 19, b);
-        y += 26;
-        Win32Ui::Impl::DrawText(L"Direct public image URL only; temporary attachment URLs may fail.",
-                  Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 22;
         }
 
         if (model.settingsCategory == SettingCategory::Downloading) {
@@ -3190,8 +3124,7 @@ void Win32Ui::Impl::Paint() {
                 }
                 seenElementFocusRevision = model.skinElementFocusRevision;
             }
-            if (previewFullscreen && previewIsVideo && filePreviewExpanded &&
-                !model.miniPlayer) {
+            if (previewFullscreen && previewIsVideo && IsVideoPreviewModuleVisible()) {
                 Win32Ui::Impl::DrawPreviewFullscreenOverlay(size, brushes);
             } else {
                 previewFullscreen = false;

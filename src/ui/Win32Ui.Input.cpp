@@ -319,9 +319,6 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
         activeSearch = SearchTarget::None;
         playlistQuerySelectAll = false;
     }
-    if (hit.kind != HitKind::DiscordImageField && discordImageEditing) {
-        CommitDiscordImageUrl();
-    }
     try {
         switch (hit.kind) {
         case HitKind::Command: host.Invoke(hit.command); break;
@@ -348,11 +345,6 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
             BeginCreatePlaylist();
             break;
         case HitKind::YoutubeResult: host.ActivateYoutubeResult(hit.id); break;
-        case HitKind::FilePreviewToggle:
-            filePreviewExpanded = !filePreviewExpanded;
-            if (!filePreviewExpanded) ClearFilePreview();
-            else LoadFilePreview(ActivePreviewPath());
-            break;
         case HitKind::FilePreviewFullscreen:
             EnterPreviewFullscreen();
             break;
@@ -367,12 +359,6 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
             host.SelectSettingsCategory(hit.category);
             break;
         case HitKind::PlaylistSearch: activeSearch = SearchTarget::Playlist; break;
-        case HitKind::DiscordImageField:
-            if (!discordImageEditing) discordImageBuffer = model.discordImageUrl;
-            discordImageEditing = true;
-            discordImageSelectAll = !discordImageBuffer.empty();
-            SetFocus(window);
-            break;
         case HitKind::WindowControl:
             if (hit.id == 1) ShowWindow(window, SW_MINIMIZE);
             else if (hit.id == 2) host.Invoke(Command::ToggleMiniPlayer);
@@ -436,7 +422,7 @@ void Win32Ui::Impl::PointerMove(float x, float y) {
     if (collapsedArrowPress) {
         const float dx = x - collapsedArrowPressStart.x;
         const float dy = y - collapsedArrowPressStart.y;
-        if (!collapsedArrowDragStarted && dx * dx + dy * dy >= 64.0F) {
+        if (!collapsedArrowDragStarted && dx * dx + dy * dy >= kCollapsedHandleDragThreshold * kCollapsedHandleDragThreshold) {
             collapsedArrowDragStarted = true;
             BeginModuleDrag(*collapsedArrowPress, collapsedArrowPressStart.x,
                             collapsedArrowPressStart.y);
@@ -686,6 +672,7 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
                                            0.10F, 1.0F - item->y);
             }
         }
+        ModuleLayout::SyncExpandedGeometry(*item);
     } else {
         if (item->collapsed) {
             item->x = item->expandedX;
@@ -822,7 +809,7 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
     const auto resolveCollapse = [this, x, y](const ModuleLayoutItem& item,
                                               ModuleCollapseSide& side,
                                               ModuleCollapseMode& mode) {
-        const auto bounds = ModulePixelBounds(item, lastCanvas);
+        const auto bounds = ModuleRawPixelBounds(item, lastCanvas);
         const float strip = kModuleCollapseZonePixels;
         const bool middleY = y >= bounds.top + Height(bounds) * 0.25F &&
                              y <= bounds.bottom - Height(bounds) * 0.25F;
@@ -1222,19 +1209,6 @@ void Win32Ui::Impl::Character(wchar_t character) {
         InvalidateRect(window, nullptr, FALSE);
         return;
     }
-    if (discordImageEditing) {
-        if (character != L'\b' && (character < L' ' || character == 0x7FU)) return;
-        if (character == L'\b') {
-            if (discordImageSelectAll) discordImageBuffer.clear();
-            else if (!discordImageBuffer.empty()) discordImageBuffer.pop_back();
-        } else {
-            if (discordImageSelectAll) discordImageBuffer.clear();
-            if (discordImageBuffer.size() < 2048) discordImageBuffer.push_back(character);
-        }
-        discordImageSelectAll = false;
-        InvalidateRect(window, nullptr, FALSE);
-        return;
-    }
     if (activeSearch == SearchTarget::None) return;
     // Ctrl/Alt produce WM_CHAR control codes (e.g. Ctrl+A = 1). Ignore them so
     // KeyDown's select-all / paste handling is not immediately cleared.
@@ -1353,24 +1327,6 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
             studioHexSelectAll = false;
             InvalidateRect(window, nullptr, FALSE);
         }
-        return;
-    }
-    if (discordImageEditing) {
-        const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        if (key == VK_ESCAPE) {
-            discordImageEditing = false;
-            discordImageSelectAll = false;
-            discordImageBuffer.clear();
-        } else if (key == VK_RETURN) {
-            CommitDiscordImageUrl();
-            return;
-        } else if (control && (key == L'A' || key == L'a')) {
-            discordImageSelectAll = !discordImageBuffer.empty();
-        } else if (control && (key == L'V' || key == L'v')) {
-            PasteDiscordImageUrl();
-            return;
-        }
-        InvalidateRect(window, nullptr, FALSE);
         return;
     }
     if (activeSearch != SearchTarget::None) {
