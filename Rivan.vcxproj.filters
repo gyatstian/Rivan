@@ -188,6 +188,9 @@
     <ClInclude Include="src\ui\UiHost.h">
       <Filter>Pliki nagłówkowe</Filter>
     </ClInclude>
+    <ClInclude Include="src\ui\UiModule.h">
+      <Filter>Pliki nagłówkowe</Filter>
+    </ClInclude>
     <ClInclude Include="src\ui\Win32Ui.h">
       <Filter>Pliki nagłówkowe</Filter>
     </ClInclude>

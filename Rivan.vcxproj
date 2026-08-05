@@ -98,6 +98,7 @@
     <ClInclude Include="src\skin\SkinArchive.h" />
     <ClInclude Include="src\skin\SkinManager.h" />
     <ClInclude Include="src\ui\UiHost.h" />
+    <ClInclude Include="src\ui\UiModule.h" />
     <ClInclude Include="src\ui\Win32Ui.h" />
     <ClInclude Include="src\ui\Win32UiImpl.h" />
     <ClInclude Include="src\visualization\Visualization.h" />

@@ -53,6 +53,7 @@ public:
     void SetStartAtStartup(bool enabled) override;
     void SetExitToTray(bool enabled) override;
     void SetYoutubeEnabled(bool enabled) override;
+    void SetModuleLayout(ui::ModuleLayout layout) override;
     void SetDiscordEnabled(bool enabled) override;
     [[nodiscard]] bool SetDiscordImageUrl(std::wstring url,
                                           std::wstring& error) override;
@@ -89,7 +90,8 @@ public:
     void DeleteUserPlaylists(std::span<const std::uint64_t> ids) override;
     void AddFilesToSelectedPlaylist() override;
     void RemoveTracksAt(std::span<const std::size_t> indices) override;
-    void ReorderSelectedTracks(std::span<const std::size_t> indices,
+    void ReorderSelectedTracks(std::uint64_t playlistId,
+                               std::span<const std::size_t> indices,
                                std::size_t destination) override;
     void AddTracksToPlaylist(std::uint64_t targetPlaylistId,
                              std::span<const std::size_t> indices) override;
@@ -127,7 +129,7 @@ private:
     // Custom track order within Directory folders persists to a dedicated INI in the music
     // root, keyed by folder path then file path, so a drag-reordered folder's song order
     // survives a library rescan.
-    void SaveTrackOrder() const;
+    void SaveTrackOrder(playlist::PlaylistId folderId) const;
     void ApplyTrackOrderAfterScan();
     // Reseeds the playback queue from the currently selected playlist after an edit.
     void ReseedSelectedUserQueue();
@@ -197,6 +199,7 @@ private:
     youtube::YoutubeSnapshot youtubeView_{};
     std::uint64_t youtubeSelectedResult_{};
     std::uint64_t pendingPlayYoutubeId_{};
+    ui::ModuleLayout moduleLayout_{ui::ModuleLayout::Defaults()};
 };
 
 } // namespace rivan

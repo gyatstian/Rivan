@@ -566,6 +566,10 @@ private:
                     commands = TakeCommands(state);
                 } catch (...) {
                     RecordCurrentException(state, current, backend);
+                    if (state->shutdownQueued.load(std::memory_order_acquire)) {
+                        SetState(state, current, PlaybackState::ShuttingDown);
+                        break;
+                    }
                     continue;
                 }
 
@@ -584,6 +588,13 @@ private:
                     } catch (...) {
                         RecordCurrentException(state, current, backend);
                     }
+                }
+                // QueueShutdown() sets the flag before trying to append the command.  Do
+                // not let a command allocation failure, or commands that were already
+                // queued ahead of shutdown, keep the worker alive indefinitely.
+                if (running && state->shutdownQueued.load(std::memory_order_acquire)) {
+                    SetState(state, current, PlaybackState::ShuttingDown);
+                    break;
                 }
                 continue;
             }

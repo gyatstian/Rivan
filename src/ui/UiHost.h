@@ -3,6 +3,7 @@
 #pragma once
 #include "../skin/Skin.h"
 #include "../visualization/Visualization.h"
+#include "UiModule.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -85,6 +86,9 @@ struct TrackView {
     // Populated only when file preview or small track covers need it, avoiding path copies
     // while both optional features are disabled.
     std::wstring filePath;
+    // Folder/user playlist that owns this entry. Parent-folder views can contain tracks
+    // from several descendant folders, so the owner must travel with the visible row.
+    std::uint64_t sourcePlaylistId{};
 };
 
 // Remote YouTube result or local download shown in the Youtube browser pane.
@@ -172,6 +176,7 @@ struct UiModel {
     std::vector<SkinSummary> skins;
     skin::Skin activeSkin{skin::Skin::BuiltInDarkPurple()};
     visualization::VisualizationSnapshot visualization;
+    ModuleLayout moduleLayout{ModuleLayout::Defaults()};
     // Id of the currently selected playlist. User playlists support all edits; library
     // folders and All Music only accept imported tracks.
     std::uint64_t selectedPlaylistId{};
@@ -225,6 +230,8 @@ public:
     virtual void SetExitToTray(bool enabled) = 0;
     // Enables/disables the optional YouTube library section. Off = no YT workers or UI.
     virtual void SetYoutubeEnabled(bool enabled) = 0;
+    // Applies the normalized geometry, visibility, and tab state of the main modules.
+    virtual void SetModuleLayout(ModuleLayout layout) = 0;
     // Enables/disables Discord Rich Presence. Off = clear activity and stop IPC.
     virtual void SetDiscordEnabled(bool enabled) = 0;
     // Empty restores the built-in Rivan asset. Returns validation failures to the UI.
@@ -280,9 +287,10 @@ public:
     virtual void AddFilesToSelectedPlaylist() = 0;
     // Removes the entries at the given visible positions from the selected user playlist.
     virtual void RemoveTracksAt(std::span<const std::size_t> indices) = 0;
-    // Reorders the selected user playlist: moves the entries at `indices` so they land
-    // contiguously at drop point `destination` (index into the pre-move list; end == size).
-    virtual void ReorderSelectedTracks(std::span<const std::size_t> indices,
+    // Moves entries at `indices` contiguously to `destination` in playlistId's own list.
+    // Both positions refer to the pre-move source list; end == source list size.
+    virtual void ReorderSelectedTracks(std::uint64_t playlistId,
+                                       std::span<const std::size_t> indices,
                                        std::size_t destination) = 0;
     // Adds the tracks at the given visible positions (of the current view) to another
     // user playlist by id.

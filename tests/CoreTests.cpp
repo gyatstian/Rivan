@@ -8,6 +8,7 @@
 #include "../src/playlist/PlaylistManager.h"
 #include "../src/skin/Skin.h"
 #include "../src/visualization/Visualization.h"
+#include "../src/ui/UiModule.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -152,6 +153,21 @@ void TestLibraryAndQueue() {
     });
     Check(opus != scan.tracks.end() && std::abs(opus->durationSeconds - 10.0) < 0.01,
           "scanner reads Ogg Opus duration without Media Foundation metadata");
+
+    // Directory playlists, including folders shown through a parent-folder view, keep
+    // their own direct order and accept the same reorder operation as user playlists.
+    if (rock != nullptr) {
+        rivan::playlist::PlaylistManager manager;
+        manager.ApplyScan(scan);
+        const auto before = manager.ResolveTracks(rock->id);
+        Check(before.size() == 3, "directory reorder test resolves direct folder tracks");
+        Check(manager.MoveTracks(rock->id, {0}, before.size()),
+              "directory playlist reorders a track from a folder view");
+        const auto after = manager.ResolveTracks(rock->id);
+        Check(after.size() == before.size() && !after.empty() &&
+                  after.back().id == before.front().id,
+              "directory reorder moves the selected track within its owning folder");
+    }
 
     rivan::playlist::PlaybackQueue queue(7);
     queue.SetTracks(scan.tracks, std::nullopt);
@@ -457,6 +473,301 @@ void TestFilePreviewSettingRoundTrip() {
     std::filesystem::remove_all(root, ec);
 }
 
+void TestUiModuleRegistry() {
+    using rivan::ui::ModuleId;
+    using rivan::ui::UiModuleRegistry;
+
+    const auto modules = UiModuleRegistry::Modules();
+    Check(modules.size() == 4, "the built-in UI module registry contains four sections");
+    Check(UiModuleRegistry::Get(ModuleId::Rivan).Key() == "rivan",
+          "the Rivan section has a stable key");
+    Check(UiModuleRegistry::Get(ModuleId::AllMusic).Title() == L"ALL MUSIC",
+          "the All Music section has a stable title");
+    Check(UiModuleRegistry::Get(ModuleId::GraphicEqualizer).Key() == "graphic_equalizer",
+          "the graphic equalizer section has a stable key");
+    Check(UiModuleRegistry::Find(ModuleId::RivanLibrary) != nullptr,
+           "the Rivan Library section is discoverable by identity");
+
+    auto layout = rivan::ui::ModuleLayout::Defaults();
+    Check(layout.Find(ModuleId::Rivan)->width > 0.0F,
+          "module defaults provide normalized geometry");
+    layout.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
+    Check(layout.tabCount == 2 && layout.IsTabbed(ModuleId::AllMusic),
+          "module layout can create a tab group");
+    layout.TabWith(ModuleId::GraphicEqualizer, ModuleId::Rivan);
+    Check(layout.tabCount == 3 && layout.activeTab == 2,
+          "dropping a module on a tabbed module extends the tab group");
+    layout.RemoveTab(ModuleId::AllMusic);
+    Check(layout.tabCount == 2 && !layout.IsTabbed(ModuleId::AllMusic),
+          "module layout removes a tab cleanly");
+
+    auto nestedTabs = rivan::ui::ModuleLayout::Defaults();
+    nestedTabs.MakeTab(ModuleId::RivanLibrary, ModuleId::Rivan);
+    nestedTabs.TabWith(ModuleId::GraphicEqualizer, ModuleId::Rivan);
+    Check(nestedTabs.tabCount == 3 &&
+              nestedTabs.tabOrder[0] == ModuleId::RivanLibrary &&
+              nestedTabs.activeTab == 2,
+          "adding a module to an existing tab group preserves its root");
+    const auto libraryGeometry = *nestedTabs.Find(ModuleId::RivanLibrary);
+    nestedTabs.RemoveTab(ModuleId::Rivan);
+    const auto equalizerGeometry = *nestedTabs.Find(ModuleId::GraphicEqualizer);
+    Check(nestedTabs.tabCount == 2 &&
+              std::abs(equalizerGeometry.x - libraryGeometry.x) < 0.001F &&
+              std::abs(equalizerGeometry.width - libraryGeometry.width) < 0.001F,
+           "removing a module leaves the remaining tab group at its visible size");
+
+    using rivan::ui::ModuleDropZone;
+    Check(rivan::ui::ResolveModuleDropZone(50.0F, 50.0F, 0.0F, 0.0F, 100.0F, 100.0F) ==
+              ModuleDropZone::Center,
+          "module drop resolver uses the center for tab merging");
+    Check(rivan::ui::ResolveModuleDropZone(5.0F, 50.0F, 0.0F, 0.0F, 100.0F, 100.0F) ==
+              ModuleDropZone::Left &&
+              rivan::ui::ResolveModuleDropZone(95.0F, 50.0F, 0.0F, 0.0F, 100.0F, 100.0F) ==
+              ModuleDropZone::Right,
+          "module drop resolver distinguishes horizontal side drops");
+    Check(rivan::ui::ResolveModuleDropZone(50.0F, 5.0F, 0.0F, 0.0F, 100.0F, 100.0F) ==
+              ModuleDropZone::Top &&
+              rivan::ui::ResolveModuleDropZone(50.0F, 95.0F, 0.0F, 0.0F, 100.0F, 100.0F) ==
+              ModuleDropZone::Bottom,
+          "module drop resolver distinguishes vertical side drops");
+
+    auto snapped = rivan::ui::ModuleLayout::Defaults();
+    Check(snapped.SnapTo(ModuleId::AllMusic, ModuleId::Rivan, ModuleDropZone::Right) &&
+               snapped.IsSnapped(ModuleId::AllMusic) && snapped.IsSnapped(ModuleId::Rivan) &&
+               snapped.IsSnapGrouped(ModuleId::AllMusic) &&
+               snapped.SnapRoot(ModuleId::AllMusic) == ModuleId::Rivan &&
+               std::abs(snapped.Find(ModuleId::AllMusic)->x - 0.22F) < 0.001F &&
+               std::abs(snapped.Find(ModuleId::Rivan)->width - 0.22F) < 0.001F,
+           "side module drops split the target and mark both modules snapped");
+    snapped.DetachSnapModule(ModuleId::AllMusic);
+    Check(!snapped.IsSnapGrouped(ModuleId::AllMusic) &&
+              snapped.Find(ModuleId::AllMusic)->dockState == rivan::ui::ModuleDockState::Floating &&
+              snapped.Find(ModuleId::Rivan)->dockState == rivan::ui::ModuleDockState::Floating,
+          "dragging a snapped child detaches only that module");
+
+    auto snappedRoot = rivan::ui::ModuleLayout::Defaults();
+    Check(snappedRoot.SnapTo(ModuleId::AllMusic, ModuleId::Rivan, ModuleDropZone::Right),
+          "root snap group can be created");
+    snappedRoot.Find(ModuleId::Rivan)->x = 0.3F;
+    snappedRoot.Find(ModuleId::AllMusic)->x = 0.52F;
+    const float snappedChildX = snappedRoot.Find(ModuleId::AllMusic)->x;
+    const float snappedRootX = snappedRoot.Find(ModuleId::Rivan)->x;
+    snappedRoot.Find(ModuleId::Rivan)->x += 0.05F;
+    snappedRoot.Find(ModuleId::AllMusic)->x += 0.05F;
+    Check(std::abs(snappedRoot.Find(ModuleId::AllMusic)->x - (snappedChildX + 0.05F)) < 0.001F &&
+              std::abs(snappedRoot.Find(ModuleId::Rivan)->x - (snappedRootX + 0.05F)) < 0.001F,
+          "moving a snapped root preserves the module group");
+
+    auto resized = rivan::ui::ModuleLayout::Defaults();
+    Check(resized.SnapTo(ModuleId::AllMusic, ModuleId::Rivan, ModuleDropZone::Right),
+          "snap group can be resized");
+    const float oldRivanWidth = resized.Find(ModuleId::Rivan)->width;
+    const float oldMusicWidth = resized.Find(ModuleId::AllMusic)->width;
+    resized.ResizeSnapGroup(ModuleId::Rivan, 0.60F, 0.15F, true, false, false, false);
+    Check(resized.Find(ModuleId::Rivan)->width > oldRivanWidth &&
+              resized.Find(ModuleId::AllMusic)->width > oldMusicWidth &&
+              std::abs(resized.Find(ModuleId::Rivan)->width -
+                       resized.Find(ModuleId::AllMusic)->width) < 0.001F,
+          "resizing a snapped group updates every member");
+}
+
+void TestWindowSnapping() {
+    using rivan::ui::ModuleId;
+    using rivan::ui::ModuleWindowDropZone;
+    using rivan::ui::ModuleLayout;
+
+    // Zone resolution from normalized window coordinates.
+    Check(rivan::ui::ResolveModuleWindowDropZone(0.75F, 0.1F) == ModuleWindowDropZone::RightTop &&
+          rivan::ui::ResolveModuleWindowDropZone(0.9F, 0.9F) == ModuleWindowDropZone::RightBottom &&
+          rivan::ui::ResolveModuleWindowDropZone(0.5F, 0.5F) == ModuleWindowDropZone::Center &&
+          rivan::ui::ResolveModuleWindowDropZone(0.1F, 0.4F) == ModuleWindowDropZone::LeftMiddle,
+          "window drop resolver selects the seven targets by pointer quadrant");
+
+    // Free-region placement: Rivan occupies the left half, the whole right half is
+    // empty, so a right-middle snap fills the entire right section.
+    auto freeRight = rivan::ui::ModuleLayout::Defaults();
+    for (auto& item : freeRight.items) item.visible = false;
+    freeRight.Find(ModuleId::Rivan)->visible = true;
+    freeRight.Find(ModuleId::Rivan)->x = 0.0F; freeRight.Find(ModuleId::Rivan)->y = 0.0F;
+    freeRight.Find(ModuleId::Rivan)->width = 0.5F; freeRight.Find(ModuleId::Rivan)->height = 1.0F;
+    Check(freeRight.SnapToWindow(ModuleId::AllMusic, ModuleWindowDropZone::RightMiddle,
+                                 0.75F, 0.5F),
+          "a module can snap into a free window part");
+    Check(std::abs(freeRight.Find(ModuleId::AllMusic)->x - 0.5F) < 0.001F &&
+              std::abs(freeRight.Find(ModuleId::AllMusic)->width - 0.5F) < 0.001F &&
+              std::abs(freeRight.Find(ModuleId::AllMusic)->height - 1.0F) < 0.001F,
+          "a free half-window snap fills the target rectangle");
+
+    // The nesting requirement: RivanLibrary occupies the right side. Snap AllMusic to
+    // the right-top corner, then snap GraphicEqualizer to the right-middle target. The
+    // second snap must consume only the remaining right-side space, never the whole
+    // right section, and never overlap anything.
+    auto nested = rivan::ui::ModuleLayout::Defaults();
+    for (auto& item : nested.items) item.visible = false;
+    nested.Find(ModuleId::Rivan)->visible = true;
+    nested.Find(ModuleId::Rivan)->x = 0.0F; nested.Find(ModuleId::Rivan)->y = 0.0F;
+    nested.Find(ModuleId::Rivan)->width = 0.5F; nested.Find(ModuleId::Rivan)->height = 1.0F;
+    nested.Find(ModuleId::RivanLibrary)->visible = true;
+    nested.Find(ModuleId::RivanLibrary)->x = 0.5F; nested.Find(ModuleId::RivanLibrary)->y = 0.0F;
+    nested.Find(ModuleId::RivanLibrary)->width = 0.5F; nested.Find(ModuleId::RivanLibrary)->height = 1.0F;
+    Check(nested.SnapToWindow(ModuleId::AllMusic, ModuleWindowDropZone::RightTop,
+                              0.75F, 0.1F),
+          "snapping to an occupied right-top splits the occupying module");
+    Check(std::abs(nested.Find(ModuleId::AllMusic)->x - 0.5F) < 0.001F &&
+              std::abs(nested.Find(ModuleId::AllMusic)->width - 0.5F) < 0.001F &&
+              std::abs(nested.Find(ModuleId::AllMusic)->height - 0.5F) < 0.001F &&
+              std::abs(nested.Find(ModuleId::RivanLibrary)->y - 0.5F) < 0.001F,
+          "the occupying right module keeps the remaining bottom half");
+    Check(!nested.HasConflictingGeometry(),
+          "splitting an occupied right-top introduces no overlap");
+    std::cout << "after right-top: music "
+              << nested.Find(ModuleId::AllMusic)->x << "," << nested.Find(ModuleId::AllMusic)->width
+              << "," << nested.Find(ModuleId::AllMusic)->height
+              << " lib " << nested.Find(ModuleId::RivanLibrary)->x << ","
+              << nested.Find(ModuleId::RivanLibrary)->width << ","
+              << nested.Find(ModuleId::RivanLibrary)->y << "\n";
+
+    Check(nested.SnapToWindow(ModuleId::GraphicEqualizer, ModuleWindowDropZone::RightMiddle,
+                              0.75F, 0.6F),
+          "a later right-middle snap still applies");
+    const auto* allMusic = nested.Find(ModuleId::AllMusic);
+    const auto* library = nested.Find(ModuleId::RivanLibrary);
+    const auto* equalizer = nested.Find(ModuleId::GraphicEqualizer);
+    std::cout << "after middle: music h=" << allMusic->height
+              << " lib x=" << library->x << " w=" << library->width
+              << " eq x=" << equalizer->x << " w=" << equalizer->width
+              << " eqy=" << equalizer->y << " eqh=" << equalizer->height << "\n";
+    Check(std::abs(allMusic->height - 0.5F) < 0.001F,
+          "the right-top module keeps its original size when right-middle is snapped");
+    Check(std::abs(equalizer->width - 0.25F) < 0.001F &&
+              std::abs(library->width - 0.25F) < 0.001F &&
+              std::abs(library->x + library->width - equalizer->x) < 0.001F,
+          "right-middle consumes only the remaining right-bottom space");
+    Check(!nested.HasConflictingGeometry(),
+          "nested window snaps never overlap");
+}
+
+void TestCollapsibleSnapping() {
+    using rivan::ui::ModuleCollapseMode;
+    using rivan::ui::ModuleCollapseSide;
+    using rivan::ui::ModuleDropZone;
+    using rivan::ui::ModuleId;
+    using rivan::ui::ModuleLayout;
+
+    auto window = ModuleLayout::Defaults();
+    for (auto& item : window.items) item.visible = false;
+    window.Find(ModuleId::Rivan)->visible = true;
+    window.Find(ModuleId::Rivan)->x = 0.20F;
+    window.Find(ModuleId::Rivan)->y = 0.20F;
+    window.Find(ModuleId::Rivan)->width = 0.40F;
+    window.Find(ModuleId::Rivan)->height = 0.40F;
+    Check(window.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Right),
+          "a module can collapse against the right window edge");
+    Check(window.IsCollapsed(ModuleId::Rivan) &&
+              window.Find(ModuleId::Rivan)->width < 0.10F &&
+              window.Find(ModuleId::Rivan)->collapseTargetIsWindow,
+          "window collapse stores a narrow edge handle");
+    Check(window.Find(ModuleId::Rivan)->handleWidth < window.Find(ModuleId::Rivan)->handleHeight,
+          "left and right window collapse handles use vertical geometry");
+    Check(window.ToggleCollapsedModule(ModuleId::Rivan) &&
+              !window.IsCollapsed(ModuleId::Rivan) &&
+              std::abs(window.Find(ModuleId::Rivan)->x - 0.60F) < 0.001F &&
+              std::abs(window.Find(ModuleId::Rivan)->width - 0.40F) < 0.001F,
+          "clicking a collapse handle restores the expanded rectangle");
+    Check(window.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Left) &&
+              window.Find(ModuleId::Rivan)->handleWidth < window.Find(ModuleId::Rivan)->handleHeight,
+          "a left-edge collapse also stores vertical handle geometry");
+
+    auto collapsedTarget = ModuleLayout::Defaults();
+    for (auto& item : collapsedTarget.items) item.visible = false;
+    collapsedTarget.Find(ModuleId::Rivan)->visible = true;
+    collapsedTarget.Find(ModuleId::Rivan)->x = 0.5F;
+    collapsedTarget.Find(ModuleId::Rivan)->width = 0.5F;
+    collapsedTarget.Find(ModuleId::Rivan)->height = 1.0F;
+    Check(collapsedTarget.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Right),
+          "a collapsed target can be prepared for snap filtering");
+    collapsedTarget.Find(ModuleId::AllMusic)->visible = true;
+    Check(!collapsedTarget.SnapTo(ModuleId::AllMusic, ModuleId::Rivan, ModuleDropZone::Right),
+          "collapsed handles are not treated as normal snap targets");
+
+    auto inside = ModuleLayout::Defaults();
+    for (auto& item : inside.items) item.visible = false;
+    inside.Find(ModuleId::Rivan)->visible = true;
+    inside.Find(ModuleId::Rivan)->x = 0.0F;
+    inside.Find(ModuleId::Rivan)->y = 0.0F;
+    inside.Find(ModuleId::Rivan)->width = 0.50F;
+    inside.Find(ModuleId::Rivan)->height = 1.0F;
+    inside.Find(ModuleId::AllMusic)->visible = true;
+    inside.Find(ModuleId::AllMusic)->x = 0.50F;
+    inside.Find(ModuleId::AllMusic)->y = 0.0F;
+    inside.Find(ModuleId::AllMusic)->width = 0.50F;
+    inside.Find(ModuleId::AllMusic)->height = 1.0F;
+    Check(inside.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                  ModuleCollapseSide::Right, ModuleCollapseMode::Inside),
+          "a module can collapse inside the right side of another module");
+    Check(inside.IsCollapsed(ModuleId::AllMusic) &&
+              inside.Find(ModuleId::AllMusic)->collapseTarget == ModuleId::Rivan &&
+              inside.Find(ModuleId::AllMusic)->collapseMode == ModuleCollapseMode::Inside,
+          "inside collapse records its target and mode");
+    Check(inside.ToggleCollapsedModule(ModuleId::AllMusic) &&
+              !inside.IsCollapsed(ModuleId::AllMusic) &&
+              std::abs(inside.Find(ModuleId::AllMusic)->x - 0.25F) < 0.001F,
+          "inside collapse expands in the target half");
+
+    auto outside = ModuleLayout::Defaults();
+    for (auto& item : outside.items) item.visible = false;
+    outside.Find(ModuleId::Rivan)->visible = true;
+    outside.Find(ModuleId::Rivan)->x = 0.30F;
+    outside.Find(ModuleId::Rivan)->y = 0.20F;
+    outside.Find(ModuleId::Rivan)->width = 0.30F;
+    outside.Find(ModuleId::Rivan)->height = 0.30F;
+    outside.Find(ModuleId::AllMusic)->visible = true;
+    outside.Find(ModuleId::AllMusic)->x = 0.0F;
+    outside.Find(ModuleId::AllMusic)->y = 0.20F;
+    outside.Find(ModuleId::AllMusic)->width = 0.25F;
+    outside.Find(ModuleId::AllMusic)->height = 0.30F;
+    Check(outside.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                   ModuleCollapseSide::Right, ModuleCollapseMode::Outside),
+          "an outside collapse can reserve adjacent space");
+    Check(outside.Find(ModuleId::AllMusic)->x > outside.Find(ModuleId::Rivan)->x +
+              outside.Find(ModuleId::Rivan)->width - 0.001F &&
+              std::abs(outside.Find(ModuleId::AllMusic)->handleX -
+                       (outside.Find(ModuleId::Rivan)->x + outside.Find(ModuleId::Rivan)->width)) < 0.001F &&
+              !outside.HasConflictingGeometry(),
+          "outside collapse places its handle beside the target without overlap");
+}
+
+void TestModuleLayoutSessionRoundTrip() {
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanModuleLayoutTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    rivan::config::SettingsManager writer(root / L"settings.ini", root / L"session.ini");
+    auto session = writer.Session();
+    session.moduleLayout = rivan::ui::ModuleLayout::Defaults();
+    session.moduleLayout.Find(rivan::ui::ModuleId::Rivan)->x = 0.2F;
+    session.moduleLayout.Find(rivan::ui::ModuleId::AllMusic)->visible = false;
+    session.moduleLayout.Find(rivan::ui::ModuleId::Rivan)->dockState =
+        rivan::ui::ModuleDockState::Snapped;
+    session.moduleLayout.MakeTab(rivan::ui::ModuleId::Rivan, rivan::ui::ModuleId::RivanLibrary);
+    std::string error;
+    Check(writer.SetSession(session, &error) && writer.SaveSession(&error),
+          "module layout session saves");
+    rivan::config::SettingsManager reader(root / L"settings.ini", root / L"session.ini");
+    Check(reader.LoadSession(&error), "module layout session loads");
+    Check(std::abs(reader.Session().moduleLayout.Find(rivan::ui::ModuleId::Rivan)->x - 0.2F) < 0.001F,
+          "module position survives session round-trip");
+    Check(!reader.Session().moduleLayout.Find(rivan::ui::ModuleId::AllMusic)->visible,
+          "module visibility survives session round-trip");
+    Check(reader.Session().moduleLayout.tabCount == 2,
+           "module tabs survive session round-trip");
+    Check(reader.Session().moduleLayout.Find(rivan::ui::ModuleId::Rivan)->dockState ==
+              rivan::ui::ModuleDockState::Snapped,
+          "module dock state survives session round-trip");
+    std::filesystem::remove_all(root, ec);
+}
+
 } // namespace
 
 int main() {
@@ -468,6 +779,10 @@ int main() {
     TestSkinCustomizationRoundTrip();
     TestSkinRejectsUnsafeAssets();
     TestFilePreviewSettingRoundTrip();
+    TestUiModuleRegistry();
+    TestWindowSnapping();
+    TestCollapsibleSnapping();
+    TestModuleLayoutSessionRoundTrip();
     if (failures == 0) std::cout << "Rivan core tests passed\n";
     return failures == 0 ? 0 : 1;
 }

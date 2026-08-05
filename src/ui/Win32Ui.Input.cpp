@@ -251,9 +251,24 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
             return;
         }
     }
+    // Collapse handles are painted over module chrome and must win over the resize
+    // border at the edge where they live. A click toggles; a larger motion promotes
+    // the same press into a module drag (see PointerMove).
+    if (windowKind == WindowKind::Main) {
+        if (const HitRegion* collapseHit = HitTest(x, y);
+            collapseHit && collapseHit->kind == HitKind::ModuleCollapseToggle) {
+            collapsedArrowPress = static_cast<ModuleId>(collapseHit->id);
+            collapsedArrowPressStart = {x, y};
+            collapsedArrowPressBounds = collapseHit->bounds;
+            collapsedArrowDragStarted = false;
+            SetCapture(window);
+            return;
+        }
+    }
     // Studio edits decor on the main canvas. Main-player buttons and track rows must
     // not steal clicks from an image/shape while the pointer is outside the studio.
     if (windowKind == WindowKind::Main && model.skinStudioVisible && BeginDecorDrag(x, y)) return;
+    if (windowKind == WindowKind::Main && BeginModuleResize(x, y)) return;
     // Keep hover in sync with the press even if no WM_MOUSEMOVE arrived first
     // (common after a context menu swallows the next move).
     mouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
@@ -363,6 +378,41 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
             else if (hit.id == 2) host.Invoke(Command::ToggleMiniPlayer);
             else if (hit.id == 3) PostMessageW(window, WM_CLOSE, 0, 0);
             break;
+        case HitKind::ModuleTitle:
+            if (windowKind == WindowKind::Main) {
+                BeginModuleDrag(static_cast<ModuleId>(hit.id), x, y);
+                return;
+            }
+            break;
+        case HitKind::ModuleCollapseToggle:
+            if (windowKind == WindowKind::Main) {
+                collapsedArrowPress = static_cast<ModuleId>(hit.id);
+                collapsedArrowPressStart = {x, y};
+                collapsedArrowPressBounds = hit.bounds;
+                collapsedArrowDragStarted = false;
+                SetCapture(window);
+                return;
+            }
+            break;
+        case HitKind::ModuleTab:
+            if (windowKind == WindowKind::Main) {
+                auto layout = model.moduleLayout;
+                const std::size_t tab = static_cast<std::size_t>(hit.id & 0xffffffffULL);
+                    if (tab < layout.TabCount()) {
+                    const auto id = static_cast<ModuleId>((hit.id >> 32U) & 0xffffffffULL);
+                    const bool wasActive = tab == layout.activeTab;
+                    layout.activeTab = tab;
+                    try { host.SetModuleLayout(layout); } catch (...) {}
+                    // A tab click still behaves like a normal selection when released
+                    // without movement.  If the pointer moves, the same gesture can
+                    // pull an inactive tab out of the group and place it elsewhere.
+                    // The focused tab is the group's title bar: dragging it moves the
+                    // merged module instead of accidentally tearing the tab out.
+                    BeginModuleDrag(id, x, y, &layout, !wasActive);
+                    return;
+                }
+            }
+            break;
         case HitKind::Studio:
             HandleStudioAction(hit.id);
             return;
@@ -383,6 +433,24 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
 
 void Win32Ui::Impl::PointerMove(float x, float y) {
     mouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
+    if (collapsedArrowPress) {
+        const float dx = x - collapsedArrowPressStart.x;
+        const float dy = y - collapsedArrowPressStart.y;
+        if (!collapsedArrowDragStarted && dx * dx + dy * dy >= 64.0F) {
+            collapsedArrowDragStarted = true;
+            BeginModuleDrag(*collapsedArrowPress, collapsedArrowPressStart.x,
+                            collapsedArrowPressStart.y);
+            if (moduleGesture == ModuleGesture::Move) {
+                moduleDragFromCollapsedArrow = true;
+                moduleCollapsedArrowOrigin = collapsedArrowPressBounds;
+                moduleDragActive = true;
+                UpdateModuleDrag(x, y);
+            }
+        } else if (collapsedArrowDragStarted && moduleGesture != ModuleGesture::None) {
+            UpdateModuleDrag(x, y);
+        }
+        return;
+    }
     if (pickingScreenColor) {
         SampleScreenColorAtCursor();
         SetCursor(LoadCursorW(nullptr, IDC_CROSS));
@@ -398,6 +466,10 @@ void Win32Ui::Impl::PointerMove(float x, float y) {
     }
     if (draggingDecor != 0) {
         MoveDecor(x, y);
+        return;
+    }
+    if (moduleGesture != ModuleGesture::None) {
+        UpdateModuleDrag(x, y);
         return;
     }
     if (dragKind != DragKind::None) {
@@ -439,11 +511,527 @@ void Win32Ui::Impl::PointerUp() noexcept {
     draggingStudioColor = false;
     draggingStudioHue = false;
     draggingLayer = 0;
+    if (collapsedArrowPress) {
+        const auto id = collapsedArrowPress;
+        const bool dragged = collapsedArrowDragStarted;
+        collapsedArrowPress.reset();
+        collapsedArrowDragStarted = false;
+        collapsedArrowPressBounds = {};
+        if (dragged && moduleGesture != ModuleGesture::None) {
+            FinishModuleDrag();
+        } else if (!dragged) {
+            auto layout = model.moduleLayout;
+            if (layout.ToggleCollapsedModule(*id)) {
+                try { host.SetModuleLayout(layout); } catch (...) {}
+            }
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+        }
+    } else if (moduleGesture != ModuleGesture::None) FinishModuleDrag();
     if (dragKind != DragKind::None) {
         FinishRowDrag();
     }
     if (previewPending) PushPreview();
     if (GetCapture() == window) ReleaseCapture();
+}
+
+[[nodiscard]] bool Win32Ui::Impl::BeginModuleResize(float x, float y) {
+    if (model.miniPlayer || lastCanvas.width <= 0.0F || lastCanvas.height <= 0.0F) return false;
+    constexpr float edge = 7.0F;
+    for (auto iterator = moduleRegions.rbegin(); iterator != moduleRegions.rend(); ++iterator) {
+        if (!Contains(iterator->bounds, x, y)) continue;
+        const bool right = std::abs(x - iterator->bounds.right) <= edge;
+        const bool bottom = std::abs(y - iterator->bounds.bottom) <= edge;
+        const bool left = std::abs(x - iterator->bounds.left) <= edge;
+        const bool top = std::abs(y - iterator->bounds.top) <= edge;
+        if (!right && !bottom && !left && !top) continue;
+        // The tab strip is inset by four pixels from the panel edge.  Without
+        // this guard its entire upper edge is interpreted as a resize handle,
+        // so a tab can be selected but never promoted into a detachable drag.
+         if (const auto* hit = HitTest(x, y);
+             hit && (hit->kind == HitKind::ModuleTitle || hit->kind == HitKind::ModuleTab ||
+                     hit->kind == HitKind::ModuleCollapseToggle)) {
+            continue;
+        }
+        const auto geometryId = model.moduleLayout.TabRoot(iterator->id);
+        const auto* item = model.moduleLayout.Find(geometryId);
+        if (!item) return false;
+        moduleLayoutDraft = model.moduleLayout;
+        // Resize the visible rectangle, not the hidden rectangle belonging to the
+        // currently selected tab.  This keeps all tabs at the same usable size.
+        draggingModule = geometryId;
+        moduleGesture = ModuleGesture::Resize;
+        moduleDragActive = true;
+        moduleResizeRight = right;
+        moduleResizeBottom = bottom;
+        moduleResizeLeft = left;
+        moduleResizeTop = top;
+        moduleDragStart = {x, y};
+        ResetModuleDropPreview();
+        SetCapture(window);
+        return true;
+    }
+    return false;
+}
+
+void Win32Ui::Impl::BeginModuleDrag(ModuleId id, float x, float y,
+                                     const ModuleLayout* layoutOverride,
+                                     bool detachTabOnMove) {
+    const ModuleLayout& sourceLayout = layoutOverride ? *layoutOverride : model.moduleLayout;
+    if (!sourceLayout.HasValidGeometry()) return;
+    const auto geometryId = sourceLayout.TabRoot(id);
+    const auto* sourceItem = sourceLayout.Find(geometryId);
+    if (!sourceItem) return;
+    if (sourceLayout.IsTabbed(id) && sourceLayout.Find(id) == nullptr) return;
+    moduleLayoutDraft = sourceLayout;
+    moduleDragFromCollapsedArrow = false;
+    moduleCollapsedArrowOrigin = {};
+    if (auto* collapsed = moduleLayoutDraft.Find(id); collapsed && collapsed->collapsed &&
+        collapsed->expandedWidth >= 0.10F && collapsed->expandedHeight >= 0.10F) {
+        collapsed->x = collapsed->expandedX;
+        collapsed->y = collapsed->expandedY;
+        collapsed->width = collapsed->expandedWidth;
+        collapsed->height = collapsed->expandedHeight;
+        collapsed->collapsed = false;
+    }
+    if (const auto* restored = moduleLayoutDraft.Find(id); restored && restored->collapseMode != ModuleCollapseMode::None) {
+        if (auto* mutableRestored = moduleLayoutDraft.Find(id)) {
+            mutableRestored->collapseMode = ModuleCollapseMode::None;
+            mutableRestored->collapseSide = ModuleCollapseSide::None;
+            mutableRestored->collapseTarget = id;
+            mutableRestored->collapseTargetIsWindow = false;
+        }
+    }
+    // The source-layout pointer may still refer to the collapsed handle. Use the
+    // draft's restored rectangle for the drag offset so the first motion does not jump.
+    const auto* item = moduleLayoutDraft.Find(geometryId);
+    if (!item) return;
+    // A tab may have retained its old standalone rectangle.  Seed the drag from
+    // the rectangle the user can actually see so it does not jump or appear tiny
+    // when it is detached from the group.
+    if (geometryId != id) {
+        if (auto* dragged = moduleLayoutDraft.Find(id)) {
+            dragged->x = item->x;
+            dragged->y = item->y;
+            dragged->width = item->width;
+            dragged->height = item->height;
+        }
+    }
+    draggingModule = id;
+    moduleGesture = ModuleGesture::Move;
+    moduleDragActive = false;
+    moduleDetachTabOnMove = detachTabOnMove;
+    moduleMoveTabbedGroup = false;
+    moduleMoveSnapGroup = moduleLayoutDraft.IsSnapped(id) && moduleLayoutDraft.IsSnapGrouped(id) &&
+                          moduleLayoutDraft.SnapRoot(id) == id;
+    moduleDragSnapRoot = moduleLayoutDraft.SnapRoot(id);
+    moduleDragStart = {x, y};
+    moduleDragOffset = {x - item->x * lastCanvas.width, y - item->y * lastCanvas.height};
+    ResetModuleDropPreview();
+    SetCapture(window);
+}
+
+void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
+    if (!draggingModule || lastCanvas.width <= 0.0F || lastCanvas.height <= 0.0F) return;
+    if (!moduleDragActive) {
+        const float dx = x - moduleDragStart.x;
+        const float dy = y - moduleDragStart.y;
+        if (dx * dx + dy * dy < 25.0F) return;
+        moduleDragActive = true;
+    }
+    const auto draggedId = *draggingModule;
+    if (moduleGesture == ModuleGesture::Move) {
+        moduleLayoutDraft.ClearCollapseReferences(draggedId);
+        moduleLayoutDraft.ClearModuleCollapse(draggedId);
+    }
+    if (moduleGesture == ModuleGesture::Move && moduleDetachTabOnMove &&
+        moduleLayoutDraft.IsTabbed(draggedId)) {
+        // Detach as soon as the movement threshold is crossed.  The detached panel
+        // then follows the pointer during the drag, while a drop on another panel
+        // can re-create the tab group in FinishModuleDrag.
+        DetachModuleFromTabs(moduleLayoutDraft, draggedId);
+    }
+    if (moduleGesture == ModuleGesture::Move && !moduleDetachTabOnMove) {
+        moduleMoveTabbedGroup = moduleLayoutDraft.IsTabbed(draggedId);
+        moduleMoveSnapGroup = moduleLayoutDraft.IsSnapped(draggedId) &&
+                              moduleLayoutDraft.IsSnapGrouped(draggedId) &&
+                              moduleLayoutDraft.SnapRoot(draggedId) == draggedId;
+        moduleDragSnapRoot = moduleLayoutDraft.SnapRoot(draggedId);
+    }
+    auto* item = moduleLayoutDraft.Find(draggedId);
+    if (!item) return;
+    if (moduleGesture == ModuleGesture::Resize) {
+        if (moduleLayoutDraft.IsSnapGrouped(draggedId)) {
+            moduleLayoutDraft.ResizeSnapGroup(draggedId,
+                                              x / lastCanvas.width, y / lastCanvas.height,
+                                              moduleResizeRight, moduleResizeBottom,
+                                              moduleResizeLeft, moduleResizeTop);
+        } else {
+            if (moduleResizeLeft) {
+                const float right = item->x + item->width;
+                item->x = std::clamp(x / lastCanvas.width, 0.0F, right - 0.10F);
+                item->width = right - item->x;
+            }
+            if (moduleResizeTop) {
+                const float bottom = item->y + item->height;
+                item->y = std::clamp(y / lastCanvas.height, 0.0F, bottom - 0.10F);
+                item->height = bottom - item->y;
+            }
+            if (moduleResizeRight) {
+                item->width = std::clamp((x - item->x * lastCanvas.width) / lastCanvas.width,
+                                         0.10F, 1.0F - item->x);
+            }
+            if (moduleResizeBottom) {
+                item->height = std::clamp((y - item->y * lastCanvas.height) / lastCanvas.height,
+                                           0.10F, 1.0F - item->y);
+            }
+        }
+    } else {
+        if (item->collapsed) {
+            item->x = item->expandedX;
+            item->y = item->expandedY;
+            item->width = item->expandedWidth;
+            item->height = item->expandedHeight;
+            item->collapsed = false;
+        }
+        const float nextX = std::clamp((x - moduleDragOffset.x) / lastCanvas.width,
+                                       0.0F, 1.0F - item->width);
+        const float nextY = std::clamp((y - moduleDragOffset.y) / lastCanvas.height,
+                                       0.0F, 1.0F - item->height);
+        if (moduleMoveSnapGroup) {
+            const float deltaX = nextX - item->x;
+            const float deltaY = nextY - item->y;
+            const auto tabRoot = moduleLayoutDraft.TabRoot(draggedId);
+            for (auto& member : moduleLayoutDraft.items) {
+                const bool inSnapGroup = moduleLayoutDraft.SnapRoot(member.id) == moduleDragSnapRoot;
+                const bool inTabGroup = moduleLayoutDraft.IsTabbed(member.id) &&
+                                        moduleLayoutDraft.TabRoot(member.id) == tabRoot;
+                if (inSnapGroup || inTabGroup) {
+                    member.x = std::clamp(member.x + deltaX, 0.0F, 1.0F - member.width);
+                    member.y = std::clamp(member.y + deltaY, 0.0F, 1.0F - member.height);
+                }
+            }
+        } else if (moduleMoveTabbedGroup) {
+            const float deltaX = nextX - item->x;
+            const float deltaY = nextY - item->y;
+            for (std::size_t i = 0; i < moduleLayoutDraft.TabCount(); ++i) {
+                if (auto* member = moduleLayoutDraft.Find(moduleLayoutDraft.tabOrder[i])) {
+                    member->x = std::clamp(member->x + deltaX, 0.0F, 1.0F - member->width);
+                    member->y = std::clamp(member->y + deltaY, 0.0F, 1.0F - member->height);
+                }
+            }
+        } else {
+            // Picking up a standalone snapped member detaches it from its snap
+            // group and leaves it floating until another side drop.
+            if (moduleLayoutDraft.IsSnapped(draggedId)) {
+                moduleLayoutDraft.DetachSnapModule(draggedId);
+            }
+            item = moduleLayoutDraft.Find(draggedId);
+            if (!item) return;
+            item->dockState = ModuleDockState::Floating;
+            item->x = nextX;
+            item->y = nextY;
+        }
+        ResolveModuleDropPreview(x, y);
+    }
+    InvalidateRect(window, nullptr, FALSE);
+}
+
+void Win32Ui::Impl::ResetModuleDropPreview() noexcept {
+    moduleDropTarget.reset();
+    moduleDropZone = ModuleDropZone::None;
+    moduleWindowDropZone = ModuleWindowDropZone::None;
+    moduleCollapseTarget.reset();
+    moduleCollapseSide = ModuleCollapseSide::None;
+    moduleCollapseMode = ModuleCollapseMode::None;
+    moduleCollapseTargetIsWindow = false;
+    moduleDropPreviewValid = false;
+    moduleLayoutPreview = moduleLayoutDraft;
+    moduleDropLastPointer = {-1.0F, -1.0F};
+}
+
+void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
+    if (!draggingModule || moduleGesture != ModuleGesture::Move ||
+        !moduleDragActive || lastCanvas.width <= 0.0F || lastCanvas.height <= 0.0F) {
+        ResetModuleDropPreview();
+        return;
+    }
+
+    std::optional<ModuleId> targetModule;
+    ModuleDropZone targetZone = ModuleDropZone::None;
+     const auto boundsFor = [this](const ModuleLayoutItem& item) {
+         return ModulePixelBounds(item, lastCanvas);
+     };
+    // Resolve against the draft, rather than the last painted hit regions.  This
+    // remains correct while the idle preview is showing a different layout.
+    for (auto iterator = moduleLayoutDraft.items.rbegin();
+         iterator != moduleLayoutDraft.items.rend(); ++iterator) {
+        if (!iterator->visible || iterator->collapsed || iterator->id == *draggingModule) continue;
+        if (moduleLayoutDraft.SnapRoot(iterator->id) ==
+            moduleLayoutDraft.SnapRoot(*draggingModule)) continue;
+        if (moduleLayoutDraft.IsTabbed(*draggingModule) &&
+            moduleLayoutDraft.IsTabbed(iterator->id) &&
+            moduleLayoutDraft.TabRoot(iterator->id) == moduleLayoutDraft.TabRoot(*draggingModule)) {
+            continue;
+        }
+        if (moduleLayoutDraft.IsTabbed(iterator->id)) {
+            const auto activeTab = moduleLayoutDraft.tabOrder[moduleLayoutDraft.ActiveTabIndex()];
+            if (activeTab != iterator->id) continue;
+        }
+        const auto* geometry = moduleLayoutDraft.Find(moduleLayoutDraft.TabRoot(iterator->id));
+        if (!geometry) continue;
+        const auto zone = ResolveModuleDropZone(x, y, boundsFor(*geometry).left,
+                                                boundsFor(*geometry).top,
+                                                boundsFor(*geometry).right,
+                                                boundsFor(*geometry).bottom);
+        if (zone != ModuleDropZone::None) {
+            targetModule = iterator->id;
+            targetZone = zone;
+            break;
+        }
+    }
+
+    ModuleWindowDropZone windowZone = ModuleWindowDropZone::None;
+    std::optional<ModuleId> collapseTarget;
+    ModuleCollapseSide collapseSide = ModuleCollapseSide::None;
+    ModuleCollapseMode collapseMode = ModuleCollapseMode::None;
+    bool collapseTargetIsWindow = false;
+    ModuleLayout candidate = moduleLayoutDraft;
+    bool previewCanApply = false;
+
+    // These strips are intentionally narrow so existing side/corner snapping wins
+    // everywhere except immediately beside an edge or module edge.
+    const auto edgeSide = [&]() {
+        if (x <= kModuleCollapseZonePixels) return ModuleCollapseSide::Left;
+        if (x >= lastCanvas.width - kModuleCollapseZonePixels) return ModuleCollapseSide::Right;
+        if (y <= kModuleCollapseZonePixels) return ModuleCollapseSide::Top;
+        if (y >= lastCanvas.height - kModuleCollapseZonePixels) return ModuleCollapseSide::Bottom;
+        return ModuleCollapseSide::None;
+    };
+    if (const auto side = edgeSide(); side != ModuleCollapseSide::None &&
+        candidate.CollapseToWindow(*draggingModule, side)) {
+        targetModule.reset();
+        targetZone = ModuleDropZone::None;
+        windowZone = ModuleWindowDropZone::None;
+        collapseSide = side;
+        collapseMode = ModuleCollapseMode::Outside;
+        collapseTargetIsWindow = true;
+        previewCanApply = true;
+    }
+
+    const auto resolveCollapse = [this, x, y](const ModuleLayoutItem& item,
+                                              ModuleCollapseSide& side,
+                                              ModuleCollapseMode& mode) {
+        const auto bounds = ModulePixelBounds(item, lastCanvas);
+        const float strip = kModuleCollapseZonePixels;
+        const bool middleY = y >= bounds.top + Height(bounds) * 0.25F &&
+                             y <= bounds.bottom - Height(bounds) * 0.25F;
+        const bool middleX = x >= bounds.left + Width(bounds) * 0.25F &&
+                             x <= bounds.right - Width(bounds) * 0.25F;
+        if (middleY && x >= bounds.left - strip && x <= bounds.left + strip) {
+            side = ModuleCollapseSide::Left;
+            mode = x < bounds.left ? ModuleCollapseMode::Outside : ModuleCollapseMode::Inside;
+            return true;
+        }
+        if (middleY && x >= bounds.right - strip && x <= bounds.right + strip) {
+            side = ModuleCollapseSide::Right;
+            mode = x > bounds.right ? ModuleCollapseMode::Outside : ModuleCollapseMode::Inside;
+            return true;
+        }
+        if (middleX && y >= bounds.top - strip && y <= bounds.top + strip) {
+            side = ModuleCollapseSide::Top;
+            mode = y < bounds.top ? ModuleCollapseMode::Outside : ModuleCollapseMode::Inside;
+            return true;
+        }
+        if (middleX && y >= bounds.bottom - strip && y <= bounds.bottom + strip) {
+            side = ModuleCollapseSide::Bottom;
+            mode = y > bounds.bottom ? ModuleCollapseMode::Outside : ModuleCollapseMode::Inside;
+            return true;
+        }
+        return false;
+    };
+    if (!previewCanApply) {
+        for (auto iterator = moduleLayoutDraft.items.rbegin();
+             iterator != moduleLayoutDraft.items.rend(); ++iterator) {
+            if (!iterator->visible || iterator->id == *draggingModule || iterator->collapsed) continue;
+            if (moduleDragFromCollapsedArrow && Contains(moduleCollapsedArrowOrigin, x, y)) continue;
+            if (moduleLayoutDraft.SnapRoot(iterator->id) ==
+                moduleLayoutDraft.SnapRoot(*draggingModule)) continue;
+            ModuleCollapseSide side = ModuleCollapseSide::None;
+            ModuleCollapseMode mode = ModuleCollapseMode::None;
+            if (!resolveCollapse(*iterator, side, mode)) continue;
+            candidate = moduleLayoutDraft;
+            if (!candidate.CollapseToModule(*draggingModule, iterator->id, side, mode)) continue;
+            targetModule.reset();
+            targetZone = ModuleDropZone::None;
+            windowZone = ModuleWindowDropZone::None;
+            collapseTarget = iterator->id;
+            collapseSide = side;
+            collapseMode = mode;
+            previewCanApply = true;
+            break;
+        }
+    }
+
+    if (!previewCanApply) {
+    if (targetModule) {
+        if (targetZone == ModuleDropZone::Center) {
+            candidate.TabWith(*draggingModule, *targetModule);
+            previewCanApply = candidate.IsTabbed(*draggingModule);
+        } else {
+            previewCanApply = candidate.SnapTo(*draggingModule, *targetModule, targetZone);
+        }
+        // A module can be visually close to a target whose split is already too
+        // small.  In that case try a window target instead of showing an invalid
+        // white box over a geometry we cannot commit.
+        if (!previewCanApply) {
+            targetModule.reset();
+            targetZone = ModuleDropZone::None;
+        }
+    }
+    if (!targetModule) {
+        windowZone = ResolveModuleWindowDropZone(
+            x / lastCanvas.width, y / lastCanvas.height);
+        if (windowZone != ModuleWindowDropZone::None) {
+            candidate = moduleLayoutDraft;
+            previewCanApply = candidate.SnapToWindow(*draggingModule, windowZone,
+                                                     x / lastCanvas.width, y / lastCanvas.height);
+            if (!previewCanApply) windowZone = ModuleWindowDropZone::None;
+        }
+    }
+    }
+
+    moduleDropLastPointer = {x, y};
+    if (!targetModule && windowZone == ModuleWindowDropZone::None && !collapseTarget &&
+        collapseMode == ModuleCollapseMode::None && !collapseTargetIsWindow) {
+        ResetModuleDropPreview();
+        return;
+    }
+    moduleDropTarget = targetModule;
+    moduleDropZone = targetZone;
+    moduleWindowDropZone = windowZone;
+    moduleCollapseTarget = collapseTarget;
+    moduleCollapseSide = collapseSide;
+    moduleCollapseMode = collapseMode;
+    moduleCollapseTargetIsWindow = collapseTargetIsWindow;
+    moduleLayoutPreview = candidate;
+    moduleDropPreviewValid = previewCanApply;
+}
+
+void Win32Ui::Impl::FinishModuleDrag() noexcept {
+    const auto dragged = draggingModule;
+    const bool active = moduleDragActive;
+    const bool moving = moduleGesture == ModuleGesture::Move;
+    const auto drop = moduleDropTarget;
+    const auto zone = moduleDropZone;
+    const auto windowDrop = moduleWindowDropZone;
+    const auto collapseDrop = moduleCollapseTarget;
+    const auto collapseSideDrop = moduleCollapseSide;
+    const auto collapseModeDrop = moduleCollapseMode;
+    const bool collapseWindowDrop = moduleCollapseTargetIsWindow;
+    const bool previewValid = moduleDropPreviewValid;
+    const bool detachTabOnMove = moduleDetachTabOnMove;
+    const bool moveTabbedGroup = moduleMoveTabbedGroup;
+    const bool moveSnapGroup = moduleMoveSnapGroup;
+    moduleGesture = ModuleGesture::None;
+    moduleDragActive = false;
+    draggingModule.reset();
+    moduleDropTarget.reset();
+    moduleDropZone = ModuleDropZone::None;
+    moduleWindowDropZone = ModuleWindowDropZone::None;
+    moduleCollapseTarget.reset();
+    moduleCollapseSide = ModuleCollapseSide::None;
+    moduleCollapseMode = ModuleCollapseMode::None;
+    moduleCollapseTargetIsWindow = false;
+    moduleDragFromCollapsedArrow = false;
+    moduleCollapsedArrowOrigin = {};
+    moduleDropPreviewValid = false;
+    moduleResizeRight = false;
+    moduleResizeBottom = false;
+    moduleResizeLeft = false;
+    moduleResizeTop = false;
+    moduleDetachTabOnMove = false;
+    moduleMoveTabbedGroup = false;
+    moduleMoveSnapGroup = false;
+    if (dragged && active) {
+        if (moving && ((drop && *drop != *dragged && zone != ModuleDropZone::None) ||
+                      windowDrop != ModuleWindowDropZone::None ||
+                      collapseModeDrop != ModuleCollapseMode::None || collapseWindowDrop)) {
+            if (previewValid && (windowDrop != ModuleWindowDropZone::None ||
+                                 zone != ModuleDropZone::None ||
+                                 collapseModeDrop != ModuleCollapseMode::None || collapseWindowDrop)) {
+                moduleLayoutDraft = moduleLayoutPreview;
+            } else if (collapseModeDrop != ModuleCollapseMode::None) {
+                if (collapseWindowDrop) {
+                    (void)moduleLayoutDraft.CollapseToWindow(*dragged, collapseSideDrop);
+                } else if (collapseDrop) {
+                    (void)moduleLayoutDraft.CollapseToModule(*dragged, *collapseDrop,
+                                                              collapseSideDrop, collapseModeDrop);
+                }
+            } else if (zone == ModuleDropZone::Center) {
+                moduleLayoutDraft.TabWith(*dragged, *drop);
+            } else if (windowDrop != ModuleWindowDropZone::None) {
+                (void)moduleLayoutDraft.SnapToWindow(
+                    *dragged, windowDrop, moduleDropLastPointer.x / lastCanvas.width,
+                    moduleDropLastPointer.y / lastCanvas.height);
+            } else {
+                (void)moduleLayoutDraft.SnapTo(*dragged, *drop, zone);
+            }
+        } else if (moving) {
+            if (detachTabOnMove || (!moveTabbedGroup && !moveSnapGroup)) {
+                DetachModuleFromTabs(moduleLayoutDraft, *dragged);
+            }
+            if (auto* item = moduleLayoutDraft.Find(*dragged)) {
+                if (detachTabOnMove || (!moveTabbedGroup && !moveSnapGroup)) {
+                    item->dockState = ModuleDockState::Floating;
+                }
+            }
+        }
+        try { host.SetModuleLayout(moduleLayoutDraft); } catch (...) {}
+    }
+    if (GetCapture() == window) ReleaseCapture();
+    InvalidateRect(window, nullptr, FALSE);
+}
+
+void Win32Ui::Impl::DetachModuleFromTabs(ModuleLayout& layout, ModuleId id) const noexcept {
+    if (!layout.IsTabbed(id)) return;
+    const auto* root = layout.Find(layout.TabRoot(id));
+    if (!root) return;
+    const auto geometry = *root;
+    // When the root tab is removed, the remaining tab must keep the group's
+    // visible rectangle instead of reverting to its old hidden rectangle.
+    for (std::size_t index = 0; index < layout.TabCount(); ++index) {
+        const auto tab = layout.tabOrder[index];
+        if (tab == id) continue;
+        if (auto* item = layout.Find(tab)) {
+            item->x = geometry.x;
+            item->y = geometry.y;
+            item->width = geometry.width;
+            item->height = geometry.height;
+        }
+    }
+    layout.RemoveTab(id);
+}
+
+[[nodiscard]] HCURSOR Win32Ui::Impl::ModuleCursor(float x, float y) const noexcept {
+    if (windowKind != WindowKind::Main || model.miniPlayer) return nullptr;
+    constexpr float edge = 7.0F;
+    for (auto iterator = moduleRegions.rbegin(); iterator != moduleRegions.rend(); ++iterator) {
+        if (!Contains(iterator->bounds, x, y)) continue;
+        const bool right = std::abs(x - iterator->bounds.right) <= edge;
+        const bool bottom = std::abs(y - iterator->bounds.bottom) <= edge;
+        const bool left = std::abs(x - iterator->bounds.left) <= edge;
+        const bool top = std::abs(y - iterator->bounds.top) <= edge;
+        if (right && bottom) return LoadCursorW(nullptr, IDC_SIZENWSE);
+        if (left && top) return LoadCursorW(nullptr, IDC_SIZENWSE);
+        if ((right && top) || (left && bottom)) return LoadCursorW(nullptr, IDC_SIZENESW);
+        if (right) return LoadCursorW(nullptr, IDC_SIZEWE);
+        if (left) return LoadCursorW(nullptr, IDC_SIZEWE);
+        if (bottom) return LoadCursorW(nullptr, IDC_SIZENS);
+        if (top) return LoadCursorW(nullptr, IDC_SIZENS);
+    }
+    if (moduleGesture == ModuleGesture::Move) return LoadCursorW(nullptr, IDC_SIZEALL);
+    return nullptr;
 }
 
 // Provides resize borders and a draggable caption for the borderless window.
@@ -989,6 +1577,9 @@ void Win32Ui::Impl::BeginTrackPress(const HitRegion& hit, float x, float y) {
     dragActive = false;
     dragStart = {x, y};
     dragTrackIndex = hit.index;
+    dragTrackPlaylistId = hit.index < model.tracks.size()
+                              ? model.tracks[hit.index].sourcePlaylistId
+                              : 0;
     dropTrackIndex = static_cast<std::size_t>(-1);
     SetCapture(window);
     InvalidateRect(window, nullptr, FALSE);
@@ -1020,14 +1611,10 @@ void Win32Ui::Impl::UpdateRowDrag(float x, float y) {
         const float dx = x - dragStart.x;
         const float dy = y - dragStart.y;
         if (dx * dx + dy * dy < 25.0F) return;
-        // Track reorder is allowed on user playlists and Directory folders.
-        if (dragKind == DragKind::Track && !model.selectedPlaylistTracksReorderable) return;
-        // A Directory view also shows recursive child-folder sections. Only its direct
-        // tracks belong to the selected folder's reorderable track list.
-        if (dragKind == DragKind::Track && !model.trackSections.empty() &&
-            (model.trackSections.front().label.empty()
-                 ? dragTrackIndex >= model.trackSections.front().count
-                 : true)) return;
+        // Parent-folder views contain rows from descendant folders. The source playlist
+        // carried by the row tells us which direct list is safe to reorder.
+        if (dragKind == DragKind::Track &&
+            (!model.selectedPlaylistTracksReorderable || dragTrackPlaylistId == 0)) return;
         dragActive = true;
     }
     if (dragKind == DragKind::Track) {
@@ -1055,42 +1642,50 @@ void Win32Ui::Impl::FinishRowDrag() noexcept {
     } catch (...) {}
     pendingTrackActivate = false;
     dropTrackIndex = static_cast<std::size_t>(-1);
+    dragTrackPlaylistId = 0;
     dropBeforePlaylistId = 0;
     dropIntoPlaylistId = 0;
     dropAtPlaylistEnd = false;
     InvalidateRect(window, nullptr, FALSE);
 }
 
-// Maps a pointer Y to a drop position (index into model.tracks; size() == append).
+// Maps a pointer Y to a drop position (index into the dragged row's source playlist).
 // Uses the row midpoint so dropping on the upper half lands before, lower half after.
 std::size_t Win32Ui::Impl::ResolveTrackDrop(float y) const {
     // Use rendered hit rows instead of playlistListBounds: Directory folders render in
-    // the current-folder pane, while user playlists render in the editor pane.
-    if (model.tracks.empty()) return 0;
-    const std::size_t directCount = model.trackSections.empty()
-                                        ? model.tracks.size()
-                                        : (model.trackSections.front().label.empty()
-                                               ? model.trackSections.front().count
-                                               : 0);
+    // the current-folder pane, while user playlists render in the editor pane. Restrict
+    // the target to the source playlist of the row being dragged.
+    if (model.tracks.empty() || dragTrackPlaylistId == 0) return 0;
     const HitRegion* first = nullptr;
     const HitRegion* last = nullptr;
+    std::size_t firstSourceIndex = 0;
+    std::size_t lastSourceIndex = 0;
     for (const auto& hit : hits) {
         // Both current-folder and playlist-editor panes can contribute track hits. Restrict
         // this drag to its original pane; otherwise a same-height row in the other pane
         // can replace the correct insertion target after a redraw.
-        if (hit.kind != HitKind::Track || hit.index >= directCount ||
+        if (hit.kind != HitKind::Track || hit.index >= model.tracks.size() ||
+            model.tracks[hit.index].sourcePlaylistId != dragTrackPlaylistId ||
             dragStart.x < hit.bounds.left || dragStart.x >= hit.bounds.right) continue;
-        if (first == nullptr || hit.bounds.top < first->bounds.top) first = &hit;
-        if (last == nullptr || hit.bounds.top > last->bounds.top) last = &hit;
+        const auto sourceIndex = SourceTrackIndex(&model.tracks[hit.index]);
+        if (sourceIndex == static_cast<std::size_t>(-1)) continue;
+        if (first == nullptr || hit.bounds.top < first->bounds.top) {
+            first = &hit;
+            firstSourceIndex = sourceIndex;
+        }
+        if (last == nullptr || hit.bounds.top > last->bounds.top) {
+            last = &hit;
+            lastSourceIndex = sourceIndex;
+        }
         if (y >= hit.bounds.top && y < hit.bounds.bottom) {
             return y > (hit.bounds.top + hit.bounds.bottom) * 0.5F
-                       ? hit.index + 1
-                       : hit.index;
+                       ? sourceIndex + 1
+                       : sourceIndex;
         }
     }
     if (first == nullptr) return 0;
-    if (y <= first->bounds.top) return first->index;
-    return last->index + 1;
+    if (y <= first->bounds.top) return firstSourceIndex;
+    return lastSourceIndex + 1;
 }
 
 void Win32Ui::Impl::ResolvePlaylistDrop(float y) {
@@ -1144,9 +1739,23 @@ void Win32Ui::Impl::ResolvePlaylistDrop(float y) {
 void Win32Ui::Impl::FinishTrackDrag() {
     if (!model.selectedPlaylistTracksReorderable ||
         dropTrackIndex == static_cast<std::size_t>(-1)) return;
-    auto indices = SelectedTrackIndicesSorted();
-    if (indices.empty()) return;
-    host.ReorderSelectedTracks(indices, dropTrackIndex);
+    const auto selected = SelectedTrackIndicesSorted();
+    if (selected.empty() || dragTrackPlaylistId == 0) return;
+    // A mixed selection cannot be represented by one playlist reorder. Do not silently
+    // move only part of it when rows from multiple subfolders are selected.
+    for (const auto index : selected) {
+        if (index >= model.tracks.size() ||
+            model.tracks[index].sourcePlaylistId != dragTrackPlaylistId) return;
+    }
+    std::vector<std::size_t> sourceIndices;
+    sourceIndices.reserve(selected.size());
+    for (std::size_t index = 0; index < model.tracks.size(); ++index) {
+        if (model.tracks[index].sourcePlaylistId != dragTrackPlaylistId) continue;
+        if (std::binary_search(selected.begin(), selected.end(), index)) {
+            sourceIndices.push_back(SourceTrackIndex(&model.tracks[index]));
+        }
+    }
+    host.ReorderSelectedTracks(dragTrackPlaylistId, sourceIndices, dropTrackIndex);
     trackSelection.clear();
     trackAnchor = static_cast<std::size_t>(-1);
 }

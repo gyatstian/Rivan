@@ -34,6 +34,7 @@ void App::PersistState() {
         0, std::chrono::duration_cast<std::chrono::milliseconds>(status.position).count()));
     session.shuffle = queue_.Shuffle();
     session.repeat = ToConfigRepeat(queue_.Repeat());
+    session.moduleLayout = moduleLayout_;
 
     std::string ignored;
     (void)settings_.SetSettings(std::move(applicationSettings), &ignored);

@@ -40,5 +40,8 @@
     <ClCompile Include="src\skin\Skin.cpp" />
     <ClCompile Include="src\visualization\Visualization.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\ui\UiModule.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

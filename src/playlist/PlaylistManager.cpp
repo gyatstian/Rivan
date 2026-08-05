@@ -30,7 +30,16 @@ void PlaylistManager::ReplaceLibrary(std::vector<library::Track> tracks,
         }
     }
 
+    // The UI may still hold pointers into the old catalog while a scan result is
+    // being applied.  Rebuild the vector only after the old catalog is no longer
+    // observable and keep the index synchronized with the new storage.
+    std::unordered_map<library::TrackId, std::size_t> nextTrackIndex;
+    nextTrackIndex.reserve(tracks.size());
+    for (std::size_t index = 0; index < tracks.size(); ++index) {
+        nextTrackIndex[tracks[index].id] = index;
+    }
     tracks_ = std::move(tracks);
+    trackIndex_ = std::move(nextTrackIndex);
     std::unordered_set<library::TrackId> validTracks;
     validTracks.reserve(tracks_.size());
     for (const auto& track : tracks_) {

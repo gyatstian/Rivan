@@ -2,6 +2,7 @@
 #pragma once
 // Native Win32/Direct2D presentation styled after late-90s desktop audio players.
 #include "Win32Ui.h"
+#include "UiModule.h"
 
 #include "../resource.h"
 #include "../visualization/VisualizationRenderer.h"
@@ -73,7 +74,9 @@ constexpr UINT kTrayMenuOpen = 1;
 constexpr UINT kTrayMenuExit = 2;
 // Preview only presents already-decoded frames. 60 Hz avoids paint pressure without
 // making the audio-clock-driven preview visibly sluggish.
-constexpr UINT kRefreshPlayingMilliseconds = 16;
+// A full scene repaint is enough at the analyzer's ~30 Hz cadence. Faster timer
+// ticks only add redundant UI work while playback is active.
+constexpr UINT kRefreshPlayingMilliseconds = 33;
 constexpr UINT kRefreshIdleMilliseconds = 200;
 constexpr UINT kRefreshMilliseconds = kRefreshPlayingMilliseconds;
 constexpr double kPreviewSeekThresholdSeconds = 0.50;
@@ -85,6 +88,100 @@ constexpr std::size_t kMaximumTrackCoverCacheEntries = 96;
 // but the caption is removed visually via WM_NCCALCSIZE. This is the pixel thickness of
 // the invisible resize border reported by WM_NCHITTEST.
 constexpr int kResizeBorder = 6;
+// Keep a small strip of client background around modules which touch the main
+// window boundary.  The strip is deliberately pixel-based so it remains useful
+// at every window size and leaves the module edge reachable for resizing.
+constexpr float kModuleWindowGap = 8.0F;
+constexpr float kModuleCollapseZonePixels = 12.0F;
+    // Match the file-preview toggle: a centered handle spanning one fifth of the
+    // available panel dimension and using the same compact 18-pixel thickness.
+constexpr float kModuleCollapseHandleWidthFraction = 0.20F;
+constexpr float kModuleCollapseHandleHeight = 18.0F;
+
+[[nodiscard]] D2D1_RECT_F ModulePixelBounds(const ModuleLayoutItem& item,
+                                              D2D1_SIZE_F size) noexcept {
+    const float width = std::max(0.0F, size.width);
+    const float height = std::max(0.0F, size.height);
+    float left = item.x * width;
+    float top = item.y * height;
+    float right = (item.x + item.width) * width;
+    float bottom = (item.y + item.height) * height;
+
+    // Layout coordinates are normalized and may have accumulated tiny floating
+    // point errors after a drag. Treat values very close to the boundary as
+    // touching it, while leaving adjacent module edges unchanged.
+    constexpr float kBoundaryTolerance = 0.0001F;
+    const float horizontalGap = std::min(kModuleWindowGap, width * 0.25F);
+    const float verticalGap = std::min(kModuleWindowGap, height * 0.25F);
+    if (item.x <= kBoundaryTolerance) left += horizontalGap;
+    if (item.y <= kBoundaryTolerance) top += verticalGap;
+    if (item.x + item.width >= 1.0F - kBoundaryTolerance) right -= horizontalGap;
+    if (item.y + item.height >= 1.0F - kBoundaryTolerance) bottom -= verticalGap;
+    return D2D1::RectF(left, top, std::max(left, right), std::max(top, bottom));
+}
+
+[[nodiscard]] D2D1_RECT_F ModuleCollapseHandleBounds(const ModuleLayoutItem& item,
+                                                     D2D1_SIZE_F size) noexcept {
+    const float width = std::max(1.0F, size.width);
+    const float height = std::max(1.0F, size.height);
+    const float normalizedX = item.collapsed ? item.x : item.handleX;
+    const float normalizedY = item.collapsed ? item.y : item.handleY;
+    const float normalizedWidth = item.collapsed ? item.width : item.handleWidth;
+    const float normalizedHeight = item.collapsed ? item.height : item.handleHeight;
+    if (!(normalizedWidth > 0.0F) || !(normalizedHeight > 0.0F)) return {};
+    const auto handleRegion = D2D1::RectF(normalizedX * width, normalizedY * height,
+                                           (normalizedX + normalizedWidth) * width,
+                                           (normalizedY + normalizedHeight) * height);
+    const float centerX = (handleRegion.left + handleRegion.right) * 0.5F;
+    const float centerY = (handleRegion.top + handleRegion.bottom) * 0.5F;
+    const float regionWidth = std::max(0.0F, handleRegion.right - handleRegion.left);
+    const float regionHeight = std::max(0.0F, handleRegion.bottom - handleRegion.top);
+    const float expandedWidth = item.expandedWidth > 0.0F
+        ? item.expandedWidth * width : regionWidth;
+    const float expandedHeight = item.expandedHeight > 0.0F
+        ? item.expandedHeight * height : regionHeight;
+    const bool verticalHandle = item.collapseSide == ModuleCollapseSide::Left ||
+                                item.collapseSide == ModuleCollapseSide::Right;
+    // Side handles are vertical and top/bottom handles are horizontal. Keep the
+    // same compact thickness in the short direction, but use the module's dimension
+    // in the long direction so the affordance communicates which edge it belongs to.
+    const float actualWidth = verticalHandle
+        ? std::min(width, kModuleCollapseHandleHeight)
+        : std::min(width, expandedWidth * kModuleCollapseHandleWidthFraction);
+    const float actualHeight = verticalHandle
+        ? std::min(height, expandedHeight * kModuleCollapseHandleWidthFraction)
+        : std::min(height, kModuleCollapseHandleHeight);
+    float left = centerX - actualWidth * 0.5F;
+    float top = centerY - actualHeight * 0.5F;
+    left = std::clamp(left, 0.0F, std::max(0.0F, width - actualWidth));
+    top = std::clamp(top, 0.0F, std::max(0.0F, height - actualHeight));
+    return D2D1::RectF(left, top, left + actualWidth, top + actualHeight);
+}
+
+[[nodiscard]] const wchar_t* ModuleCollapseArrow(ModuleCollapseSide side) noexcept {
+    switch (side) {
+    case ModuleCollapseSide::Left: return L"\u25C0";
+    case ModuleCollapseSide::Right: return L"\u25B6";
+    case ModuleCollapseSide::Top: return L"\u25B2";
+    case ModuleCollapseSide::Bottom: return L"\u25BC";
+    case ModuleCollapseSide::None: break;
+    }
+    return L"\u25A0";
+}
+
+[[nodiscard]] const wchar_t* ModuleCollapseArrow(const ModuleLayoutItem& item) noexcept {
+    ModuleCollapseSide direction = item.collapseSide;
+    if (item.collapsed) {
+        switch (direction) {
+        case ModuleCollapseSide::Left: direction = ModuleCollapseSide::Right; break;
+        case ModuleCollapseSide::Right: direction = ModuleCollapseSide::Left; break;
+        case ModuleCollapseSide::Top: direction = ModuleCollapseSide::Bottom; break;
+        case ModuleCollapseSide::Bottom: direction = ModuleCollapseSide::Top; break;
+        case ModuleCollapseSide::None: break;
+        }
+    }
+    return ModuleCollapseArrow(direction);
+}
 
 [[nodiscard]] HICON LoadRivanIcon(HINSTANCE instance, int width, int height) noexcept {
     HICON icon = reinterpret_cast<HICON>(LoadImageW(
@@ -253,6 +350,9 @@ struct Win32Ui::Impl {
         PlaylistSearch, WindowControl, Studio, Refresh, SettingsAction, TimeToggle,
         YoutubeResult, FilePreviewToggle, FilePreviewFullscreen, FilePreviewExitFullscreen,
         DiscordImageField,
+        ModuleTitle,
+        ModuleTab,
+        ModuleCollapseToggle,
         // Playlist Editor bottom-row buttons and the tree "new playlist" (+) button.
         EditorAdd, EditorRemove, NewPlaylist
     };
@@ -369,6 +469,14 @@ struct Win32Ui::Impl {
     std::array<ID2D1Brush*, 14> currentBrushes{};
     std::vector<D2D1_RECT_F> screenBounds;
     std::vector<D2D1_RECT_F> panelBounds;
+    // Bounds of the built-in top-level modules in the current layout. These are kept
+    // separately from generic skin panel bounds so future layout code can identify a
+    // section without changing the existing decor masking behaviour.
+    struct ModuleRegion {
+        ModuleId id{ModuleId::Rivan};
+        D2D1_RECT_F bounds{};
+    };
+    std::vector<ModuleRegion> moduleRegions;
     std::vector<D2D1_RECT_F> decorControlBounds;
     bool registerScreenBounds{true};
     struct DeferredText {
@@ -404,6 +512,7 @@ struct Win32Ui::Impl {
     UINT pendingPreviewStride{};
     std::atomic<double> previewWantedSeconds{0.0};
     std::atomic<std::uint64_t> pendingPreviewFrameVersion{};
+    std::atomic_bool previewWorkerFailed{false};
     std::uint64_t uploadedPreviewFrameVersion{};
     bool previewIsVideo{};
     bool previewHasPresentedFrame{};
@@ -450,6 +559,7 @@ struct Win32Ui::Impl {
     bool dragActive{};  // promoted past the movement threshold
     D2D1_POINT_2F dragStart{};
     std::size_t dragTrackIndex{static_cast<std::size_t>(-1)};
+    std::uint64_t dragTrackPlaylistId{};
     std::uint64_t dragPlaylistId{};
     // Sibling-group key of the dragged row, so reorder snaps only within its group.
     std::uint64_t dragPlaylistParent{};
@@ -463,6 +573,40 @@ struct Win32Ui::Impl {
     // dropBeforePlaylistId/dropAtPlaylistEnd, which represent sibling ordering.
     std::uint64_t dropIntoPlaylistId{};
     bool dropAtPlaylistEnd{};
+
+    // Main-window module drag state. Module bounds are normalized in ModuleLayout;
+    // pointer coordinates remain in client pixels while the gesture is active.
+    std::optional<ModuleId> draggingModule;
+    enum class ModuleGesture : std::uint8_t { None, Move, Resize };
+    ModuleGesture moduleGesture{ModuleGesture::None};
+    bool moduleResizeRight{};
+    bool moduleResizeBottom{};
+    bool moduleResizeLeft{};
+    bool moduleResizeTop{};
+    bool moduleDragActive{};
+    bool moduleDetachTabOnMove{};
+    bool moduleMoveTabbedGroup{};
+    bool moduleMoveSnapGroup{};
+    ModuleId moduleDragSnapRoot{ModuleId::Rivan};
+    D2D1_POINT_2F moduleDragStart{};
+    D2D1_POINT_2F moduleDragOffset{};
+    std::optional<ModuleId> moduleDropTarget;
+    ModuleDropZone moduleDropZone{ModuleDropZone::None};
+    ModuleWindowDropZone moduleWindowDropZone{ModuleWindowDropZone::None};
+    std::optional<ModuleId> moduleCollapseTarget;
+    ModuleCollapseSide moduleCollapseSide{ModuleCollapseSide::None};
+    ModuleCollapseMode moduleCollapseMode{ModuleCollapseMode::None};
+    bool moduleCollapseTargetIsWindow{};
+    std::optional<ModuleId> collapsedArrowPress;
+    D2D1_POINT_2F collapsedArrowPressStart{};
+    D2D1_RECT_F collapsedArrowPressBounds{};
+    bool collapsedArrowDragStarted{};
+    bool moduleDragFromCollapsedArrow{};
+    D2D1_RECT_F moduleCollapsedArrowOrigin{};
+    ModuleLayout moduleLayoutPreview{ModuleLayout::Defaults()};
+    bool moduleDropPreviewValid{};
+    D2D1_POINT_2F moduleDropLastPointer{-1.0F, -1.0F};
+    ModuleLayout moduleLayoutDraft{ModuleLayout::Defaults()};
 
     // Inline playlist-name editor (create via + or rename via context menu).
     bool playlistNameEditing{};
@@ -640,7 +784,7 @@ struct Win32Ui::Impl {
 
     [[nodiscard]] const HitRegion* HitTest(float x, float y) const noexcept;
 
-    void DrawText(const std::wstring& textValue, const D2D1_RECT_F& bounds,
+    void DrawText(std::wstring_view textValue, const D2D1_RECT_F& bounds,
                   ID2D1Brush* brush, IDWriteTextFormat* format,
                   DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING,
                   DWRITE_PARAGRAPH_ALIGNMENT vertical = DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
@@ -659,9 +803,10 @@ struct Win32Ui::Impl {
     //  * showTitleBars=false drops the raised metallic bar behind titles; the title text
     //    then sits directly on the panel background.
     //  * showPanelBorders=false removes the magnetic raised frame around each panel.
-    [[nodiscard]] D2D1_RECT_F DrawPanel(const D2D1_RECT_F& bounds, const std::wstring& titleValue,
-                                        ID2D1Brush* metal, ID2D1Brush* raised, ID2D1Brush* light,
-                                         ID2D1Brush* dark, ID2D1Brush* green, ID2D1Brush* /*stripe*/);
+    [[nodiscard]] D2D1_RECT_F DrawPanel(const D2D1_RECT_F& bounds, std::wstring_view titleValue,
+                                         ID2D1Brush* metal, ID2D1Brush* raised, ID2D1Brush* light,
+                                         ID2D1Brush* dark, ID2D1Brush* green, ID2D1Brush* /*stripe*/,
+                                         std::optional<ModuleId> module = std::nullopt);
 
     // Transparent buttons drop the beveled metal background and use the larger regular
     // font so they read as plain text; the label brightens on hover / active. Classic
@@ -699,6 +844,9 @@ struct Win32Ui::Impl {
     // and drag reorder key off this stable model index, not the filtered row index, so
     // duplicate entries and search filtering stay unambiguous.
     [[nodiscard]] std::size_t ModelTrackIndex(const TrackView* track) const noexcept;
+    // Position of a visible row within its owning playlist. Parent-folder views may
+    // contain entries from several source playlists.
+    [[nodiscard]] std::size_t SourceTrackIndex(const TrackView* track) const noexcept;
 
     // Thin horizontal insertion bar drawn between rows while a track drag is active.
     void DrawTrackDropIndicator(const D2D1_RECT_F& row, bool below, ID2D1Brush* brush);
@@ -839,6 +987,17 @@ struct Win32Ui::Impl {
     void Paint();
 
     void Resize(UINT width, UINT height);
+
+    void BeginModuleDrag(ModuleId id, float x, float y,
+                         const ModuleLayout* layoutOverride = nullptr,
+                         bool detachTabOnMove = false);
+    void DetachModuleFromTabs(ModuleLayout& layout, ModuleId id) const noexcept;
+    void UpdateModuleDrag(float x, float y);
+    void FinishModuleDrag() noexcept;
+    void ResetModuleDropPreview() noexcept;
+    void ResolveModuleDropPreview(float x, float y);
+    [[nodiscard]] bool BeginModuleResize(float x, float y);
+    [[nodiscard]] HCURSOR ModuleCursor(float x, float y) const noexcept;
 
     void InvokeSafely(Command command);
 

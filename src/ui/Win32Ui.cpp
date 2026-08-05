@@ -74,8 +74,8 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
         settingsOptions.title = L"Rivan Preferences";
         settingsOptions.initialWidth = 690;
         settingsOptions.initialHeight = 500;
-        settingsOptions.minimumWidth = 600;
-        settingsOptions.minimumHeight = 450;
+        settingsOptions.minimumWidth = 420;
+        settingsOptions.minimumHeight = 300;
         settingsOptions.acceptFileDrops = false;
         settingsOptions.owner = impl_->window;
         settingsOptions.initiallyVisible = false;
@@ -87,8 +87,8 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
         studioOptions.title = L"Rivan Skin Studio";
         studioOptions.initialWidth = 490;
         studioOptions.initialHeight = 600;
-        studioOptions.minimumWidth = 470;
-        studioOptions.minimumHeight = 560;
+        studioOptions.minimumWidth = 420;
+        studioOptions.minimumHeight = 420;
         studioOptions.acceptFileDrops = false;
         studioOptions.owner = impl_->window;
         studioOptions.initiallyVisible = false;
@@ -208,8 +208,9 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_TIMER:
         if (wParam == kRefreshTimer) {
             if (impl_->previewPending) impl_->PushPreview();
-            if (impl_->windowKind == WindowKind::Main) {
-                try { impl_->host.SnapshotUiModel(impl_->model); } catch (...) {}
+            if (impl_->moduleGesture == Impl::ModuleGesture::Move && impl_->moduleDragActive) {
+                impl_->ResolveModuleDropPreview(static_cast<float>(impl_->mouse.x),
+                                                static_cast<float>(impl_->mouse.y));
             }
             InvalidateRect(impl_->window, nullptr, FALSE);
         } else if (wParam == kYoutubeSearchDebounceTimer) {
@@ -221,6 +222,11 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (LOWORD(lParam) == HTCLIENT) {
             if (impl_->pickingScreenColor) {
                 SetCursor(LoadCursorW(nullptr, IDC_CROSS));
+                return TRUE;
+            }
+            if (const HCURSOR cursor = impl_->ModuleCursor(
+                    static_cast<float>(impl_->mouse.x), static_cast<float>(impl_->mouse.y))) {
+                SetCursor(cursor);
                 return TRUE;
             }
             if (impl_->HitTest(static_cast<float>(impl_->mouse.x), static_cast<float>(impl_->mouse.y))) {

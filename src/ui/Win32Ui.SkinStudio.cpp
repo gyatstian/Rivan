@@ -119,7 +119,8 @@ void Win32Ui::Impl::SettingsButton(const D2D1_RECT_F& bounds, const std::wstring
 // 9 cycle download format (MP3/Original/Video), 10/11 video height, 14 file preview,
 // 15 start at startup, 16 exit to tray, 17 duplicate mode, 18 Discord rich presence,
 // 19 clear the optional Discord image URL, 20 artist, 21 image tooltip text,
-// 22 track covers, 23 Discord GitHub repo button.
+// 22 track covers, 23 Discord GitHub repo button, 60-63 module visibility,
+// 64 restores the default module layout.
 void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
     try {
         if (action >= 100 && action < 200) {
@@ -209,6 +210,25 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
             break;
         case 23:
             host.SetDiscordShowGithubButton(!model.discordShowGithubButton);
+            break;
+        case 60:
+        case 61:
+        case 62:
+        case 63: {
+            auto layout = model.moduleLayout;
+            const auto id = static_cast<ModuleId>(action - 60);
+            if (auto* item = layout.Find(id)) {
+                item->visible = !item->visible;
+                if (!item->visible && layout.IsTabbed(id)) {
+                    layout.RemoveTab(id);
+                    if (layout.tabCount < 2) layout.ClearTabs();
+                }
+                host.SetModuleLayout(layout);
+            }
+            break;
+        }
+        case 64:
+            host.SetModuleLayout(ModuleLayout::Defaults());
             break;
         case 50:
             // Youtube search GO button (main library pane).

@@ -190,13 +190,15 @@ void App::RemoveTracksAt(std::span<const std::size_t> indices) {
     if (window_) window_->Refresh();
 }
 
-void App::ReorderSelectedTracks(std::span<const std::size_t> indices, std::size_t destination) {
+void App::ReorderSelectedTracks(playlist::PlaylistId playlistId,
+                                std::span<const std::size_t> indices,
+                                std::size_t destination) {
     std::vector<std::size_t> ordered(indices.begin(), indices.end());
-    if (!playlists_.MoveTracks(selectedPlaylist_, std::move(ordered), destination)) return;
+    if (!playlists_.MoveTracks(playlistId, std::move(ordered), destination)) return;
     ReseedSelectedUserQueue();
-    const auto* selected = playlists_.FindPlaylist(selectedPlaylist_);
-    if (selected != nullptr && selected->kind == playlist::PlaylistKind::Directory) {
-        SaveTrackOrder();
+    const auto* source = playlists_.FindPlaylist(playlistId);
+    if (source != nullptr && source->kind == playlist::PlaylistKind::Directory) {
+        SaveTrackOrder(playlistId);
     } else {
         SaveUserPlaylists();
     }

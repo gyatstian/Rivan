@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "../ui/UiModule.h"
 
 namespace rivan::config {
 
@@ -73,6 +74,7 @@ struct SessionState final {
     std::uint64_t positionMilliseconds = 0;
     bool shuffle = false;
     RepeatMode repeat = RepeatMode::Off;
+    ui::ModuleLayout moduleLayout{ui::ModuleLayout::Defaults()};
 
     [[nodiscard]] static SessionState Defaults();
 };

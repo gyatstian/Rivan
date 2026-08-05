@@ -4,6 +4,7 @@
 namespace rivan::ui {
 
 void Win32Ui::Impl::ClearFilePreview() noexcept {
+        StopPreviewWorker();
         {
             std::lock_guard lock(previewRequestMutex);
             requestedPreviewPath.clear();
@@ -29,6 +30,12 @@ void Win32Ui::Impl::ClearFilePreview() noexcept {
     }
 
 void Win32Ui::Impl::StopPreviewWorker() noexcept {
+        if (previewWorker.joinable()) {
+            // Source-reader calls can block in synchronous media I/O. Cancel the
+            // worker's pending I/O before joining so preview changes cannot stall the
+            // UI thread indefinitely.
+            CancelSynchronousIo(previewWorker.native_handle());
+        }
         previewWorker.request_stop();
         previewWake.notify_all();
         previewWorker = {};
@@ -222,29 +229,39 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
             ++requestedPreviewGeneration;
         }
         if (previewWorker.joinable()) {
-            previewWake.notify_all();
-            return true;
+            if (!previewWorkerFailed.load(std::memory_order_acquire)) {
+                previewWake.notify_all();
+                return true;
+            }
+            StopPreviewWorker();
         }
+        previewWorkerFailed.store(false, std::memory_order_release);
         previewWorker = std::jthread([this](std::stop_token stop) {
             const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
             const bool comInitialized = SUCCEEDED(comResult);
-            if (!comInitialized || FAILED(MFStartup(MF_VERSION, MFSTARTUP_LITE))) {
+            const bool mediaFoundationInitialized =
+                comInitialized && SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
+            if (!comInitialized || !mediaFoundationInitialized) {
+                previewWorkerFailed.store(true, std::memory_order_release);
+                if (mediaFoundationInitialized) MFShutdown();
                 if (comInitialized) CoUninitialize();
                 return;
             }
-            std::uint64_t activeGeneration = 0;
-            double synced = -1.0;
-            ComPtr<IMFSourceReader> reader;
-            UINT width = 0;
-            UINT height = 0;
-            UINT packedStride = 0;
-            LONG defaultStride = 0;
-            while (!stop.stop_requested()) {
+
+            try {
+                std::uint64_t activeGeneration = 0;
+                double synced = -1.0;
+                ComPtr<IMFSourceReader> reader;
+                UINT width = 0;
+                UINT height = 0;
+                UINT packedStride = 0;
+                LONG defaultStride = 0;
+                while (!stop.stop_requested()) {
                 std::wstring path;
                 std::uint64_t generation = 0;
                 if (!reader) {
                     std::unique_lock lock(previewRequestMutex);
-                    previewWake.wait_for(lock, stop, std::chrono::milliseconds(20), [this, activeGeneration] {
+                    previewWake.wait_for(lock, stop, std::chrono::milliseconds(100), [this, activeGeneration] {
                         return requestedPreviewGeneration != activeGeneration;
                     });
                     path = requestedPreviewPath;
@@ -255,7 +272,7 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                     generation = requestedPreviewGeneration;
                 }
                 if (stop.stop_requested()) break;
-                if (generation != activeGeneration) {
+                if (generation != activeGeneration || !reader) {
                     reader.Reset();
                     activeGeneration = generation;
                     synced = -1.0;
@@ -349,9 +366,15 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                 if (FAILED(buffer->Lock(&data, &maxLength, &length)) || !data) {
                     continue;
                 }
+                struct BufferUnlock final {
+                    IMFMediaBuffer* buffer{};
+                    ~BufferUnlock() {
+                        if (buffer != nullptr) buffer->Unlock();
+                    }
+                } unlock{buffer.Get()};
                 const UINT sourceStride = static_cast<UINT>(std::abs(stride));
                 const std::size_t requiredBytes = static_cast<std::size_t>(sourceStride) * height;
-                if (stride > 0 && sourceStride >= packedStride && length >= requiredBytes) {
+                if (stride != 0 && sourceStride >= packedStride && length >= requiredBytes) {
                     std::lock_guard lock(previewFrameMutex);
                     pendingPreviewPixels.resize(static_cast<std::size_t>(packedStride) * height);
                     for (UINT row = 0; row < height; ++row) {
@@ -365,8 +388,12 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                     pendingPreviewStride = packedStride;
                     pendingPreviewFrameVersion.fetch_add(1, std::memory_order_release);
                 }
-                buffer->Unlock();
                 if (window) InvalidateRect(window, nullptr, FALSE);
+            }
+            } catch (...) {
+                // Preview decoding is optional.  Allocation/decoder failures must not
+                // escape a jthread entry point and terminate the entire application.
+                previewWorkerFailed.store(true, std::memory_order_release);
             }
             MFShutdown();
             if (comInitialized) CoUninitialize();
@@ -687,7 +714,16 @@ void Win32Ui::Impl::SyncFilePreview(bool advanceVideo) {
         }
         // Preview follows now-playing even while the Youtube browser or another folder is open.
         const auto active = ActivePreviewPath();
-        if (active != previewPath || (IsVideoPath(active) && !previewWorker.joinable())) LoadFilePreview(active);
+        if (active != previewPath || (IsVideoPath(active) && !previewWorker.joinable())) {
+            LoadFilePreview(active);
+        } else if (previewIsVideo && previewWorkerFailed.load(std::memory_order_acquire)) {
+            // A decoder failure is terminal for this preview request. Keep the worker
+            // from being recreated on every paint and fall back to static artwork.
+            previewIsVideo = false;
+            previewFullscreen = false;
+            previewBitmap.Reset();
+            (void)LoadCoverArt(active);
+        }
         else if (advanceVideo && previewIsVideo) UpdateVideoPreviewFrame();
         if (!previewIsVideo) previewFullscreen = false;
     }
@@ -1022,7 +1058,8 @@ void Win32Ui::Impl::SyncRefreshTimer() noexcept {
             return;
         }
         // Video preview needs ~30 Hz while expanded even if transport is idle.
-        const UINT desired = (model.playback == PlaybackState::Playing ||
+        const UINT desired = (moduleGesture != ModuleGesture::None ||
+                              model.playback == PlaybackState::Playing ||
                               (filePreviewExpanded && previewIsVideo) || previewFullscreen)
             ? kRefreshPlayingMilliseconds
             : kRefreshIdleMilliseconds;
@@ -1069,13 +1106,13 @@ void Win32Ui::Impl::AddSettingHit(const D2D1_RECT_F& bounds, SettingCategory cat
         return nullptr;
     }
 
-void Win32Ui::Impl::DrawText(const std::wstring& textValue, const D2D1_RECT_F& bounds,
+void Win32Ui::Impl::DrawText(std::wstring_view textValue, const D2D1_RECT_F& bounds,
                   ID2D1Brush* brush, IDWriteTextFormat* format,
                    DWRITE_TEXT_ALIGNMENT alignment,
                    DWRITE_PARAGRAPH_ALIGNMENT vertical) {
         if (textValue.empty() || Width(bounds) <= 0.0F || Height(bounds) <= 0.0F) return;
         if (deferTexts) {
-            deferredTexts.push_back({textValue, bounds, brush, format, alignment, vertical});
+            deferredTexts.push_back({std::wstring(textValue), bounds, brush, format, alignment, vertical});
             return;
         }
         format->SetTextAlignment(alignment);
@@ -1168,10 +1205,12 @@ void Win32Ui::Impl::DrawBevel(const D2D1_RECT_F& bounds, ID2D1Brush* fill, ID2D1
     //  * showTitleBars=false drops the raised metallic bar behind titles; the title text
     //    then sits directly on the panel background.
     //  * showPanelBorders=false removes the magnetic raised frame around each panel.
-[[nodiscard]] D2D1_RECT_F Win32Ui::Impl::DrawPanel(const D2D1_RECT_F& bounds, const std::wstring& titleValue,
-                                        ID2D1Brush* metal, ID2D1Brush* raised, ID2D1Brush* light,
-                                         ID2D1Brush* dark, ID2D1Brush* green, ID2D1Brush* /*stripe*/) {
-        panelBounds.push_back(bounds);
+    [[nodiscard]] D2D1_RECT_F Win32Ui::Impl::DrawPanel(const D2D1_RECT_F& bounds, std::wstring_view titleValue,
+                                         ID2D1Brush* metal, ID2D1Brush* raised, ID2D1Brush* light,
+                                          ID2D1Brush* dark, ID2D1Brush* green, ID2D1Brush* /*stripe*/,
+                                          std::optional<ModuleId> module) {
+         panelBounds.push_back(bounds);
+         if (module) moduleRegions.push_back({*module, bounds});
         const float opacity = std::clamp(model.activeSkin.appearance.panelOpacity, 0.0F, 1.0F);
         metal->SetOpacity(opacity);
         if (model.activeSkin.appearance.showPanelBorders) {
@@ -1181,18 +1220,28 @@ void Win32Ui::Impl::DrawBevel(const D2D1_RECT_F& bounds, ID2D1Brush* fill, ID2D1
         }
         metal->SetOpacity(1.0F);
         const auto titleBar = Rect(bounds.left + 4, bounds.top + 4, bounds.right - 4, bounds.top + 22);
-        if (model.activeSkin.appearance.showTitleBars) {
-            DrawBevel(titleBar, raised, light, dark);
-        }
-        target->FillRectangle(Rect(titleBar.left + 4, titleBar.top + 5, titleBar.left + 9,
-                                   titleBar.bottom - 5), green);
-        const bool centered = model.activeSkin.appearance.centeredTitles;
-        DrawText(titleValue, centered ? Rect(titleBar.left + 13, titleBar.top, titleBar.right - 13, titleBar.bottom)
-                                      : Rect(titleBar.left + 13, titleBar.top, titleBar.right - 4, titleBar.bottom),
-                 green, headingFormat.Get(), centered ? DWRITE_TEXT_ALIGNMENT_CENTER
-                                                      : DWRITE_TEXT_ALIGNMENT_LEADING);
-        return Rect(bounds.left + 5, bounds.top + 25, bounds.right - 5, bounds.bottom - 5);
-    }
+         if (model.activeSkin.appearance.showTitleBars) {
+             DrawBevel(titleBar, raised, light, dark);
+         }
+         target->FillRectangle(Rect(titleBar.left + 4, titleBar.top + 5, titleBar.left + 9,
+                                    titleBar.bottom - 5), green);
+         const bool centered = model.activeSkin.appearance.centeredTitles;
+         const auto& moduleLayout = moduleGesture != ModuleGesture::None
+                                        ? moduleLayoutDraft : model.moduleLayout;
+         const bool titleIsAlreadyATab = module && moduleLayout.IsTabbed(*module);
+         if (!titleIsAlreadyATab) {
+             DrawText(titleValue,
+                      centered ? Rect(titleBar.left + 13, titleBar.top, titleBar.right - 13, titleBar.bottom)
+                               : Rect(titleBar.left + 13, titleBar.top, titleBar.right - 4, titleBar.bottom),
+                      green, headingFormat.Get(), centered ? DWRITE_TEXT_ALIGNMENT_CENTER
+                                                           : DWRITE_TEXT_ALIGNMENT_LEADING);
+         }
+         if (module && windowKind == WindowKind::Main) {
+             AddIdHit(titleBar, HitKind::ModuleTitle,
+                      static_cast<std::uint64_t>(static_cast<std::uint8_t>(*module)));
+         }
+         return Rect(bounds.left + 5, bounds.top + 25, bounds.right - 5, bounds.bottom - 5);
+     }
 
 // Transparent buttons drop the beveled metal background and use the larger regular
     // font so they read as plain text; the label brightens on hover / active. Classic
@@ -1334,6 +1383,20 @@ void Win32Ui::Impl::DrawSearch(const D2D1_RECT_F& bounds, const std::wstring& qu
         return static_cast<std::size_t>(track - base);
     }
 
+[[nodiscard]] std::size_t Win32Ui::Impl::SourceTrackIndex(const TrackView* track) const noexcept {
+        const auto modelIndex = ModelTrackIndex(track);
+        if (modelIndex == static_cast<std::size_t>(-1)) return modelIndex;
+        const auto source = track->sourcePlaylistId;
+        if (source == 0) return modelIndex;
+        std::size_t sourceIndex = 0;
+        for (std::size_t index = 0; index < modelIndex; ++index) {
+            if (model.tracks[index].sourcePlaylistId == source) ++sourceIndex;
+        }
+        return model.tracks[modelIndex].sourcePlaylistId == source
+                   ? sourceIndex
+                   : static_cast<std::size_t>(-1);
+    }
+
 void Win32Ui::Impl::DrawTrackRenameField(const D2D1_RECT_F& bounds, ID2D1Brush* textBrush) {
         Win32Ui::Impl::DrawBevel(bounds, currentBrushes[3], currentBrushes[4], currentBrushes[5], true);
         const auto textBounds = Rect(bounds.left + 4, bounds.top, bounds.right - 4, bounds.bottom);
@@ -1424,8 +1487,9 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
             hit.index = modelIndex;
             hits.push_back(hit);
             if (dragging && dropTrackIndex != static_cast<std::size_t>(-1)) {
-                if (dropTrackIndex == modelIndex) DrawTrackDropIndicator(row, false, white);
-                else if (dropTrackIndex == modelIndex + 1) DrawTrackDropIndicator(row, true, white);
+                const auto sourceIndex = SourceTrackIndex(tracks[index]);
+                if (dropTrackIndex == sourceIndex) DrawTrackDropIndicator(row, false, white);
+                else if (dropTrackIndex == sourceIndex + 1) DrawTrackDropIndicator(row, true, white);
             }
         }
         target->PopAxisAlignedClip();
@@ -1532,8 +1596,9 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
             hits.push_back(hit);
             if (dragActive && dragKind == DragKind::Track &&
                 dropTrackIndex != static_cast<std::size_t>(-1)) {
-                if (dropTrackIndex == modelIndex) DrawTrackDropIndicator(rect, false, white);
-                else if (dropTrackIndex == modelIndex + 1) DrawTrackDropIndicator(rect, true, white);
+                const auto sourceIndex = SourceTrackIndex(row.track);
+                if (dropTrackIndex == sourceIndex) DrawTrackDropIndicator(rect, false, white);
+                else if (dropTrackIndex == sourceIndex + 1) DrawTrackDropIndicator(rect, true, white);
             }
         }
         target->PopAxisAlignedClip();
@@ -1551,9 +1616,10 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
     }
 
 void Win32Ui::Impl::DrawPlayer(const D2D1_RECT_F& bounds,
-                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
-        auto content = DrawPanel(bounds, L"RIVAN", b[1].Get(), b[2].Get(), b[3].Get(), b[4].Get(),
-                                 b[13].Get(), b[7].Get());
+                     std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+        auto content = DrawPanel(bounds, UiModuleRegistry::Get(ModuleId::Rivan).Title(),
+                                 b[1].Get(), b[2].Get(), b[3].Get(), b[4].Get(),
+                                 b[13].Get(), b[7].Get(), ModuleId::Rivan);
         const auto titleBar = Rect(bounds.left + 4, bounds.top + 4, bounds.right - 4, bounds.top + 22);
         // Settings gear on the left of the RIVAN panel title bar opens the preferences window.
         const auto gear = Rect(titleBar.left + 2, titleBar.top + 2, titleBar.left + 22, titleBar.bottom - 2);
@@ -1668,9 +1734,9 @@ void Win32Ui::Impl::DrawPlayer(const D2D1_RECT_F& bounds,
     }
 
 void Win32Ui::Impl::DrawPlaylistEditor(const D2D1_RECT_F& bounds,
-                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+                             std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
         auto content = DrawPanel(bounds, SelectedPlaylistName(), b[1].Get(), b[2].Get(), b[3].Get(),
-                                 b[4].Get(), b[13].Get(), b[7].Get());
+                                 b[4].Get(), b[13].Get(), b[7].Get(), ModuleId::AllMusic);
         const auto controls = Rect(content.left + 2, std::max(content.top, content.bottom - 28),
                                    content.right - 2, content.bottom - 2);
         playlistListBounds = Rect(content.left + 2, content.top + 2, content.right - 2,
@@ -1717,9 +1783,10 @@ void Win32Ui::Impl::DrawPlaylistEditor(const D2D1_RECT_F& bounds,
     }
 
 void Win32Ui::Impl::DrawEqualizer(const D2D1_RECT_F& bounds,
-                       std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
-        auto content = DrawPanel(bounds, L"GRAPHIC EQUALIZER", b[1].Get(), b[2].Get(), b[3].Get(),
-                                 b[4].Get(), b[13].Get(), b[7].Get());
+                        std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+        auto content = DrawPanel(bounds, UiModuleRegistry::Get(ModuleId::GraphicEqualizer).Title(),
+                                 b[1].Get(), b[2].Get(), b[3].Get(),
+                                 b[4].Get(), b[13].Get(), b[7].Get(), ModuleId::GraphicEqualizer);
         Win32Ui::Impl::DrawStaticButton(Rect(content.left + 2, content.top + 2, content.left + 31, content.top + 20),
                          L"ON", b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
         Win32Ui::Impl::DrawStaticButton(Rect(content.left + 35, content.top + 2, content.left + 77, content.top + 20),
@@ -1756,9 +1823,10 @@ void Win32Ui::Impl::DrawEqualizer(const D2D1_RECT_F& bounds,
     }
 
 void Win32Ui::Impl::DrawLibrary(const D2D1_RECT_F& bounds,
-                     std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
-        auto content = DrawPanel(bounds, L"RIVAN LIBRARY", b[1].Get(), b[2].Get(), b[3].Get(), b[4].Get(),
-                                 b[13].Get(), b[7].Get());
+                      std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+        auto content = DrawPanel(bounds, UiModuleRegistry::Get(ModuleId::RivanLibrary).Title(),
+                                 b[1].Get(), b[2].Get(), b[3].Get(), b[4].Get(),
+                                 b[13].Get(), b[7].Get(), ModuleId::RivanLibrary);
         const float treeWidth = std::clamp(Width(content) * 0.30F, 130.0F, 215.0F);
         const auto tree = Rect(content.left + 2, content.top + 2, content.left + treeWidth,
                                content.bottom - 2);
@@ -2056,6 +2124,7 @@ void Win32Ui::Impl::DrawMini(const D2D1_SIZE_F size,
         Win32Ui::Impl::DrawSkinDecor(size);
         screenBounds.clear();
         panelBounds.clear();
+        moduleRegions.clear();
         decorControlBounds.clear();
         deferTexts = true;
         const auto bounds = Rect(4, 4, size.width - 4, size.height - 4);
@@ -2327,28 +2396,181 @@ void Win32Ui::Impl::DrawImageSelection(const D2D1_SIZE_F size) {
     }
 
 void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
-                  std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+                   std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
         target->FillRectangle(Rect(0, 0, size.width, size.height), b[0].Get());
         Win32Ui::Impl::DrawSkinDecor(size);
         screenBounds.clear();
         panelBounds.clear();
+        moduleRegions.clear();
         decorControlBounds.clear();
-        constexpr float margin = 8.0F;
-        constexpr float gap = 6.0F;
-        const auto safe = Rect(margin, margin, size.width - margin, size.height - margin - 2.0F);
-        const float leftWidth = std::clamp(size.width * 0.44F, 330.0F, 520.0F);
-        const float leftRight = safe.left + leftWidth;
-        const float playerHeight = std::clamp(Height(safe) * 0.30F, 195.0F, 238.0F);
-        const float equalizerHeight = std::clamp(Height(safe) * 0.18F, 108.0F, 145.0F);
-        const float playlistTop = safe.top + playerHeight + gap;
-        const float equalizerTop = safe.bottom - equalizerHeight;
+         const auto& layout = moduleGesture != ModuleGesture::None
+                                  ? moduleLayoutDraft : model.moduleLayout;
+          const auto boundsFor = [size](const ModuleLayoutItem& item) {
+              return ModulePixelBounds(item, size);
+          };
+          const auto tabActive = [&layout](ModuleId id) {
+              if (!layout.IsTabbed(id)) return true;
+              return layout.tabOrder[layout.ActiveTabIndex()] == id;
+         };
+         const auto draw = [this, &b, &boundsFor](ModuleId id, const ModuleLayoutItem& item,
+                                                   const ModuleLayoutItem* displayItem = nullptr) {
+             const auto bounds = boundsFor(displayItem ? *displayItem : item);
+             if (Width(bounds) < 2.0F || Height(bounds) < 2.0F) return;
+             switch (id) {
+             case ModuleId::Rivan: DrawPlayer(bounds, b); break;
+             case ModuleId::AllMusic: DrawPlaylistEditor(bounds, b); break;
+             case ModuleId::GraphicEqualizer: DrawEqualizer(bounds, b); break;
+             case ModuleId::RivanLibrary: DrawLibrary(bounds, b); break;
+             }
+         };
 
-        deferTexts = true;
-        Win32Ui::Impl::DrawPlayer(Rect(safe.left, safe.top, leftRight, safe.top + playerHeight), b);
-        Win32Ui::Impl::DrawPlaylistEditor(Rect(safe.left, playlistTop, leftRight, equalizerTop - gap), b);
-        Win32Ui::Impl::DrawEqualizer(Rect(safe.left, equalizerTop, leftRight, safe.bottom), b);
-        Win32Ui::Impl::DrawLibrary(Rect(leftRight + gap, safe.top, safe.right, safe.bottom), b);
-        Win32Ui::Impl::DrawSkinDecor(size, 1);
+         // Keep resize feedback visible without committing every mouse move to the
+         // application/session model.
+         if (moduleGesture == ModuleGesture::Resize && draggingModule) {
+             if (const auto* item = layout.Find(*draggingModule)) {
+                 target->DrawRectangle(boundsFor(*item), b[8].Get(), 2.0F);
+             }
+         }
+
+         deferTexts = true;
+          for (const auto& item : layout.items) {
+              if (!item.visible || item.collapsed || !tabActive(item.id)) continue;
+              if (layout.IsTabbed(item.id) && layout.TabCount() > 1) {
+                 const auto* base = layout.Find(layout.tabOrder[0]);
+                 if (!base) continue;
+                 auto display = item;
+                 display.x = base->x;
+                 display.y = base->y;
+                 display.width = base->width;
+                 display.height = base->height;
+                 draw(item.id, item, &display);
+             } else {
+                 draw(item.id, item);
+             }
+         }
+          // A tab group shares the target module's rectangle. Its tabs are painted last so
+          // they remain available even when the module content contains other hit regions.
+          if (layout.TabCount() > 0) {
+             const auto* base = layout.Find(layout.tabOrder[0]);
+             if (base) {
+                 auto tabItem = *base;
+                 if (moduleGesture == ModuleGesture::Move && draggingModule &&
+                     layout.IsTabbed(*draggingModule)) {
+                     // The dragged tab group continues to use its current target
+                     // rectangle; the outline identifies the eventual drop target.
+                 }
+                 const auto tabBounds = boundsFor(tabItem);
+                  const auto tabCount = layout.TabCount();
+                  const float tabWidth = std::max(44.0F, Width(tabBounds) /
+                                                       static_cast<float>(tabCount));
+                  const auto tabFormat = [this](bool active) -> IDWriteTextFormat* {
+                      return active ? headingFormat.Get() : tinyFormat.Get();
+                  };
+                  for (std::size_t i = 0; i < tabCount; ++i) {
+                      const auto tab = Rect(tabBounds.left + tabWidth * static_cast<float>(i),
+                                            tabBounds.top + 4.0F,
+                                            std::min(tabBounds.right, tabBounds.left + tabWidth * static_cast<float>(i + 1)),
+                                            tabBounds.top + 22.0F);
+                      const bool active = i == layout.ActiveTabIndex();
+                      DrawBevel(tab, active ? b[7].Get() : b[2].Get(), b[3].Get(), b[4].Get(), active);
+                      DrawText(UiModuleRegistry::Get(layout.tabOrder[i]).Title(), tab, b[13].Get(),
+                               tabFormat(active), DWRITE_TEXT_ALIGNMENT_CENTER);
+                      AddIdHit(tab, HitKind::ModuleTab,
+                               (static_cast<std::uint64_t>(static_cast<std::uint8_t>(layout.tabOrder[i])) << 32U) |
+                                   static_cast<std::uint64_t>(i));
+                  }
+             }
+          }
+            if (moduleCollapseMode == ModuleCollapseMode::None &&
+                moduleWindowDropZone == ModuleWindowDropZone::None && moduleDropTarget) {
+                if (const auto* targetModule = layout.Find(layout.TabRoot(*moduleDropTarget))) {
+                   const auto targetBounds = boundsFor(*targetModule);
+                   D2D1_RECT_F indication = targetBounds;
+                   switch (moduleDropZone) {
+                   case ModuleDropZone::Center:
+                       break;
+                   case ModuleDropZone::Left:
+                       indication.right = (targetBounds.left + targetBounds.right) * 0.5F;
+                       break;
+                   case ModuleDropZone::Right:
+                       indication.left = (targetBounds.left + targetBounds.right) * 0.5F;
+                       break;
+                   case ModuleDropZone::Top:
+                       indication.bottom = (targetBounds.top + targetBounds.bottom) * 0.5F;
+                       break;
+                   case ModuleDropZone::Bottom:
+                       indication.top = (targetBounds.top + targetBounds.bottom) * 0.5F;
+                       break;
+                   case ModuleDropZone::None:
+                       indication = {};
+                       break;
+                   }
+                   if (Width(indication) > 0.0F && Height(indication) > 0.0F) {
+                       target->DrawRectangle(indication, b[8].Get(), 3.0F);
+                    }
+                }
+            }
+              if (moduleCollapseMode == ModuleCollapseMode::None &&
+                  moduleWindowDropZone != ModuleWindowDropZone::None) {
+                 D2D1_RECT_F indication{};
+                 if (moduleDropPreviewValid && draggingModule) {
+                     if (const auto* previewItem = moduleLayoutPreview.Find(*draggingModule)) {
+                         indication = ModulePixelBounds(*previewItem, size);
+                     }
+                 }
+                 if (Width(indication) <= 0.0F || Height(indication) <= 0.0F) {
+                     const auto windowBounds = ModuleWindowDropBounds(moduleWindowDropZone);
+                     const ModuleLayoutItem indicationItem{
+                         ModuleId::Rivan, windowBounds.left, windowBounds.top,
+                         windowBounds.right - windowBounds.left,
+                         windowBounds.bottom - windowBounds.top};
+                     indication = ModulePixelBounds(indicationItem, size);
+                 }
+                if (Width(indication) > 0.0F && Height(indication) > 0.0F) {
+                    target->DrawRectangle(indication, b[8].Get(), 3.0F);
+                 }
+             }
+             if (moduleCollapseMode != ModuleCollapseMode::None && moduleDropPreviewValid &&
+                 draggingModule) {
+                 if (const auto* previewItem = moduleLayoutPreview.Find(*draggingModule)) {
+                     const auto indication = ModuleCollapseHandleBounds(*previewItem, size);
+                     if (Width(indication) > 0.0F && Height(indication) > 0.0F) {
+                         target->DrawRectangle(indication, b[8].Get(), 3.0F);
+                     }
+                     // The expanded rectangle is the actual destination of the module;
+                     // the handle outline above identifies the arrow affordance.
+                     if (previewItem->expandedWidth > 0.0F && previewItem->expandedHeight > 0.0F) {
+                         const auto expanded = Rect(
+                             previewItem->expandedX * size.width,
+                             previewItem->expandedY * size.height,
+                             (previewItem->expandedX + previewItem->expandedWidth) * size.width,
+                             (previewItem->expandedY + previewItem->expandedHeight) * size.height);
+                         target->DrawRectangle(expanded, b[8].Get(), 3.0F);
+                     }
+                 }
+             }
+            // Collapsible modules are represented by a small bevelled arrow handle. An
+            // expanded module keeps the same handle at its target edge; a collapsed one
+            // is drawn from its stored handle rectangle and contributes no module panel.
+             for (const auto& item : layout.items) {
+                 if (!item.visible || item.collapseMode == ModuleCollapseMode::None) continue;
+                 if (item.collapsed && moduleGesture == ModuleGesture::None) {
+                     // The handle is the collapsed module itself. Its expanded geometry
+                     // is retained in the item metadata and is restored on click.
+                 }
+                D2D1_RECT_F handle{};
+                handle = ModuleCollapseHandleBounds(item, size);
+                if (Width(handle) <= 1.0F || Height(handle) <= 1.0F) continue;
+                const bool hot = Contains(handle, static_cast<float>(mouse.x),
+                                          static_cast<float>(mouse.y));
+                DrawBevel(handle, hot ? b[7].Get() : b[2].Get(), b[3].Get(), b[4].Get(),
+                          item.collapsed);
+                DrawText(ModuleCollapseArrow(item), handle, b[9].Get(), tinyFormat.Get(),
+                         DWRITE_TEXT_ALIGNMENT_CENTER);
+                 AddIdHit(handle, HitKind::ModuleCollapseToggle,
+                         static_cast<std::uint64_t>(static_cast<std::uint8_t>(item.id)));
+             }
+          Win32Ui::Impl::DrawSkinDecor(size, 1);
         Win32Ui::Impl::DrawSkinDecor(size, 2);
         Win32Ui::Impl::FlushDeferredTexts();
         Win32Ui::Impl::DrawImageSelection(size);
@@ -2518,6 +2740,34 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
         }
 
         if (model.settingsCategory == SettingCategory::Appearance) {
+        Win32Ui::Impl::DrawText(L"MODULE VISIBILITY", Rect(left, y, right, y + 25),
+                 b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+        y += 29;
+        const auto moduleLabel = [this](ModuleId id) {
+            const auto* item = model.moduleLayout.Find(id);
+            const bool visible = item != nullptr && item->visible;
+            std::wstring label(UiModuleRegistry::Get(id).Title());
+            label += visible ? L": ON" : L": OFF";
+            return label;
+        };
+        constexpr std::array moduleIds{
+            ModuleId::Rivan, ModuleId::AllMusic,
+            ModuleId::GraphicEqualizer, ModuleId::RivanLibrary};
+        for (std::size_t i = 0; i < moduleIds.size(); i += 2) {
+            const float optionWidth = (right - left - 8.0F) * 0.5F;
+            SettingsButton(Rect(left, y, left + optionWidth, y + 24),
+                           moduleLabel(moduleIds[i]), 60 + i, b);
+            if (i + 1 < moduleIds.size()) {
+                SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24),
+                               moduleLabel(moduleIds[i + 1]), 60 + i + 1, b);
+            }
+            y += 30;
+        }
+        SettingsButton(Rect(left, y, right, y + 24), L"RESET MODULE LAYOUT", 64, b);
+        y += 34;
+         Win32Ui::Impl::DrawText(L"Drag a title to move. Center drops create tabs; side drops snap.",
+                  Rect(left, y, right, y + 28), b[6].Get(), tinyFormat.Get());
+        y += 36;
         Win32Ui::Impl::DrawText(L"TRACK COVERS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
                  DWRITE_TEXT_ALIGNMENT_CENTER);
         y += 29;
@@ -2889,6 +3139,7 @@ void Win32Ui::Impl::Paint() {
         Win32Ui::Impl::ApplySkinFonts();
         hits.clear();
         colorFocusRegions.clear();
+        moduleRegions.clear();
         auto& brushes = UpdateBrushes();
         target->BeginDraw();
         const auto size = target->GetSize();
@@ -2944,7 +3195,9 @@ void Win32Ui::Impl::Paint() {
                 Win32Ui::Impl::DrawPreviewFullscreenOverlay(size, brushes);
             } else {
                 previewFullscreen = false;
-                const bool compact = model.miniPlayer || size.width < 700.0F || size.height < 390.0F;
+                 // The main modules remain usable at the reduced 320x200 window size.
+                 // Only explicit mini-player mode switches to the compact renderer.
+                 const bool compact = model.miniPlayer;
                 if (compact) DrawMini(size, brushes);
                 else Win32Ui::Impl::DrawFull(size, brushes);
             }

@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
+#include <cstdio>
 #include <limits>
 #include <string_view>
 #include <system_error>
@@ -231,6 +233,28 @@ void ReadBoolField(const core::IniDocument& document, std::string_view section,
     destination = *parsed;
 }
 
+void ReadFloatField(const core::IniDocument& document, std::string_view section,
+                    std::string_view key, float minimum, float maximum, float& destination,
+                    std::string* warnings) {
+    const auto value = document.Get(section, key);
+    if (!value) return;
+    const std::string text(*value);
+    char* end = nullptr;
+    const float parsed = std::strtof(text.c_str(), &end);
+    if (end == text.c_str() || *end != '\0' || !std::isfinite(parsed) ||
+        parsed < minimum || parsed > maximum) {
+        AddWarning(warnings, "Ignoring invalid " + std::string(section) + "." + std::string(key));
+        return;
+    }
+    destination = parsed;
+}
+
+std::string FloatText(float value) {
+    char buffer[32]{};
+    std::snprintf(buffer, sizeof(buffer), "%.6g", static_cast<double>(value));
+    return buffer;
+}
+
 void ReadEncodedString(const core::IniDocument& document, std::string_view section,
                        std::string_view key, std::size_t maximumBytes,
                        std::string& destination, std::string* warnings) {
@@ -313,6 +337,41 @@ core::IniDocument MakeSessionDocument(const SessionState& session) {
     document.Set("playback", "position_ms", std::to_string(session.positionMilliseconds));
     document.Set("playback", "shuffle", BoolText(session.shuffle));
     document.Set("playback", "repeat", std::string(ToString(session.repeat)));
+    for (std::size_t i = 0; i < session.moduleLayout.items.size(); ++i) {
+        const auto& item = session.moduleLayout.items[i];
+        const std::string key = "module_" + std::to_string(i) + "_";
+        document.Set("modules", key + "x", FloatText(item.x));
+        document.Set("modules", key + "y", FloatText(item.y));
+        document.Set("modules", key + "width", FloatText(item.width));
+        document.Set("modules", key + "height", FloatText(item.height));
+        document.Set("modules", key + "visible", BoolText(item.visible));
+        document.Set("modules", key + "dock", item.dockState == ui::ModuleDockState::Snapped
+                                               ? "snapped" : "floating");
+        document.Set("modules", key + "snap_group",
+                     std::to_string(static_cast<unsigned int>(session.moduleLayout.snapGroup[i])));
+        document.Set("modules", key + "collapse_mode",
+                     std::to_string(static_cast<unsigned int>(item.collapseMode)));
+        document.Set("modules", key + "collapse_side",
+                     std::to_string(static_cast<unsigned int>(item.collapseSide)));
+        document.Set("modules", key + "collapse_target",
+                     std::to_string(static_cast<unsigned int>(item.collapseTarget)));
+        document.Set("modules", key + "collapse_window", BoolText(item.collapseTargetIsWindow));
+        document.Set("modules", key + "collapsed", BoolText(item.collapsed));
+        document.Set("modules", key + "expanded_x", FloatText(item.expandedX));
+        document.Set("modules", key + "expanded_y", FloatText(item.expandedY));
+        document.Set("modules", key + "expanded_width", FloatText(item.expandedWidth));
+        document.Set("modules", key + "expanded_height", FloatText(item.expandedHeight));
+        document.Set("modules", key + "handle_x", FloatText(item.handleX));
+        document.Set("modules", key + "handle_y", FloatText(item.handleY));
+        document.Set("modules", key + "handle_width", FloatText(item.handleWidth));
+        document.Set("modules", key + "handle_height", FloatText(item.handleHeight));
+    }
+    document.Set("modules", "tab_count", std::to_string(session.moduleLayout.tabCount));
+    document.Set("modules", "active_tab", std::to_string(session.moduleLayout.activeTab));
+    for (std::size_t i = 0; i < session.moduleLayout.tabCount; ++i) {
+        document.Set("modules", "tab_" + std::to_string(i),
+                     std::to_string(static_cast<unsigned int>(session.moduleLayout.tabOrder[i])));
+    }
     return document;
 }
 
@@ -514,6 +573,103 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
             session_.repeat = *parsed;
         }
     }
+
+    auto layout = ui::ModuleLayout::Defaults();
+    for (std::size_t i = 0; i < layout.items.size(); ++i) {
+        auto& item = layout.items[i];
+        const std::string key = "module_" + std::to_string(i) + "_";
+        ReadFloatField(*document, "modules", key + "x", 0.0F, 1.0F, item.x, warnings);
+        ReadFloatField(*document, "modules", key + "y", 0.0F, 1.0F, item.y, warnings);
+        ReadFloatField(*document, "modules", key + "width", 0.01F, 1.0F, item.width, warnings);
+        ReadFloatField(*document, "modules", key + "height", 0.01F, 1.0F, item.height, warnings);
+        ReadBoolField(*document, "modules", key + "visible", item.visible, warnings);
+        if (const auto dock = document->Get("modules", key + "dock")) {
+            if (*dock == "snapped") item.dockState = ui::ModuleDockState::Snapped;
+            else if (*dock == "floating") item.dockState = ui::ModuleDockState::Floating;
+            else AddWarning(warnings, "Ignoring invalid modules." + key + "dock");
+        }
+        if (const auto snapGroup = document->Get("modules", key + "snap_group")) {
+            if (const auto id = ParseInteger<unsigned int>(*snapGroup);
+                id && *id < layout.items.size()) {
+                layout.snapGroup[i] = static_cast<ui::ModuleId>(*id);
+            } else {
+                AddWarning(warnings, "Ignoring invalid modules." + key + "snap_group");
+            }
+        }
+        if (const auto mode = document->Get("modules", key + "collapse_mode")) {
+            if (const auto value = ParseInteger<unsigned int>(*mode);
+                value && *value <= static_cast<unsigned int>(ui::ModuleCollapseMode::Outside)) {
+                item.collapseMode = static_cast<ui::ModuleCollapseMode>(*value);
+            } else {
+                AddWarning(warnings, "Ignoring invalid modules." + key + "collapse_mode");
+            }
+        }
+        if (const auto side = document->Get("modules", key + "collapse_side")) {
+            if (const auto value = ParseInteger<unsigned int>(*side);
+                value && *value <= static_cast<unsigned int>(ui::ModuleCollapseSide::Bottom)) {
+                item.collapseSide = static_cast<ui::ModuleCollapseSide>(*value);
+            } else {
+                AddWarning(warnings, "Ignoring invalid modules." + key + "collapse_side");
+            }
+        }
+        if (const auto target = document->Get("modules", key + "collapse_target")) {
+            if (const auto value = ParseInteger<unsigned int>(*target);
+                value && *value < layout.items.size()) {
+                item.collapseTarget = static_cast<ui::ModuleId>(*value);
+            } else {
+                AddWarning(warnings, "Ignoring invalid modules." + key + "collapse_target");
+            }
+        }
+        ReadBoolField(*document, "modules", key + "collapse_window",
+                      item.collapseTargetIsWindow, warnings);
+        ReadBoolField(*document, "modules", key + "collapsed", item.collapsed, warnings);
+        ReadFloatField(*document, "modules", key + "expanded_x", 0.0F, 1.0F,
+                       item.expandedX, warnings);
+        ReadFloatField(*document, "modules", key + "expanded_y", 0.0F, 1.0F,
+                       item.expandedY, warnings);
+        ReadFloatField(*document, "modules", key + "expanded_width", 0.0F, 1.0F,
+                       item.expandedWidth, warnings);
+        ReadFloatField(*document, "modules", key + "expanded_height", 0.0F, 1.0F,
+                       item.expandedHeight, warnings);
+        ReadFloatField(*document, "modules", key + "handle_x", 0.0F, 1.0F,
+                       item.handleX, warnings);
+        ReadFloatField(*document, "modules", key + "handle_y", 0.0F, 1.0F,
+                       item.handleY, warnings);
+        ReadFloatField(*document, "modules", key + "handle_width", 0.0F, 1.0F,
+                       item.handleWidth, warnings);
+        ReadFloatField(*document, "modules", key + "handle_height", 0.0F, 1.0F,
+                       item.handleHeight, warnings);
+        item.x = std::min(item.x, 1.0F - item.width);
+        item.y = std::min(item.y, 1.0F - item.height);
+    }
+    if (const auto count = document->Get("modules", "tab_count")) {
+        if (const auto parsed = ParseInteger<std::size_t>(*count)) {
+            layout.tabCount = std::min(*parsed, layout.tabOrder.size());
+            for (std::size_t i = 0; i < layout.tabCount; ++i) {
+                if (const auto tab = document->Get("modules", "tab_" + std::to_string(i))) {
+                    if (const auto id = ParseInteger<unsigned int>(*tab);
+                        id && *id < layout.items.size()) {
+                        layout.tabOrder[i] = static_cast<ui::ModuleId>(*id);
+                    }
+                }
+            }
+            for (std::size_t i = 0; i < layout.tabCount; ++i) {
+                for (std::size_t j = i + 1; j < layout.tabCount; ++j) {
+                    if (layout.tabOrder[i] == layout.tabOrder[j]) {
+                        layout.tabCount = 0;
+                        layout.activeTab = 0;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (const auto active = document->Get("modules", "active_tab")) {
+        if (const auto parsed = ParseInteger<std::size_t>(*active)) {
+            layout.activeTab = std::min(*parsed, layout.tabCount == 0 ? 0U : layout.tabCount - 1U);
+        }
+    }
+    session_.moduleLayout = layout;
 
     if (error != nullptr) {
         error->clear();

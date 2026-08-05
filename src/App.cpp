@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
-#include <cmath>
 #include <cwctype>
 #include <filesystem>
 #include <functional>
@@ -116,6 +115,16 @@ bool App::Initialize() {
     activeSkin_ = committedSkin_;
 
     miniPlayer_ = settings_.Session().miniMode;
+    moduleLayout_ = settings_.Session().moduleLayout;
+    if (!moduleLayout_.HasValidGeometry()) {
+        moduleLayout_ = ui::ModuleLayout::Defaults();
+    }
+    for (std::size_t i = 0; i < moduleLayout_.items.size(); ++i) {
+        auto& item = moduleLayout_.items[i];
+        if (moduleLayout_.Find(moduleLayout_.snapGroup[i]) == nullptr) {
+            moduleLayout_.snapGroup[i] = item.id;
+        }
+    }
     queue_.SetShuffle(settings_.Session().shuffle);
     queue_.SetRepeat(ToQueueRepeat(settings_.Session().repeat));
     audio_.SetVolume(static_cast<float>(applicationSettings.volumePercent) / 100.0F);
@@ -220,13 +229,26 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     const auto* current = activeTrack_ ? &*activeTrack_ : nullptr;
     const bool trackCoverArtEnabled = settings_.Settings().trackCoverArtEnabled;
     const bool filePreviewEnabled = settings_.Settings().filePreviewEnabled;
-    const auto makeTrackView = [this, current, trackCoverArtEnabled, filePreviewEnabled](const auto& track) {
+    const auto ownerForTrack = [this](library::TrackId trackId,
+                                      playlist::PlaylistId fallback) {
+        for (const auto& candidate : playlists_.Playlists()) {
+            if (candidate.kind != playlist::PlaylistKind::Directory) continue;
+            if (std::find(candidate.trackIds.begin(), candidate.trackIds.end(), trackId) !=
+                candidate.trackIds.end()) {
+                return candidate.id;
+            }
+        }
+        return fallback;
+    };
+    const auto makeTrackView = [this, current, trackCoverArtEnabled, filePreviewEnabled](
+                                   const auto& track, playlist::PlaylistId sourcePlaylistId) {
         ui::TrackView view{track.id, track.title, track.artist, track.album,
-                            track.durationSeconds, track.id == selectedTrack_,
-                            current != nullptr && current->id == track.id,
-                            library::Track::IsAudioFile(track.filePath)};
+                           track.durationSeconds, track.id == selectedTrack_,
+                           current != nullptr && current->id == track.id,
+                           library::Track::IsAudioFile(track.filePath)};
         // Context-menu rename needs the backing filename even when preview and covers are off.
         view.filePath = track.filePath.wstring();
+        view.sourcePlaylistId = sourcePlaylistId;
         return view;
     };
 
@@ -321,14 +343,18 @@ void App::SnapshotUiModel(ui::UiModel& out) {
         auto directTracks = playlists_.ResolveTracks(selectedPlaylist_);
         if (!directTracks.empty()) {
             const std::size_t first = out.tracks.size();
-            for (const auto& track : directTracks) out.tracks.push_back(makeTrackView(track));
+            for (const auto& track : directTracks) {
+                out.tracks.push_back(makeTrackView(track, selectedPlaylist_));
+            }
             out.trackSections.push_back({L"", first, directTracks.size()});
         }
         for (const auto* child : playlists_.Children(selectedPlaylist_)) {
             auto childTracks = playlists_.ResolveTracksRecursive(child->id);
             if (childTracks.empty()) continue;
             const std::size_t first = out.tracks.size();
-            for (const auto& track : childTracks) out.tracks.push_back(makeTrackView(track));
+            for (const auto& track : childTracks) {
+                out.tracks.push_back(makeTrackView(track, ownerForTrack(track.id, child->id)));
+            }
             std::wstring label = child->name;
             std::transform(label.begin(), label.end(), label.begin(),
                            [](wchar_t c) { return static_cast<wchar_t>(std::towupper(c)); });
@@ -337,8 +363,12 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     } else {
         const auto& visibleTracks = queue_.Tracks();
         out.tracks.reserve(visibleTracks.size());
+        const auto sourcePlaylistId = selected != nullptr &&
+                                      selected->kind == playlist::PlaylistKind::User
+                                          ? selectedPlaylist_
+                                          : playlist::PlaylistId{};
         for (const auto& track : visibleTracks) {
-            out.tracks.push_back(makeTrackView(track));
+            out.tracks.push_back(makeTrackView(track, sourcePlaylistId));
         }
     }
     if (current != nullptr) {
@@ -410,6 +440,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
                              skin.builtIn, skin.id == committedSkin_.id});
     }
     out.activeSkin = activeSkin_;
+    out.moduleLayout = moduleLayout_;
     out.focusedSkinColor = focusedSkinColor_;
     out.skinColorFocusRevision = skinColorFocusRevision_;
     out.focusedSkinElement = focusedSkinElement_;
@@ -418,6 +449,42 @@ void App::SnapshotUiModel(ui::UiModel& out) {
 
     cachedModel_ = out;
     cachedModelRevision_ = revision_;
+}
+
+void App::SetModuleLayout(ui::ModuleLayout layout) {
+    for (auto& item : layout.items) {
+        item.x = std::clamp(item.x, 0.0F, 1.0F);
+        item.y = std::clamp(item.y, 0.0F, 1.0F);
+        item.width = std::clamp(item.width, item.collapsed ? 0.01F : 0.10F, 1.0F);
+        item.height = std::clamp(item.height, item.collapsed ? 0.01F : 0.10F, 1.0F);
+        item.x = std::min(item.x, 1.0F - item.width);
+        item.y = std::min(item.y, 1.0F - item.height);
+    }
+    if (layout.tabCount > layout.tabOrder.size()) layout.tabCount = layout.tabOrder.size();
+    layout.activeTab = std::min(layout.activeTab, layout.tabCount == 0 ? 0U : layout.tabCount - 1U);
+    // Side snapping is represented by geometry and a small explicit state. Keep
+    // malformed persisted/host-provided tab entries from referring to an absent
+    // module, while retaining the existing global tab-group model.
+    for (std::size_t i = 0; i < layout.tabCount; ++i) {
+        if (layout.Find(layout.tabOrder[i]) == nullptr) {
+            layout.tabCount = 0;
+            layout.activeTab = 0;
+            break;
+        }
+    }
+    for (std::size_t i = 0; i < layout.items.size(); ++i) {
+        if (layout.Find(layout.snapGroup[i]) == nullptr) {
+            layout.snapGroup[i] = layout.items[i].id;
+        }
+    }
+    moduleLayout_ = layout;
+    auto session = settings_.Session();
+    session.moduleLayout = moduleLayout_;
+    std::string error;
+    (void)settings_.SetSession(std::move(session), &error);
+    (void)settings_.SaveSession(&error);
+    ++revision_;
+    if (window_) window_->Refresh();
 }
 
 void App::Invoke(ui::Command command) {
@@ -867,13 +934,13 @@ void App::ApplyFolderOrderAfterScan() {
     playlists_.ApplyFolderOrder(order);
 }
 
-void App::SaveTrackOrder() const {
+void App::SaveTrackOrder(playlist::PlaylistId folderId) const {
     // Track order within Directory folders persists to a dedicated INI keyed by folder
     // path then file path. Only the folder that was just reordered changes, so merge with
     // the existing file to keep other folders' custom orders intact.
     const auto root = settings_.Settings().musicRoot;
     if (root.empty()) return;
-    const auto* selected = playlists_.FindPlaylist(selectedPlaylist_);
+    const auto* selected = playlists_.FindPlaylist(folderId);
     if (selected == nullptr || selected->kind != playlist::PlaylistKind::Directory) return;
     const auto file = root / L"rivan-track-order.ini";
 

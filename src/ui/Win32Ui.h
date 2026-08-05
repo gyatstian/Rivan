@@ -17,8 +17,8 @@ struct WindowOptions {
     const wchar_t* title{L"Rivan"};
     int initialWidth{1180};
     int initialHeight{760};
-    int minimumWidth{760};
-    int minimumHeight{480};
+    int minimumWidth{320};
+    int minimumHeight{200};
     bool acceptFileDrops{true};
     HWND owner{};
     bool initiallyVisible{true};

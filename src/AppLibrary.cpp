@@ -126,6 +126,9 @@ void App::ApplyCompletedScan() {
         result = std::move(completedScan_);
         completedScan_.reset();
     }
+    // Apply the completed catalog before exposing it to the UI.  The scan result is
+    // moved into PlaylistManager here; no UI callback may observe the intermediate
+    // vector replacement.
     playlists_.ApplyScan(*result);
     ApplyFolderOrderAfterScan();
     ApplyTrackOrderAfterScan();
