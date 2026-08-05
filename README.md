@@ -1,4 +1,4 @@
-# Rivan
+# Rivan <img src="src/rivan.ico" width="50">
 
 Rivan is a local windows music player built with C++20, Win32, Direct2D, Media Foundation, and WASAPI<br>
 More of a personal project, don't expect much. was made to be customizable and lightweight.
