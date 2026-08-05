@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+      <Filter Include="Pliki źródłowe\Modules">
+      <UniqueIdentifier>{B8A15FC1-77BD-40A6-BB8F-8F2570D5B57D}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="resources\app.manifest" />
@@ -107,6 +110,21 @@
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.Settings.cpp">
       <Filter>Pliki źródłowe</Filter>
+    </ClCompile>
+    <ClCompile Include="src\modules\RivanModule.cpp">
+      <Filter>Pliki źródłowe\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="src\modules\AllMusicModule.cpp">
+      <Filter>Pliki źródłowe\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="src\modules\GraphicEqualizerModule.cpp">
+      <Filter>Pliki źródłowe\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="src\modules\RivanLibraryModule.cpp">
+      <Filter>Pliki źródłowe\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="src\modules\VideoPreviewModule.cpp">
+      <Filter>Pliki źródłowe\Modules</Filter>
     </ClCompile>
     <ClCompile Include="src\visualization\Visualization.cpp">
       <Filter>Pliki źródłowe</Filter>

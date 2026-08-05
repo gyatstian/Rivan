@@ -137,6 +137,11 @@
     <ClCompile Include="src\ui\Win32Ui.Library.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Preview.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Settings.cpp" />
+    <ClCompile Include="src\modules\RivanModule.cpp" />
+    <ClCompile Include="src\modules\AllMusicModule.cpp" />
+    <ClCompile Include="src\modules\GraphicEqualizerModule.cpp" />
+    <ClCompile Include="src\modules\RivanLibraryModule.cpp" />
+    <ClCompile Include="src\modules\VideoPreviewModule.cpp" />
     <ClCompile Include="src\visualization\Visualization.cpp" />
     <ClCompile Include="src\visualization\VisualizationRenderer.cpp" />
     <ClCompile Include="src\youtube\YoutubeService.cpp" />
