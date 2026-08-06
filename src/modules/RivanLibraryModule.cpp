@@ -851,11 +851,12 @@ void Win32Ui::Impl::BeginTrackRename(std::size_t modelIndex) {
 
 void Win32Ui::Impl::PointerRightDown(float x, float y) {
     if (windowKind != WindowKind::Main || model.miniPlayer) return;
+    if (HasTitlebar()) y -= kTitlebarHeight;
     SetFocus(window);
     // Menus depend on playlist permissions; repaint can lag a recent selection.
     try { host.SnapshotUiModel(model); } catch (...) {}
     mouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
-    const HitRegion* found = HitTest(x, y);
+    const HitRegion* found = HitTestContent(x, y);
     if (found == nullptr) return;
     if (found->kind == HitKind::Track) {
         ResetTrackSelectionForPlaylist(model.selectedPlaylistId);

@@ -88,16 +88,26 @@ constexpr std::size_t kMaximumTrackCoverCacheEntries = 96;
 // but the caption is removed visually via WM_NCCALCSIZE. This is the pixel thickness of
 // the invisible resize border reported by WM_NCHITTEST.
 constexpr int kResizeBorder = 6;
+constexpr float kTitlebarHeight = 28.0F;
+constexpr float kTitlebarButtonSize = 22.0F;
 // Keep a small strip of client background around modules which touch the main
 // window boundary.  The strip is deliberately pixel-based so it remains useful
 // at every window size and leaves the module edge reachable for resizing.
 constexpr float kModuleWindowGap = 8.0F;
 constexpr float kModuleCollapseZonePixels = 12.0F;
-    // Match the file-preview toggle: a centered handle spanning one fifth of the
-    // available panel dimension and using the same compact 18-pixel thickness.
+// Every collapse affordance uses this same compact control size.  Its long axis
+// follows its expanded panel so it remains proportional when that panel is resized.
 constexpr float kModuleCollapseHandleWidthFraction = 0.20F;
 constexpr float kModuleCollapseHandleHeight = 18.0F;
 constexpr float kCollapsedHandleDragThreshold = 8.0F;
+
+[[nodiscard]] float ModuleCollapseHandleTrackThickness(ModuleCollapseSide side,
+                                                         D2D1_SIZE_F size) noexcept {
+    const bool verticalHandle = side == ModuleCollapseSide::Left ||
+                                 side == ModuleCollapseSide::Right;
+    const float extent = std::max(1.0F, verticalHandle ? size.width : size.height);
+    return 2.0F * kModuleCollapseHandleHeight / extent;
+}
 
 [[nodiscard]] D2D1_RECT_F ModuleRawPixelBounds(const ModuleLayoutItem& item,
                                                  D2D1_SIZE_F size) noexcept {
@@ -137,6 +147,8 @@ constexpr float kCollapsedHandleDragThreshold = 8.0F;
     const float height = std::max(1.0F, size.height);
     const bool verticalHandle = item.collapseSide == ModuleCollapseSide::Left ||
                                 item.collapseSide == ModuleCollapseSide::Right;
+    const bool outsideModuleCollapse = item.collapseMode == ModuleCollapseMode::Outside &&
+                                       !item.collapseTargetIsWindow;
 
     float left = 0.0F;
     float top = 0.0F;
@@ -151,48 +163,105 @@ constexpr float kCollapsedHandleDragThreshold = 8.0F;
         const auto handleRegion = ModuleRawPixelBounds(handleGeometry, size);
         const float centerX = (handleRegion.left + handleRegion.right) * 0.5F;
         const float centerY = (handleRegion.top + handleRegion.bottom) * 0.5F;
-        const float regionWidth = std::max(0.0F, handleRegion.right - handleRegion.left);
-        const float regionHeight = std::max(0.0F, handleRegion.bottom - handleRegion.top);
-        const float expandedWidth = item.expandedWidth > 0.0F
-            ? item.expandedWidth * width : regionWidth;
-        const float expandedHeight = item.expandedHeight > 0.0F
-            ? item.expandedHeight * height : regionHeight;
-        actualWidth = verticalHandle
-            ? std::min(width, kModuleCollapseHandleHeight)
-            : std::min(width, expandedWidth * kModuleCollapseHandleWidthFraction);
-        actualHeight = verticalHandle
-            ? std::min(height, expandedHeight * kModuleCollapseHandleWidthFraction)
-            : std::min(height, kModuleCollapseHandleHeight);
-        left = centerX - actualWidth * 0.5F;
-        top = centerY - actualHeight * 0.5F;
-    } else {
-        // Once expanded, the handle follows the live module rectangle and moves to
-        // the opposite edge from the side where the module collapses.
-        const auto moduleRegion = ModuleRawPixelBounds(item, size);
-        const float moduleWidth = std::max(0.0F, moduleRegion.right - moduleRegion.left);
-        const float moduleHeight = std::max(0.0F, moduleRegion.bottom - moduleRegion.top);
-        actualWidth = verticalHandle
-            ? std::min(width, kModuleCollapseHandleHeight)
-            : std::min(width, moduleWidth * kModuleCollapseHandleWidthFraction);
-        actualHeight = verticalHandle
-            ? std::min(height, moduleHeight * kModuleCollapseHandleWidthFraction)
-            : std::min(height, kModuleCollapseHandleHeight);
+        const bool hasTargetGap = item.collapseMode == ModuleCollapseMode::Inside &&
+                                  !item.collapseTargetIsWindow;
+        if (hasTargetGap) {
+            // Stored track contains equal button and target-gap halves.
+            const float storedWidth = std::max(0.0F, handleRegion.right - handleRegion.left);
+            const float storedHeight = std::max(0.0F, handleRegion.bottom - handleRegion.top);
+            const float expectedWidth = verticalHandle
+                ? std::min(width, kModuleCollapseHandleHeight) : storedWidth;
+            const float expectedHeight = verticalHandle
+                ? storedHeight : std::min(height, kModuleCollapseHandleHeight);
+            actualWidth = verticalHandle
+                ? (storedWidth > expectedWidth * 1.5F ? expectedWidth : storedWidth * 0.5F)
+                : storedWidth;
+            actualHeight = verticalHandle
+                ? storedHeight
+                : (storedHeight > expectedHeight * 1.5F ? expectedHeight : storedHeight * 0.5F);
+        } else {
+            // Other handles retain normal orientation-specific control size.
+            const float expandedWidth = item.expandedWidth > 0.0F
+                ? item.expandedWidth * width : 0.0F;
+            const float expandedHeight = item.expandedHeight > 0.0F
+                ? item.expandedHeight * height : 0.0F;
+            actualWidth = verticalHandle
+                ? std::min(width, kModuleCollapseHandleHeight)
+                : std::min(width, expandedWidth * kModuleCollapseHandleWidthFraction);
+            actualHeight = verticalHandle
+                ? std::min(height, expandedHeight * kModuleCollapseHandleWidthFraction)
+                : std::min(height, kModuleCollapseHandleHeight);
+        }
         switch (item.collapseSide) {
         case ModuleCollapseSide::Left:
-            left = moduleRegion.right - actualWidth;
+            left = outsideModuleCollapse ? handleRegion.right - actualWidth : handleRegion.left;
+            top = centerY - actualHeight * 0.5F;
+            break;
+        case ModuleCollapseSide::Right:
+            left = outsideModuleCollapse ? handleRegion.left : handleRegion.right - actualWidth;
+            top = centerY - actualHeight * 0.5F;
+            break;
+        case ModuleCollapseSide::Top:
+            left = centerX - actualWidth * 0.5F;
+            top = outsideModuleCollapse ? handleRegion.bottom - actualHeight : handleRegion.top;
+            break;
+        case ModuleCollapseSide::Bottom:
+            left = centerX - actualWidth * 0.5F;
+            top = outsideModuleCollapse ? handleRegion.top : handleRegion.bottom - actualHeight;
+            break;
+        case ModuleCollapseSide::None:
+            left = centerX - actualWidth * 0.5F;
+            top = centerY - actualHeight * 0.5F;
+            break;
+        }
+    } else {
+        // Module-edge outside collapses move the control to the panel's outer edge
+        // after expansion. Window and inside collapses retain their inward-facing
+        // control so their existing edge behavior stays unchanged.
+        const auto moduleRegion = ModulePixelBounds(item, size);
+        const bool hasTargetGap = item.collapseMode == ModuleCollapseMode::Inside &&
+                                  !item.collapseTargetIsWindow;
+        if (hasTargetGap) {
+            // Match collapsed button size. Remaining track half is target gap.
+            const float storedWidth = item.handleWidth * width;
+            const float storedHeight = item.handleHeight * height;
+            const float expectedWidth = verticalHandle
+                ? std::min(width, kModuleCollapseHandleHeight) : storedWidth;
+            const float expectedHeight = verticalHandle
+                ? storedHeight : std::min(height, kModuleCollapseHandleHeight);
+            actualWidth = verticalHandle
+                ? (storedWidth > expectedWidth * 1.5F ? expectedWidth : storedWidth * 0.5F)
+                : storedWidth;
+            actualHeight = verticalHandle
+                ? storedHeight
+                : (storedHeight > expectedHeight * 1.5F ? expectedHeight : storedHeight * 0.5F);
+        } else {
+            const auto rawModuleRegion = ModuleRawPixelBounds(item, size);
+            const float moduleWidth = std::max(0.0F, rawModuleRegion.right - rawModuleRegion.left);
+            const float moduleHeight = std::max(0.0F, rawModuleRegion.bottom - rawModuleRegion.top);
+            actualWidth = verticalHandle
+                ? std::min(width, kModuleCollapseHandleHeight)
+                : std::min(width, moduleWidth * kModuleCollapseHandleWidthFraction);
+            actualHeight = verticalHandle
+                ? std::min(height, moduleHeight * kModuleCollapseHandleWidthFraction)
+                : std::min(height, kModuleCollapseHandleHeight);
+        }
+        switch (item.collapseSide) {
+        case ModuleCollapseSide::Left:
+            left = outsideModuleCollapse ? moduleRegion.left - actualWidth : moduleRegion.right;
             top = (moduleRegion.top + moduleRegion.bottom - actualHeight) * 0.5F;
             break;
         case ModuleCollapseSide::Right:
-            left = moduleRegion.left;
+            left = outsideModuleCollapse ? moduleRegion.right : moduleRegion.left - actualWidth;
             top = (moduleRegion.top + moduleRegion.bottom - actualHeight) * 0.5F;
             break;
         case ModuleCollapseSide::Top:
             left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
-            top = moduleRegion.bottom - actualHeight;
+            top = outsideModuleCollapse ? moduleRegion.top - actualHeight : moduleRegion.bottom;
             break;
         case ModuleCollapseSide::Bottom:
             left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
-            top = moduleRegion.top;
+            top = outsideModuleCollapse ? moduleRegion.bottom : moduleRegion.top - actualHeight;
             break;
         case ModuleCollapseSide::None:
             left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
@@ -219,7 +288,9 @@ constexpr float kCollapsedHandleDragThreshold = 8.0F;
 
 [[nodiscard]] const wchar_t* ModuleCollapseArrow(const ModuleLayoutItem& item) noexcept {
     ModuleCollapseSide direction = item.collapseSide;
-    if (item.collapsed) {
+    const bool outsideModuleCollapse = item.collapseMode == ModuleCollapseMode::Outside &&
+                                       !item.collapseTargetIsWindow;
+    if (item.collapsed != outsideModuleCollapse) {
         switch (direction) {
         case ModuleCollapseSide::Left: direction = ModuleCollapseSide::Right; break;
         case ModuleCollapseSide::Right: direction = ModuleCollapseSide::Left; break;
@@ -570,9 +641,11 @@ struct Win32Ui::Impl {
     D2D1_RECT_F treeListBounds{};
     // Folder-tree row hit target for expand/collapse; scroll offset for the tree list.
     std::size_t treeScroll{};
-    // Draggable caption region (RIVAN panel title bar, excluding its buttons) reported as
-    // HTCAPTION so the borderless window can be moved by dragging it.
+    // Draggable application titlebar region reported as HTCAPTION so the borderless
+    // window can be moved independently of the module layout.
     D2D1_RECT_F captionRect{};
+    std::vector<D2D1_RECT_F> titlebarControlBounds;
+    POINT titlebarMouse{-1, -1};
     bool draggingSeek{};
     bool draggingVolume{};
     // Player LCD time readout toggles between elapsed and remaining on click.
@@ -651,6 +724,12 @@ struct Win32Ui::Impl {
     bool moduleDropPreviewValid{};
     D2D1_POINT_2F moduleDropLastPointer{-1.0F, -1.0F};
     ModuleLayout moduleLayoutDraft{ModuleLayout::Defaults()};
+    bool moduleExpansionResizePending{};
+    std::optional<ModuleId> moduleExpansionResizeModule;
+    ModuleLayout moduleExpansionRestoreLayout{ModuleLayout::Defaults()};
+    bool internalModuleResize{};
+    int moduleExpansionRestoreWidth{};
+    int moduleExpansionRestoreHeight{};
 
     // Inline playlist-name editor (create via + or rename via context menu).
     bool playlistNameEditing{};
@@ -833,6 +912,8 @@ struct Win32Ui::Impl {
 
     [[nodiscard]] const HitRegion* HitTest(float x, float y) const noexcept;
 
+    [[nodiscard]] const HitRegion* HitTestContent(float x, float y) const noexcept;
+
     void DrawText(std::wstring_view textValue, const D2D1_RECT_F& bounds,
                   ID2D1Brush* brush, IDWriteTextFormat* format,
                   DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING,
@@ -932,6 +1013,11 @@ struct Win32Ui::Impl {
 
     void DrawMini(const D2D1_SIZE_F size,
                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void DrawTitlebar(const D2D1_SIZE_F size,
+                     std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    [[nodiscard]] bool HasTitlebar() const noexcept;
 
     // Decodes a skin image file into a device bitmap, caching by absolute path.
     [[nodiscard]] ID2D1Bitmap* LoadSkinBitmap(const std::filesystem::path& relative);

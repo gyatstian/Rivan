@@ -9,27 +9,6 @@ void Win32Ui::Impl::DrawPlayer(const D2D1_RECT_F& bounds,
         auto content = DrawPanel(bounds, UiModuleRegistry::Get(ModuleId::Rivan).Title(),
                                  b[1].Get(), b[2].Get(), b[3].Get(), b[4].Get(),
                                  b[13].Get(), b[7].Get(), ModuleId::Rivan);
-        const auto titleBar = Rect(bounds.left + 4, bounds.top + 4, bounds.right - 4, bounds.top + 22);
-        // Three-bar settings icon on the left of the RIVAN panel title bar opens the preferences window.
-        const auto settingsIcon = Rect(titleBar.left + 2, titleBar.top + 2, titleBar.left + 22, titleBar.bottom - 2);
-        {
-            const bool hot = Contains(settingsIcon, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
-            Win32Ui::Impl::DrawText(L"\u2630", settingsIcon, hot ? b[8].Get() : b[13].Get(), headingFormat.Get(),
-                     DWRITE_TEXT_ALIGNMENT_CENTER);
-            Win32Ui::Impl::AddHit(settingsIcon, Command::ToggleSettings);
-        }
-        float right = titleBar.right - 3;
-        Win32Ui::Impl::DrawWindowButton(Rect(right - 16, titleBar.top + 2, right, titleBar.bottom - 2), L"X", 3,
-                         b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
-        right -= 19;
-        Win32Ui::Impl::DrawWindowButton(Rect(right - 16, titleBar.top + 2, right, titleBar.bottom - 2), L"^", 2,
-                         b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
-        right -= 19;
-        Win32Ui::Impl::DrawWindowButton(Rect(right - 16, titleBar.top + 2, right, titleBar.bottom - 2), L"_", 1,
-                         b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
-        // The strip between the settings icon and the window buttons is the window drag handle.
-        captionRect = Rect(settingsIcon.right + 2, titleBar.top, right - 19, titleBar.bottom);
-
         const float bandTop = content.top + 3;
         const float bandBottom = std::min(content.top + 88, content.bottom - 88);
         const float bandHeight = std::max(1.0F, bandBottom - bandTop);

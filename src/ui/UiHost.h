@@ -150,6 +150,7 @@ struct UiModel {
     bool discordShowArtist{true};
     bool discordShowImageText{true};
     bool discordShowGithubButton{};
+    ModuleExpansionBehavior moduleExpansionBehavior{ModuleExpansionBehavior::Squash};
     // Youtube pane source: false = YouTube, true = YouTube Music search/download.
     bool youtubeMusicSearch{};
     // Download format: 0 = MP3 (ffmpeg transcode), 1 = Original (native m4a/opus,
@@ -227,6 +228,7 @@ public:
     virtual void SetFilePreviewEnabled(bool enabled) = 0;
     virtual void SetStartAtStartup(bool enabled) = 0;
     virtual void SetExitToTray(bool enabled) = 0;
+    virtual void SetModuleExpansionBehavior(ModuleExpansionBehavior behavior) = 0;
     // Enables/disables the optional YouTube library section. Off = no YT workers or UI.
     virtual void SetYoutubeEnabled(bool enabled) = 0;
     // Applies the normalized geometry, visibility, and tab state of the main modules.

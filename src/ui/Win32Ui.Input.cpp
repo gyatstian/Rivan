@@ -209,6 +209,20 @@ void Win32Ui::Impl::UpdateLayerDrag(float y) {
 
 void Win32Ui::Impl::PointerDown(float x, float y) {
     SetFocus(window);
+    titlebarMouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
+    if (HasTitlebar() && y < kTitlebarHeight) {
+        if (const HitRegion* titlebarHit = HitTest(x, y); titlebarHit &&
+            titlebarHit->kind == HitKind::WindowControl) {
+            try {
+                if (titlebarHit->id == 1) ShowWindow(window, SW_MINIMIZE);
+                else if (titlebarHit->id == 2) host.Invoke(Command::ToggleMiniPlayer);
+                else if (titlebarHit->id == 3) PostMessageW(window, WM_CLOSE, 0, 0);
+                else if (titlebarHit->id == 4) host.Invoke(Command::ToggleSettings);
+            } catch (...) {}
+        }
+        return;
+    }
+    if (HasTitlebar()) y -= kTitlebarHeight;
     if (previewFullscreen && windowKind == WindowKind::Main) {
         if (Contains(previewFullscreenCloseBounds, x, y)) {
             ExitPreviewFullscreen();
@@ -255,7 +269,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
     // border at the edge where they live. A click toggles; a larger motion promotes
     // the same press into a module drag (see PointerMove).
     if (windowKind == WindowKind::Main) {
-        if (const HitRegion* collapseHit = HitTest(x, y);
+        if (const HitRegion* collapseHit = HitTestContent(x, y);
             collapseHit && collapseHit->kind == HitKind::ModuleCollapseToggle) {
             collapsedArrowPress = static_cast<ModuleId>(collapseHit->id);
             collapsedArrowPressStart = {x, y};
@@ -272,7 +286,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
     // Keep hover in sync with the press even if no WM_MOUSEMOVE arrived first
     // (common after a context menu swallows the next move).
     mouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
-    const HitRegion* found = HitTest(x, y);
+    const HitRegion* found = HitTestContent(x, y);
     if (!found) {
         activeSearch = SearchTarget::None;
         // Empty client click clears row multi-select so a right-click highlight does not
@@ -363,6 +377,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
             if (hit.id == 1) ShowWindow(window, SW_MINIMIZE);
             else if (hit.id == 2) host.Invoke(Command::ToggleMiniPlayer);
             else if (hit.id == 3) PostMessageW(window, WM_CLOSE, 0, 0);
+            else if (hit.id == 4) host.Invoke(Command::ToggleSettings);
             break;
         case HitKind::ModuleTitle:
             if (windowKind == WindowKind::Main) {
@@ -418,6 +433,8 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
 }
 
 void Win32Ui::Impl::PointerMove(float x, float y) {
+    titlebarMouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
+    if (HasTitlebar()) y -= kTitlebarHeight;
     mouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
     if (collapsedArrowPress) {
         const float dx = x - collapsedArrowPressStart.x;
@@ -507,8 +524,46 @@ void Win32Ui::Impl::PointerUp() noexcept {
             FinishModuleDrag();
         } else if (!dragged) {
             auto layout = model.moduleLayout;
-            if (layout.ToggleCollapsedModule(*id)) {
+            float resizedWidth = 0.0F;
+            float resizedHeight = 0.0F;
+            const bool wasCollapsed = layout.IsCollapsed(*id);
+            const bool wasResizeExpansion = wasCollapsed &&
+                model.moduleExpansionBehavior == ModuleExpansionBehavior::Resize;
+            if (wasCollapsed && wasResizeExpansion) {
+                moduleExpansionRestoreLayout = layout;
+            }
+            if (layout.ToggleCollapsedModule(*id, model.moduleExpansionBehavior,
+                                             lastCanvas.width, lastCanvas.height,
+                                             &resizedWidth, &resizedHeight)) {
+                const bool restoringExpansion = !wasCollapsed && moduleExpansionResizePending &&
+                    moduleExpansionResizeModule && *moduleExpansionResizeModule == *id;
+                if (restoringExpansion) {
+                    layout = moduleExpansionRestoreLayout;
+                }
                 try { host.SetModuleLayout(layout); } catch (...) {}
+                if (wasResizeExpansion &&
+                    (resizedWidth > lastCanvas.width + 0.5F ||
+                     resizedHeight > lastCanvas.height + 0.5F)) {
+                    moduleExpansionResizePending = true;
+                    moduleExpansionResizeModule = *id;
+                    moduleExpansionRestoreWidth = static_cast<int>(lastCanvas.width);
+                    moduleExpansionRestoreHeight = static_cast<int>(lastCanvas.height);
+                    internalModuleResize = true;
+                    SetWindowPos(window, nullptr, 0, 0,
+                                 static_cast<int>(std::ceil(std::max(resizedWidth, lastCanvas.width))),
+                                 static_cast<int>(std::ceil(std::max(resizedHeight, lastCanvas.height) +
+                                                            (HasTitlebar() ? kTitlebarHeight : 0.0F))),
+                                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
+                } else if (restoringExpansion) {
+                    moduleExpansionResizePending = false;
+                    moduleExpansionResizeModule.reset();
+                    internalModuleResize = true;
+                    SetWindowPos(window, nullptr, 0, 0,
+                                 moduleExpansionRestoreWidth,
+                                 moduleExpansionRestoreHeight +
+                                     (HasTitlebar() ? static_cast<int>(kTitlebarHeight) : 0),
+                                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
+                }
             }
             if (GetCapture() == window) ReleaseCapture();
             InvalidateRect(window, nullptr, FALSE);
@@ -534,7 +589,7 @@ void Win32Ui::Impl::PointerUp() noexcept {
         // The tab strip is inset by four pixels from the panel edge.  Without
         // this guard its entire upper edge is interpreted as a resize handle,
         // so a tab can be selected but never promoted into a detachable drag.
-         if (const auto* hit = HitTest(x, y);
+         if (const auto* hit = HitTestContent(x, y);
              hit && (hit->kind == HitKind::ModuleTitle || hit->kind == HitKind::ModuleTab ||
                      hit->kind == HitKind::ModuleCollapseToggle)) {
             continue;
@@ -572,13 +627,11 @@ void Win32Ui::Impl::BeginModuleDrag(ModuleId id, float x, float y,
     moduleLayoutDraft = sourceLayout;
     moduleDragFromCollapsedArrow = false;
     moduleCollapsedArrowOrigin = {};
-    if (auto* collapsed = moduleLayoutDraft.Find(id); collapsed && collapsed->collapsed &&
+    if (const auto* collapsed = moduleLayoutDraft.Find(id); collapsed && collapsed->collapsed &&
         collapsed->expandedWidth >= 0.10F && collapsed->expandedHeight >= 0.10F) {
-        collapsed->x = collapsed->expandedX;
-        collapsed->y = collapsed->expandedY;
-        collapsed->width = collapsed->expandedWidth;
-        collapsed->height = collapsed->expandedHeight;
-        collapsed->collapsed = false;
+        // Inside collapse expansion also returns target space. Bypassing model toggle
+        // here restores source over target's collapsed bounds and causes an overlap.
+        if (!moduleLayoutDraft.ToggleCollapsedModule(id)) return;
     }
     if (const auto* restored = moduleLayoutDraft.Find(id); restored && restored->collapseMode != ModuleCollapseMode::None) {
         if (auto* mutableRestored = moduleLayoutDraft.Find(id)) {
@@ -627,8 +680,30 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
     }
     const auto draggedId = *draggingModule;
     if (moduleGesture == ModuleGesture::Move) {
+        const auto collapsedBeforeDrag = moduleLayoutDraft.Find(draggedId);
+        const bool wasInsideCollapsed = collapsedBeforeDrag != nullptr &&
+            collapsedBeforeDrag->collapsed &&
+            collapsedBeforeDrag->collapseMode == ModuleCollapseMode::Inside &&
+            !collapsedBeforeDrag->collapseTargetIsWindow;
+        const ModuleId insideTarget = wasInsideCollapsed
+            ? collapsedBeforeDrag->collapseTarget : draggedId;
         moduleLayoutDraft.ClearCollapseReferences(draggedId);
         moduleLayoutDraft.ClearModuleCollapse(draggedId);
+        if (wasInsideCollapsed) {
+            // Restore target's full rectangle before detached source starts moving.
+            if (const auto* source = moduleLayoutDraft.Find(draggedId)) {
+                const ModuleNormalizedRect expanded{source->expandedX, source->expandedY,
+                                                     source->expandedX + source->expandedWidth,
+                                                     source->expandedY + source->expandedHeight};
+                if (const auto* targetGeometry = moduleLayoutDraft.Find(moduleLayoutDraft.TabRoot(insideTarget))) {
+                    const auto shared = ModuleNormalizedRect{
+                        std::min(expanded.left, targetGeometry->x), std::min(expanded.top, targetGeometry->y),
+                        std::max(expanded.right, targetGeometry->x + targetGeometry->width),
+                        std::max(expanded.bottom, targetGeometry->y + targetGeometry->height)};
+                    moduleLayoutDraft.SetTabGroupGeometry(moduleLayoutDraft.TabRoot(insideTarget), shared);
+                }
+            }
+        }
     }
     if (moduleGesture == ModuleGesture::Move && moduleDetachTabOnMove &&
         moduleLayoutDraft.IsTabbed(draggedId)) {
@@ -649,10 +724,11 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
     if (moduleGesture == ModuleGesture::Resize) {
         if (moduleLayoutDraft.IsSnapGrouped(draggedId)) {
             moduleLayoutDraft.ResizeSnapGroup(draggedId,
-                                              x / lastCanvas.width, y / lastCanvas.height,
-                                              moduleResizeRight, moduleResizeBottom,
-                                              moduleResizeLeft, moduleResizeTop);
+                                               x / lastCanvas.width, y / lastCanvas.height,
+                                               moduleResizeRight, moduleResizeBottom,
+                                               moduleResizeLeft, moduleResizeTop);
         } else {
+            const auto previousBounds = ModuleLayout::Bounds(*item);
             if (moduleResizeLeft) {
                 const float right = item->x + item->width;
                 item->x = std::clamp(x / lastCanvas.width, 0.0F, right - 0.10F);
@@ -671,6 +747,8 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
                 item->height = std::clamp((y - item->y * lastCanvas.height) / lastCanvas.height,
                                            0.10F, 1.0F - item->y);
             }
+            moduleLayoutDraft.ScaleCollapsedInsideModules(
+                draggedId, previousBounds, ModuleLayout::Bounds(*item));
         }
         ModuleLayout::SyncExpandedGeometry(*item);
     } else {
@@ -796,7 +874,9 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
         return ModuleCollapseSide::None;
     };
     if (const auto side = edgeSide(); side != ModuleCollapseSide::None &&
-        candidate.CollapseToWindow(*draggingModule, side)) {
+        candidate.CollapseToWindow(*draggingModule, side,
+            (side == ModuleCollapseSide::Left || side == ModuleCollapseSide::Right)
+                ? y / lastCanvas.height : x / lastCanvas.width)) {
         targetModule.reset();
         targetZone = ModuleDropZone::None;
         windowZone = ModuleWindowDropZone::None;
@@ -811,26 +891,24 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
                                               ModuleCollapseMode& mode) {
         const auto bounds = ModuleRawPixelBounds(item, lastCanvas);
         const float strip = kModuleCollapseZonePixels;
-        const bool middleY = y >= bounds.top + Height(bounds) * 0.25F &&
-                             y <= bounds.bottom - Height(bounds) * 0.25F;
-        const bool middleX = x >= bounds.left + Width(bounds) * 0.25F &&
-                             x <= bounds.right - Width(bounds) * 0.25F;
-        if (middleY && x >= bounds.left - strip && x <= bounds.left + strip) {
+        const bool onVerticalEdge = y >= bounds.top && y <= bounds.bottom;
+        const bool onHorizontalEdge = x >= bounds.left && x <= bounds.right;
+        if (onVerticalEdge && x >= bounds.left - strip && x <= bounds.left + strip) {
             side = ModuleCollapseSide::Left;
             mode = x < bounds.left ? ModuleCollapseMode::Outside : ModuleCollapseMode::Inside;
             return true;
         }
-        if (middleY && x >= bounds.right - strip && x <= bounds.right + strip) {
+        if (onVerticalEdge && x >= bounds.right - strip && x <= bounds.right + strip) {
             side = ModuleCollapseSide::Right;
             mode = x > bounds.right ? ModuleCollapseMode::Outside : ModuleCollapseMode::Inside;
             return true;
         }
-        if (middleX && y >= bounds.top - strip && y <= bounds.top + strip) {
+        if (onHorizontalEdge && y >= bounds.top - strip && y <= bounds.top + strip) {
             side = ModuleCollapseSide::Top;
             mode = y < bounds.top ? ModuleCollapseMode::Outside : ModuleCollapseMode::Inside;
             return true;
         }
-        if (middleX && y >= bounds.bottom - strip && y <= bounds.bottom + strip) {
+        if (onHorizontalEdge && y >= bounds.bottom - strip && y <= bounds.bottom + strip) {
             side = ModuleCollapseSide::Bottom;
             mode = y > bounds.bottom ? ModuleCollapseMode::Outside : ModuleCollapseMode::Inside;
             return true;
@@ -848,7 +926,13 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
             ModuleCollapseMode mode = ModuleCollapseMode::None;
             if (!resolveCollapse(*iterator, side, mode)) continue;
             candidate = moduleLayoutDraft;
-            if (!candidate.CollapseToModule(*draggingModule, iterator->id, side, mode)) continue;
+            if (!candidate.CollapseToModule(
+                    *draggingModule, iterator->id, side, mode,
+                    ModuleCollapseHandleTrackThickness(side, lastCanvas),
+                    (side == ModuleCollapseSide::Left || side == ModuleCollapseSide::Right)
+                        ? y / lastCanvas.height : x / lastCanvas.width)) {
+                continue;
+            }
             targetModule.reset();
             targetZone = ModuleDropZone::None;
             windowZone = ModuleWindowDropZone::None;
@@ -860,32 +944,58 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
         }
     }
 
-    if (!previewCanApply) {
-    if (targetModule) {
-        if (targetZone == ModuleDropZone::Center) {
-            candidate.TabWith(*draggingModule, *targetModule);
-            previewCanApply = candidate.IsTabbed(*draggingModule);
-        } else {
-            previewCanApply = candidate.SnapTo(*draggingModule, *targetModule, targetZone);
-        }
-        // A module can be visually close to a target whose split is already too
-        // small.  In that case try a window target instead of showing an invalid
-        // white box over a geometry we cannot commit.
-        if (!previewCanApply) {
-            targetModule.reset();
-            targetZone = ModuleDropZone::None;
-        }
-    }
-    if (!targetModule) {
+    // Modules which touch a client edge render with only an 8-pixel visual gap,
+    // while the first 12 pixels remain reserved for collapse handles.  Reserve a
+    // small band immediately after that collapse strip for window drops so an
+    // edge-adjacent module does not make the application target unreachable.
+    constexpr float kModuleWindowDropBandPixels = 40.0F;
+    const bool preferWindowDrop =
+        (x >= kModuleCollapseZonePixels && x <= kModuleWindowDropBandPixels) ||
+        (x >= lastCanvas.width - kModuleWindowDropBandPixels &&
+         x <= lastCanvas.width - kModuleCollapseZonePixels) ||
+        (y >= kModuleCollapseZonePixels && y <= kModuleWindowDropBandPixels) ||
+        (y >= lastCanvas.height - kModuleWindowDropBandPixels &&
+         y <= lastCanvas.height - kModuleCollapseZonePixels);
+    if (!previewCanApply && preferWindowDrop) {
         windowZone = ResolveModuleWindowDropZone(
             x / lastCanvas.width, y / lastCanvas.height);
-        if (windowZone != ModuleWindowDropZone::None) {
-            candidate = moduleLayoutDraft;
-            previewCanApply = candidate.SnapToWindow(*draggingModule, windowZone,
-                                                     x / lastCanvas.width, y / lastCanvas.height);
-            if (!previewCanApply) windowZone = ModuleWindowDropZone::None;
+        candidate = moduleLayoutDraft;
+        previewCanApply = candidate.SnapToWindow(*draggingModule, windowZone,
+                                                 x / lastCanvas.width, y / lastCanvas.height);
+        if (previewCanApply) {
+            targetModule.reset();
+            targetZone = ModuleDropZone::None;
+        } else {
+            windowZone = ModuleWindowDropZone::None;
         }
     }
+
+    if (!previewCanApply) {
+        if (targetModule) {
+            if (targetZone == ModuleDropZone::Center) {
+                candidate.TabWith(*draggingModule, *targetModule);
+                previewCanApply = candidate.IsTabbed(*draggingModule);
+            } else {
+                previewCanApply = candidate.SnapTo(*draggingModule, *targetModule, targetZone);
+            }
+            // A module can be visually close to a target whose split is already too
+            // small. In that case fall through to the window target below instead of
+            // showing a drop preview that cannot be committed.
+            if (!previewCanApply) {
+                targetModule.reset();
+                targetZone = ModuleDropZone::None;
+            }
+        }
+        if (!targetModule) {
+            windowZone = ResolveModuleWindowDropZone(
+                x / lastCanvas.width, y / lastCanvas.height);
+            if (windowZone != ModuleWindowDropZone::None) {
+                candidate = moduleLayoutDraft;
+                previewCanApply = candidate.SnapToWindow(*draggingModule, windowZone,
+                                                         x / lastCanvas.width, y / lastCanvas.height);
+                if (!previewCanApply) windowZone = ModuleWindowDropZone::None;
+            }
+        }
     }
 
     moduleDropLastPointer = {x, y};
@@ -950,10 +1060,20 @@ void Win32Ui::Impl::FinishModuleDrag() noexcept {
                 moduleLayoutDraft = moduleLayoutPreview;
             } else if (collapseModeDrop != ModuleCollapseMode::None) {
                 if (collapseWindowDrop) {
-                    (void)moduleLayoutDraft.CollapseToWindow(*dragged, collapseSideDrop);
+                    (void)moduleLayoutDraft.CollapseToWindow(*dragged, collapseSideDrop,
+                        (collapseSideDrop == ModuleCollapseSide::Left ||
+                         collapseSideDrop == ModuleCollapseSide::Right)
+                            ? moduleDropLastPointer.y / lastCanvas.height
+                            : moduleDropLastPointer.x / lastCanvas.width);
                 } else if (collapseDrop) {
                     (void)moduleLayoutDraft.CollapseToModule(*dragged, *collapseDrop,
-                                                              collapseSideDrop, collapseModeDrop);
+                                                                collapseSideDrop, collapseModeDrop,
+                                                                ModuleCollapseHandleTrackThickness(
+                                                                    collapseSideDrop, lastCanvas),
+                                                                (collapseSideDrop == ModuleCollapseSide::Left ||
+                                                                 collapseSideDrop == ModuleCollapseSide::Right)
+                                                                    ? moduleDropLastPointer.y / lastCanvas.height
+                                                                    : moduleDropLastPointer.x / lastCanvas.width);
                 }
             } else if (zone == ModuleDropZone::Center) {
                 moduleLayoutDraft.TabWith(*dragged, *drop);
@@ -1042,9 +1162,13 @@ void Win32Ui::Impl::DetachModuleFromTabs(ModuleLayout& layout, ModuleId id) cons
     // Inside the caption drag strip and not over an interactive control? Allow drag.
     POINT client{screenX, screenY};
     ScreenToClient(window, &client);
-    if (Contains(captionRect, static_cast<float>(client.x), static_cast<float>(client.y)) &&
-        HitTest(static_cast<float>(client.x), static_cast<float>(client.y)) == nullptr) {
-        return HTCAPTION;
+    if (Contains(captionRect, static_cast<float>(client.x), static_cast<float>(client.y))) {
+        const bool onControl = std::any_of(titlebarControlBounds.begin(), titlebarControlBounds.end(),
+                                           [client](const auto& bounds) {
+                                               return Contains(bounds, static_cast<float>(client.x),
+                                                               static_cast<float>(client.y));
+                                           });
+        if (!onControl) return HTCAPTION;
     }
     return HTCLIENT;
 }
@@ -1090,7 +1214,9 @@ void Win32Ui::Impl::AddDroppedImages(const std::vector<std::wstring>& paths, POI
     float ny = 0.35F;
     if (lastCanvas.width > 0.0F && lastCanvas.height > 0.0F) {
         nx = std::clamp(static_cast<float>(dropPoint.x) / lastCanvas.width, 0.0F, 0.9F);
-        ny = std::clamp(static_cast<float>(dropPoint.y) / lastCanvas.height, 0.0F, 0.9F);
+        const float contentY = HasTitlebar()
+            ? static_cast<float>(dropPoint.y) - kTitlebarHeight : static_cast<float>(dropPoint.y);
+        ny = std::clamp(contentY / lastCanvas.height, 0.0F, 0.9F);
     }
     bool changed = false;
     for (const auto& path : paths) {

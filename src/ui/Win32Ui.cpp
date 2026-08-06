@@ -138,11 +138,13 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         impl_->SyncRefreshTimer();
         return 0;
     case WM_GETMINMAXINFO: {
-        // Client fills the window (no non-client frame), so the minimum track size is the
-        // minimum client size directly.
+        // Client fills window (no non-client frame), so minimum track size is client size.
+        // Never derive this from module rectangles: collapsed modules keep expanded
+        // geometry for restoration, but that hidden geometry must not block window resize.
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
         info->ptMinTrackSize.x = impl_->options.minimumWidth;
-        info->ptMinTrackSize.y = impl_->options.minimumHeight;
+        info->ptMinTrackSize.y = impl_->options.minimumHeight +
+                                 (impl_->HasTitlebar() ? static_cast<int>(kTitlebarHeight) : 0);
         return 0;
     }
     case WM_DPICHANGED: {
@@ -163,13 +165,14 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_LBUTTONDBLCLK: {
         const float x = static_cast<float>(GET_X_LPARAM(lParam));
         const float y = static_cast<float>(GET_Y_LPARAM(lParam));
+        const float contentY = impl_->HasTitlebar() ? y - kTitlebarHeight : y;
         if (impl_->previewFullscreen && impl_->windowKind == WindowKind::Main) {
             impl_->ExitPreviewFullscreen();
             return 0;
         }
         if (impl_->windowKind == WindowKind::Main && impl_->previewIsVideo &&
             impl_->IsVideoPreviewModuleVisible() &&
-            Contains(impl_->previewVideoBounds, x, y)) {
+            Contains(impl_->previewVideoBounds, x, contentY)) {
             impl_->EnterPreviewFullscreen();
             return 0;
         }
@@ -186,13 +189,16 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_MOUSELEAVE:
         impl_->mouse = {-1, -1};
+        impl_->titlebarMouse = {-1, -1};
         InvalidateRect(impl_->window, nullptr, FALSE);
         return 0;
     case WM_MOUSEWHEEL: {
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(impl_->window, &point);
         const int direction = GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? -3 : 3;
-        impl_->Scroll(static_cast<float>(point.x), static_cast<float>(point.y), direction);
+        const float contentY = impl_->HasTitlebar()
+            ? static_cast<float>(point.y) - kTitlebarHeight : static_cast<float>(point.y);
+        impl_->Scroll(static_cast<float>(point.x), contentY, direction);
         return 0;
     }
     case WM_CHAR:
@@ -229,7 +235,7 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 SetCursor(cursor);
                 return TRUE;
             }
-            if (impl_->HitTest(static_cast<float>(impl_->mouse.x), static_cast<float>(impl_->mouse.y))) {
+            if (impl_->HitTestContent(static_cast<float>(impl_->mouse.x), static_cast<float>(impl_->mouse.y))) {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
             }

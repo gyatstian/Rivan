@@ -52,6 +52,7 @@ public:
     void SetFilePreviewEnabled(bool enabled) override;
     void SetStartAtStartup(bool enabled) override;
     void SetExitToTray(bool enabled) override;
+    void SetModuleExpansionBehavior(ui::ModuleExpansionBehavior behavior) override;
     void SetYoutubeEnabled(bool enabled) override;
     void SetModuleLayout(ui::ModuleLayout layout) override;
     void SetDiscordEnabled(bool enabled) override;

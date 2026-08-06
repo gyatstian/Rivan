@@ -60,6 +60,8 @@ struct AppSettings final {
     bool discordShowArtist = true;
     bool discordShowImageText = true;
     bool discordShowGithubButton = false;
+    ui::ModuleExpansionBehavior moduleExpansionBehavior =
+        ui::ModuleExpansionBehavior::Squash;
 
     [[nodiscard]] static AppSettings Defaults();
 };

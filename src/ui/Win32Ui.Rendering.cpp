@@ -399,11 +399,20 @@ void Win32Ui::Impl::AddSettingHit(const D2D1_RECT_F& bounds, SettingCategory cat
     }
 
 [[nodiscard]] const Win32Ui::Impl::HitRegion* Win32Ui::Impl::HitTest(float x, float y) const noexcept {
-        for (auto iterator = hits.rbegin(); iterator != hits.rend(); ++iterator) {
-            if (Contains(iterator->bounds, x, y)) return &*iterator;
-        }
-        return nullptr;
+    for (auto iterator = hits.rbegin(); iterator != hits.rend(); ++iterator) {
+        if (Contains(iterator->bounds, x, y)) return &*iterator;
     }
+    return nullptr;
+}
+
+[[nodiscard]] const Win32Ui::Impl::HitRegion* Win32Ui::Impl::HitTestContent(float x, float y) const noexcept {
+    for (auto iterator = hits.rbegin(); iterator != hits.rend(); ++iterator) {
+        if (iterator->kind != HitKind::WindowControl && Contains(iterator->bounds, x, y)) {
+            return &*iterator;
+        }
+    }
+    return nullptr;
+}
 
 void Win32Ui::Impl::DrawText(std::wstring_view textValue, const D2D1_RECT_F& bounds,
                   ID2D1Brush* brush, IDWriteTextFormat* format,
@@ -522,16 +531,19 @@ void Win32Ui::Impl::DrawBevel(const D2D1_RECT_F& bounds, ID2D1Brush* fill, ID2D1
          if (model.activeSkin.appearance.showTitleBars) {
              DrawBevel(titleBar, raised, light, dark);
          }
-         target->FillRectangle(Rect(titleBar.left + 4, titleBar.top + 5, titleBar.left + 9,
-                                    titleBar.bottom - 5), green);
+         if (!module) {
+             target->FillRectangle(Rect(titleBar.left + 4, titleBar.top + 5, titleBar.left + 9,
+                                        titleBar.bottom - 5), green);
+         }
          const bool centered = model.activeSkin.appearance.centeredTitles;
          const auto& moduleLayout = moduleGesture != ModuleGesture::None
                                         ? moduleLayoutDraft : model.moduleLayout;
          const bool titleIsAlreadyATab = module && moduleLayout.IsTabbed(*module);
          if (!titleIsAlreadyATab) {
+             const float titleLeft = module ? titleBar.left + 4 : titleBar.left + 13;
+             const float titleRight = centered && !module ? titleBar.right - 13 : titleBar.right - 4;
              DrawText(titleValue,
-                      centered ? Rect(titleBar.left + 13, titleBar.top, titleBar.right - 13, titleBar.bottom)
-                               : Rect(titleBar.left + 13, titleBar.top, titleBar.right - 4, titleBar.bottom),
+                      Rect(titleLeft, titleBar.top, titleRight, titleBar.bottom),
                       green, headingFormat.Get(), centered ? DWRITE_TEXT_ALIGNMENT_CENTER
                                                            : DWRITE_TEXT_ALIGNMENT_LEADING);
          }
@@ -924,11 +936,6 @@ void Win32Ui::Impl::DrawMini(const D2D1_SIZE_F size,
         const auto bounds = Rect(4, 4, size.width - 4, size.height - 4);
         auto content = DrawPanel(bounds, L"RIVAN // SHADE MODE", b[1].Get(), b[2].Get(), b[3].Get(),
                                  b[4].Get(), b[13].Get(), b[7].Get());
-        const auto title = Rect(bounds.left + 4, bounds.top + 4, bounds.right - 4, bounds.top + 22);
-        Win32Ui::Impl::DrawWindowButton(Rect(title.right - 19, title.top + 2, title.right - 3, title.bottom - 2), L"X", 3,
-                         b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
-        Win32Ui::Impl::DrawWindowButton(Rect(title.right - 38, title.top + 2, title.right - 22, title.bottom - 2), L"^", 2,
-                         b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
         const auto lcd = Rect(content.left + 3, content.top + 3, content.right - 3, content.top + 49);
         // SCREEN: Mini-player LCD.
         Win32Ui::Impl::DrawBevel(lcd, b[5].Get(), b[3].Get(), b[4].Get(), true, 2.0F);
@@ -1369,8 +1376,56 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
           Win32Ui::Impl::DrawSkinDecor(size, 1);
         Win32Ui::Impl::DrawSkinDecor(size, 2);
         Win32Ui::Impl::FlushDeferredTexts();
-        Win32Ui::Impl::DrawImageSelection(size);
-    }
+          Win32Ui::Impl::DrawImageSelection(size);
+     }
+
+void Win32Ui::Impl::DrawTitlebar(const D2D1_SIZE_F size,
+                                 std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+         const auto bar = Rect(0.0F, 0.0F, size.width, std::min(kTitlebarHeight, size.height));
+         captionRect = bar;
+         titlebarControlBounds.clear();
+         if (Height(bar) <= 0.0F) return;
+
+         DrawBevel(bar, b[1].Get(), b[3].Get(), b[4].Get(), false, 1.0F);
+
+         const bool main = windowKind == WindowKind::Main;
+         const float controlsWidth = main ? 4.0F * kTitlebarButtonSize + 3.0F * 3.0F
+                                          : kTitlebarButtonSize;
+         const float controlsLeft = std::max(4.0F, size.width - controlsWidth - 4.0F);
+         const auto title = main ? std::wstring_view(L"RIVAN")
+                                 : std::wstring_view(options.title ? options.title : L"RIVAN");
+         DrawText(title, Rect(9.0F, 0.0F, controlsLeft - 6.0F, bar.bottom),
+                  b[13].Get(), headingFormat.Get());
+
+         float right = size.width - 4.0F;
+         const auto drawControl = [this, &right, &b](const wchar_t* label, std::uint64_t action) {
+             const auto bounds = Rect(right - kTitlebarButtonSize, 3.0F,
+                                      right, 3.0F + kTitlebarButtonSize);
+             DrawWindowButton(bounds, label, action, b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
+             titlebarControlBounds.push_back(bounds);
+             right -= kTitlebarButtonSize + 3.0F;
+         };
+
+         drawControl(L"X", 3);
+         if (main) {
+             drawControl(L"^", 2);
+             drawControl(L"_", 1);
+             const auto settings = Rect(right - kTitlebarButtonSize, 3.0F,
+                                        right, 3.0F + kTitlebarButtonSize);
+             const bool hot = Contains(settings, static_cast<float>(titlebarMouse.x),
+                                       static_cast<float>(titlebarMouse.y));
+             DrawBevel(settings, hot ? b[7].Get() : b[2].Get(), b[3].Get(), b[4].Get());
+             DrawText(L"\u2630", settings, hot ? b[8].Get() : b[13].Get(), headingFormat.Get(),
+                      DWRITE_TEXT_ALIGNMENT_CENTER);
+             AddIdHit(settings, HitKind::WindowControl, 4);
+             titlebarControlBounds.push_back(settings);
+         }
+     }
+
+[[nodiscard]] bool Win32Ui::Impl::HasTitlebar() const noexcept {
+    return !(windowKind == WindowKind::Main && previewFullscreen &&
+             previewIsVideo && IsVideoPreviewModuleVisible());
+}
 
 void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
                       std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
@@ -1379,10 +1434,7 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
         target->FillRectangle(Rect(0, 0, size.width, size.height), b[0].Get());
         auto content = DrawPanel(panel, L"RIVAN PREFERENCES", b[1].Get(), b[2].Get(), b[3].Get(),
                                  b[4].Get(), b[13].Get(), b[7].Get());
-        captionRect = Rect(panel.left + 4, panel.top + 4, content.right - 72, panel.top + 22);
-        Win32Ui::Impl::DrawButton(Rect(content.right - 67, content.top + 3, content.right - 3, content.top + 25), L"CLOSE",
-                   Command::ToggleSettings, b[2].Get(), b[1].Get(), b[3].Get(), b[4].Get(), b[9].Get());
-        const float navigationWidth = std::clamp(Width(content) * 0.24F, 145.0F, 230.0F);
+         const float navigationWidth = std::clamp(Width(content) * 0.24F, 145.0F, 230.0F);
         const auto navigation = Rect(content.left + 3, content.top + 31,
                                      content.left + navigationWidth, content.bottom - 3);
         // SCREEN: Preferences navigation list.
@@ -1564,8 +1616,23 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
         y += 34;
          Win32Ui::Impl::DrawText(L"Drag a title to move. Center drops create tabs; side drops snap.",
                   Rect(left, y, right, y + 28), b[6].Get(), tinyFormat.Get());
-        y += 36;
-        Win32Ui::Impl::DrawText(L"TRACK COVERS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+         y += 36;
+         Win32Ui::Impl::DrawText(L"EXPANDING BEHAVIOR ON NO SPACE", Rect(left, y, right, y + 25),
+                  b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+         y += 29;
+         SettingsButton(Rect(left, y, right, y + 24),
+                        model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
+                            ? L"ON EXPAND: SQUASH"
+                            : L"ON EXPAND: RESIZE",
+                        66, b);
+         y += 26;
+         Win32Ui::Impl::DrawText(
+             model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
+                 ? L"Shrinks other modules to make room."
+                 : L"Grows window, then restores size after collapse.",
+             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+         y += 22;
+         Win32Ui::Impl::DrawText(L"TRACK COVERS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
                  DWRITE_TEXT_ALIGNMENT_CENTER);
         y += 29;
         SettingsButton(Rect(left, y, right, y + 24),
@@ -1913,9 +1980,16 @@ void Win32Ui::Impl::Paint() {
         auto& brushes = UpdateBrushes();
         target->BeginDraw();
         const auto size = target->GetSize();
-        lastCanvas = size;
+        const bool fullscreen = previewFullscreen && previewIsVideo && IsVideoPreviewModuleVisible();
+        const bool hasTitlebar = !fullscreen;
+        const D2D1_SIZE_F canvasSize{
+            size.width, std::max(1.0F, size.height - (hasTitlebar ? kTitlebarHeight : 0.0F))};
+        lastCanvas = canvasSize;
         if (windowKind == WindowKind::Settings) {
-            Win32Ui::Impl::DrawSettings(size, brushes);
+            target->SetTransform(D2D1::Matrix3x2F::Translation(0.0F, kTitlebarHeight));
+            Win32Ui::Impl::DrawSettings(canvasSize, brushes);
+            target->SetTransform(D2D1::Matrix3x2F::Identity());
+            Win32Ui::Impl::DrawTitlebar(size, brushes);
         } else if (windowKind == WindowKind::SkinStudio) {
             if (studioSection == StudioSection::Colors &&
                 model.skinColorFocusRevision != seenColorFocusRevision) {
@@ -1945,7 +2019,10 @@ void Win32Ui::Impl::Paint() {
                     studioImageIndex = std::min(studioImageIndex, studioDraft.images.size() - 1);
                 }
             }
-            DrawSkinStudio(size, brushes);
+            target->SetTransform(D2D1::Matrix3x2F::Translation(0.0F, kTitlebarHeight));
+            DrawSkinStudio(canvasSize, brushes);
+            target->SetTransform(D2D1::Matrix3x2F::Identity());
+            Win32Ui::Impl::DrawTitlebar(size, brushes);
         } else {
             if (model.skinElementFocusRevision != seenElementFocusRevision) {
                 const int focused = model.focusedSkinElement;
@@ -1961,14 +2038,19 @@ void Win32Ui::Impl::Paint() {
                 seenElementFocusRevision = model.skinElementFocusRevision;
             }
             if (previewFullscreen && previewIsVideo && IsVideoPreviewModuleVisible()) {
+                captionRect = {};
+                titlebarControlBounds.clear();
                 Win32Ui::Impl::DrawPreviewFullscreenOverlay(size, brushes);
             } else {
                 previewFullscreen = false;
                  // The main modules remain usable at the reduced 320x200 window size.
                  // Only explicit mini-player mode switches to the compact renderer.
                  const bool compact = model.miniPlayer;
-                if (compact) DrawMini(size, brushes);
-                else Win32Ui::Impl::DrawFull(size, brushes);
+                target->SetTransform(D2D1::Matrix3x2F::Translation(0.0F, kTitlebarHeight));
+                if (compact) DrawMini(canvasSize, brushes);
+                else Win32Ui::Impl::DrawFull(canvasSize, brushes);
+                target->SetTransform(D2D1::Matrix3x2F::Identity());
+                Win32Ui::Impl::DrawTitlebar(size, brushes);
             }
         }
         const HRESULT result = target->EndDraw();
@@ -1978,8 +2060,20 @@ void Win32Ui::Impl::Paint() {
     }
 
 void Win32Ui::Impl::Resize(UINT width, UINT height) {
+        const D2D1_SIZE_F previousSize = lastCanvas;
+        const D2D1_SIZE_F newSize{static_cast<float>(width),
+                                  std::max(1.0F, static_cast<float>(height) -
+                                                        (HasTitlebar() ? kTitlebarHeight : 0.0F))};
         if (target && width != 0 && height != 0 &&
             FAILED(target->Resize(D2D1::SizeU(width, height)))) DiscardTarget();
+        if (windowKind == WindowKind::Main && !model.miniPlayer && !internalModuleResize &&
+            moduleGesture == ModuleGesture::None &&
+            model.moduleLayout.PreservePixelGeometry(previousSize.width, previousSize.height,
+                                                      newSize.width, newSize.height)) {
+            try { host.SetModuleLayout(model.moduleLayout); } catch (...) {}
+        }
+        if (internalModuleResize) internalModuleResize = false;
+        lastCanvas = newSize;
         InvalidateRect(window, nullptr, FALSE);
     }
 

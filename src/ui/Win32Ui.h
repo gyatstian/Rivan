@@ -17,8 +17,10 @@ struct WindowOptions {
     const wchar_t* title{L"Rivan"};
     int initialWidth{1180};
     int initialHeight{760};
-    int minimumWidth{320};
-    int minimumHeight{200};
+    // Main window modules scale with client area; minimum is only a usable drawing
+    // surface, never a module-size constraint.
+    int minimumWidth{120};
+    int minimumHeight{80};
     bool acceptFileDrops{true};
     HWND owner{};
     bool initiallyVisible{true};

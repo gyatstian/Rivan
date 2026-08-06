@@ -418,6 +418,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.discordShowArtist = settings_.Settings().discordShowArtist;
     out.discordShowImageText = settings_.Settings().discordShowImageText;
     out.discordShowGithubButton = settings_.Settings().discordShowGithubButton;
+    out.moduleExpansionBehavior = settings_.Settings().moduleExpansionBehavior;
     out.youtubeMusicSearch = settings_.Settings().youtubeMusicSearch;
     out.youtubeDownloadMode = settings_.Settings().youtubeDownloadMode;
     out.youtubeAudioQuality = settings_.Settings().youtubeAudioQuality;
@@ -453,8 +454,8 @@ void App::SetModuleLayout(ui::ModuleLayout layout) {
     for (auto& item : layout.items) {
         item.x = std::clamp(item.x, 0.0F, 1.0F);
         item.y = std::clamp(item.y, 0.0F, 1.0F);
-        item.width = std::clamp(item.width, item.collapsed ? 0.01F : 0.10F, 1.0F);
-        item.height = std::clamp(item.height, item.collapsed ? 0.01F : 0.10F, 1.0F);
+        item.width = std::clamp(item.width, item.collapsed ? 0.001F : 0.10F, 1.0F);
+        item.height = std::clamp(item.height, item.collapsed ? 0.001F : 0.10F, 1.0F);
         item.x = std::min(item.x, 1.0F - item.width);
         item.y = std::min(item.y, 1.0F - item.height);
         ui::ModuleLayout::SyncExpandedGeometry(item);
@@ -742,6 +743,17 @@ void App::SetExitToTray(bool enabled) {
     auto settings = settings_.Settings();
     if (settings.exitToTray == enabled) return;
     settings.exitToTray = enabled;
+    std::string error;
+    if (!settings_.SetSettings(settings, &error)) return;
+    (void)settings_.SaveSettings(&error);
+    ++revision_;
+    if (window_) window_->Refresh();
+}
+
+void App::SetModuleExpansionBehavior(ui::ModuleExpansionBehavior behavior) {
+    auto settings = settings_.Settings();
+    if (settings.moduleExpansionBehavior == behavior) return;
+    settings.moduleExpansionBehavior = behavior;
     std::string error;
     if (!settings_.SetSettings(settings, &error)) return;
     (void)settings_.SaveSettings(&error);

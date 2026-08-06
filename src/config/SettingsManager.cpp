@@ -292,6 +292,9 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     document.Set("playback", "volume_percent", std::to_string(settings.volumePercent));
     document.Set("appearance", "skin", settings.skinId);
     document.Set("appearance", "track_covers_enabled", BoolText(settings.trackCoverArtEnabled));
+    document.Set("appearance", "module_expansion_behavior",
+                 settings.moduleExpansionBehavior == ui::ModuleExpansionBehavior::Resize
+                     ? "resize" : "squash");
     document.Set("library", "file_preview_enabled", BoolText(settings.filePreviewEnabled));
     document.Set("application", "start_at_startup", BoolText(settings.startAtStartup));
     document.Set("application", "exit_to_tray", BoolText(settings.exitToTray));
@@ -476,7 +479,16 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
         }
     }
     ReadBoolField(*document, "appearance", "track_covers_enabled",
-                  settings_.trackCoverArtEnabled, warnings);
+                   settings_.trackCoverArtEnabled, warnings);
+    if (const auto behavior = document->Get("appearance", "module_expansion_behavior")) {
+        if (*behavior == "squash") {
+            settings_.moduleExpansionBehavior = ui::ModuleExpansionBehavior::Squash;
+        } else if (*behavior == "resize") {
+            settings_.moduleExpansionBehavior = ui::ModuleExpansionBehavior::Resize;
+        } else {
+            AddWarning(warnings, "Ignoring invalid appearance.module_expansion_behavior");
+        }
+    }
     ReadBoolField(*document, "youtube", "enabled", settings_.youtubeEnabled, warnings);
     ReadBoolField(*document, "youtube", "music_search", settings_.youtubeMusicSearch,
                   warnings);
@@ -561,8 +573,8 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
         const std::string key = "module_" + std::to_string(i) + "_";
         ReadFloatField(*document, "modules", key + "x", 0.0F, 1.0F, item.x, warnings);
         ReadFloatField(*document, "modules", key + "y", 0.0F, 1.0F, item.y, warnings);
-        ReadFloatField(*document, "modules", key + "width", 0.01F, 1.0F, item.width, warnings);
-        ReadFloatField(*document, "modules", key + "height", 0.01F, 1.0F, item.height, warnings);
+        ReadFloatField(*document, "modules", key + "width", 0.001F, 1.0F, item.width, warnings);
+        ReadFloatField(*document, "modules", key + "height", 0.001F, 1.0F, item.height, warnings);
         ReadBoolField(*document, "modules", key + "visible", item.visible, warnings);
         if (const auto dock = document->Get("modules", key + "dock")) {
             if (*dock == "snapped") item.dockState = ui::ModuleDockState::Snapped;

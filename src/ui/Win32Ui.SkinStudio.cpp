@@ -119,7 +119,7 @@ void Win32Ui::Impl::SettingsButton(const D2D1_RECT_F& bounds, const std::wstring
 // 9 cycle download format (MP3/Original/Video), 10/11 video height, 14 file preview,
 // 15 start at startup, 16 exit to tray, 17 duplicate mode, 18 Discord rich presence,
 // 22 track covers, 23 Discord GitHub repo button, 60-64 module visibility,
-// 65 restores the default module layout.
+// 65 restores default module layout, 66 toggles expansion behavior.
 void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
     try {
         if (action >= 100 && action < 200) {
@@ -218,6 +218,11 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         }
         case 65:
             host.SetModuleLayout(ModuleLayout::Defaults());
+            break;
+        case 66:
+            host.SetModuleExpansionBehavior(
+                model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
+                    ? ModuleExpansionBehavior::Resize : ModuleExpansionBehavior::Squash);
             break;
         case 50:
             // Youtube search GO button (main library pane).
@@ -730,11 +735,7 @@ void Win32Ui::Impl::DrawSkinStudio(const D2D1_SIZE_F size,
     studioPanelBounds = panel;
     auto content = DrawPanel(panel, L"SKIN STUDIO", b[1].Get(), b[2].Get(), b[3].Get(),
                              b[4].Get(), b[13].Get(), b[7].Get());
-    captionRect = Rect(panel.left + 4, panel.top + 4, content.right - 67, panel.top + 22);
-    StudioButton(Rect(content.right - 62, content.top + 3, content.right - 3, content.top + 24),
-                 L"CLOSE", 2, b);
-
-    // Left icon rail: one button per customization section.
+     // Left icon rail: one button per customization section.
     const float railWidth = std::clamp(Width(content) * 0.16F, 62.0F, 105.0F);
     const auto rail = Rect(content.left + 2, content.top + 30, content.left + 2 + railWidth,
                            content.bottom - 30);
