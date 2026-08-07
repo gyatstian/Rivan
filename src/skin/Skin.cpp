@@ -3,6 +3,7 @@
 #include "Skin.h"
 
 #include "../core/IniDocument.h"
+#include "../core/IniValueCodec.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -128,38 +129,9 @@ std::string FormatFloat(float value) {
     return status == std::errc{} ? std::string(buffer.data(), end) : "0";
 }
 
-std::optional<std::string> PathToUtf8(const std::filesystem::path& path) {
-    const std::wstring native = path.wstring();
-    if (native.empty()) return std::string{};
-    const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, native.data(),
-                                              static_cast<int>(native.size()), nullptr, 0,
-                                              nullptr, nullptr);
-    if (required <= 0) return std::nullopt;
-    std::string result(static_cast<std::size_t>(required), '\0');
-    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, native.data(),
-                            static_cast<int>(native.size()), result.data(), required,
-                            nullptr, nullptr) != required) return std::nullopt;
-    return result;
-}
-
-std::optional<std::filesystem::path> PathFromUtf8(std::string_view value) {
-    if (value.empty()) return std::filesystem::path{};
-    if (value.find('\0') != std::string_view::npos ||
-        value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) return std::nullopt;
-    const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                                              static_cast<int>(value.size()), nullptr, 0);
-    if (required <= 0) return std::nullopt;
-    std::wstring result(static_cast<std::size_t>(required), L'\0');
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
-                            static_cast<int>(value.size()), result.data(), required) != required) {
-        return std::nullopt;
-    }
-    return std::filesystem::path(result);
-}
-
 bool IsSafeAssetPath(const std::filesystem::path& path) {
     if (path.empty()) return true;
-    const auto utf8 = PathToUtf8(path);
+    const auto utf8 = core::PathToUtf8(path);
     if (!utf8 || utf8->size() > kMaximumAssetPathBytes || path.is_absolute() || path.has_root_path()) {
         return false;
     }
@@ -304,7 +276,7 @@ std::optional<Skin> Skin::LoadManifest(
         result.typography.fontFamily = *font;
     }
     if (const auto file = document->Get("font", "custom_file")) {
-        auto parsed = PathFromUtf8(*file);
+        auto parsed = core::PathFromUtf8(*file);
         if (!parsed) {
             SetError(error, "Skin manifest has an invalid font.custom_file");
             return std::nullopt;
@@ -347,7 +319,7 @@ std::optional<Skin> Skin::LoadManifest(
         return std::nullopt;
     }
     if (const auto path = document->Get("appearance", "background_image")) {
-        auto parsed = PathFromUtf8(*path);
+        auto parsed = core::PathFromUtf8(*path);
         if (!parsed) {
             SetError(error, "Skin manifest has an invalid appearance.background_image");
             return std::nullopt;
@@ -472,7 +444,7 @@ std::optional<Skin> Skin::LoadManifest(
                 SetError(error, "Skin manifest is missing an image field");
                 return std::nullopt;
             }
-            auto parsedFile = PathFromUtf8(*file);
+            auto parsedFile = core::PathFromUtf8(*file);
             const auto parsedX = ParseFloat(*x);
             const auto parsedY = ParseFloat(*y);
             const auto parsedWidth = ParseFloat(*width);
@@ -570,14 +542,16 @@ bool Skin::SaveManifestAtomic(
         document.Set("colors", std::string(field.key), FormatColor(colors.*(field.member)));
     }
     document.Set("font", "family", typography.fontFamily);
-    document.Set("font", "custom_file", PathToUtf8(typography.customFontFile).value_or(std::string{}));
+    document.Set("font", "custom_file",
+                 core::PathToUtf8(typography.customFontFile).value_or(std::string{}));
     document.Set("font", "base_size", FormatFloat(typography.baseSize));
     document.Set("font", "border_size", FormatFloat(typography.borderSize));
     document.Set("appearance", "transparent_buttons", BoolText(appearance.transparentButtons));
     document.Set("appearance", "show_title_bars", BoolText(appearance.showTitleBars));
     document.Set("appearance", "show_panel_borders", BoolText(appearance.showPanelBorders));
     document.Set("appearance", "decor_above_panels", BoolText(appearance.decorAbovePanels));
-    document.Set("appearance", "background_image", PathToUtf8(appearance.backgroundImage).value_or(std::string{}));
+    document.Set("appearance", "background_image",
+                 core::PathToUtf8(appearance.backgroundImage).value_or(std::string{}));
     document.Set("appearance", "background_image_opacity", FormatFloat(appearance.backgroundImageOpacity));
     document.Set("appearance", "panel_opacity", FormatFloat(appearance.panelOpacity));
     document.Set("appearance", "screen_opacity", FormatFloat(appearance.screenOpacity));
@@ -606,7 +580,8 @@ bool Skin::SaveManifestAtomic(
     for (std::size_t index = 0; index < images.size(); ++index) {
         const std::string prefix = "image" + std::to_string(index) + ".";
         const auto& image = images[index];
-        document.Set("images", prefix + "file", PathToUtf8(image.file).value_or(std::string{}));
+        document.Set("images", prefix + "file",
+                     core::PathToUtf8(image.file).value_or(std::string{}));
         document.Set("images", prefix + "x", FormatFloat(image.x));
         document.Set("images", prefix + "y", FormatFloat(image.y));
         document.Set("images", prefix + "width", FormatFloat(image.width));

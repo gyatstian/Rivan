@@ -2,7 +2,13 @@
 #pragma once
 // Native Win32/Direct2D presentation styled after late-90s desktop audio players.
 #include "Win32Ui.h"
-#include "UiModule.h"
+#include "layout/ModuleLayout.h"
+#include "layout/ModulePixelGeometry.h"
+#include "Win32UiModuleState.h"
+#include "Win32UiSkinStudioState.h"
+#include "Win32UiRenderState.h"
+#include "Win32UiPreviewState.h"
+#include "Win32UiPlaylistState.h"
 
 #include "../resource.h"
 #include "../visualization/VisualizationRenderer.h"
@@ -90,218 +96,6 @@ constexpr std::size_t kMaximumTrackCoverCacheEntries = 96;
 constexpr int kResizeBorder = 6;
 constexpr float kTitlebarHeight = 28.0F;
 constexpr float kTitlebarButtonSize = 22.0F;
-// Keep a small strip of client background around modules which touch the main
-// window boundary.  The strip is deliberately pixel-based so it remains useful
-// at every window size and leaves the module edge reachable for resizing.
-constexpr float kModuleWindowGap = 8.0F;
-constexpr float kModuleCollapseZonePixels = 12.0F;
-// Every collapse affordance uses this same compact control size.  Its long axis
-// follows its expanded panel so it remains proportional when that panel is resized.
-constexpr float kModuleCollapseHandleWidthFraction = 0.20F;
-constexpr float kModuleCollapseHandleHeight = 18.0F;
-constexpr float kCollapsedHandleDragThreshold = 8.0F;
-
-[[nodiscard]] float ModuleCollapseHandleTrackThickness(ModuleCollapseSide side,
-                                                         D2D1_SIZE_F size) noexcept {
-    const bool verticalHandle = side == ModuleCollapseSide::Left ||
-                                 side == ModuleCollapseSide::Right;
-    const float extent = std::max(1.0F, verticalHandle ? size.width : size.height);
-    return 2.0F * kModuleCollapseHandleHeight / extent;
-}
-
-[[nodiscard]] D2D1_RECT_F ModuleRawPixelBounds(const ModuleLayoutItem& item,
-                                                 D2D1_SIZE_F size) noexcept {
-    const float width = std::max(0.0F, size.width);
-    const float height = std::max(0.0F, size.height);
-    const float left = item.x * width;
-    const float top = item.y * height;
-    const float right = (item.x + item.width) * width;
-    const float bottom = (item.y + item.height) * height;
-    return D2D1::RectF(left, top, std::max(left, right), std::max(top, bottom));
-}
-
-[[nodiscard]] D2D1_RECT_F ModulePixelBounds(const ModuleLayoutItem& item,
-                                             D2D1_SIZE_F size) noexcept {
-    auto bounds = ModuleRawPixelBounds(item, size);
-
-    // Layout coordinates are normalized and may have accumulated tiny floating
-    // point errors after a drag. Treat values very close to the boundary as
-    // touching it, while leaving adjacent module edges unchanged.
-    constexpr float kBoundaryTolerance = 0.0001F;
-    const float width = std::max(0.0F, size.width);
-    const float height = std::max(0.0F, size.height);
-    const float horizontalGap = std::min(kModuleWindowGap, width * 0.25F);
-    const float verticalGap = std::min(kModuleWindowGap, height * 0.25F);
-    if (item.x <= kBoundaryTolerance) bounds.left += horizontalGap;
-    if (item.y <= kBoundaryTolerance) bounds.top += verticalGap;
-    if (item.x + item.width >= 1.0F - kBoundaryTolerance) bounds.right -= horizontalGap;
-    if (item.y + item.height >= 1.0F - kBoundaryTolerance) bounds.bottom -= verticalGap;
-    return D2D1::RectF(bounds.left, bounds.top,
-                       std::max(bounds.left, bounds.right),
-                       std::max(bounds.top, bounds.bottom));
-}
-
-[[nodiscard]] D2D1_RECT_F ModuleCollapseHandleBounds(const ModuleLayoutItem& item,
-                                                     D2D1_SIZE_F size) noexcept {
-    const float width = std::max(1.0F, size.width);
-    const float height = std::max(1.0F, size.height);
-    const bool verticalHandle = item.collapseSide == ModuleCollapseSide::Left ||
-                                item.collapseSide == ModuleCollapseSide::Right;
-    const bool outsideModuleCollapse = item.collapseMode == ModuleCollapseMode::Outside &&
-                                       !item.collapseTargetIsWindow;
-
-    float left = 0.0F;
-    float top = 0.0F;
-    float actualWidth = 0.0F;
-    float actualHeight = 0.0F;
-    if (item.collapsed) {
-        if (!(item.width > 0.0F) || !(item.height > 0.0F)) return {};
-        // A collapsed module's current rectangle is the persisted handle rectangle.
-        // Keep this path independent from the expanded module so the handle remains
-        // in the exact place where the collapse operation put it.
-        ModuleLayoutItem handleGeometry = item;
-        const auto handleRegion = ModuleRawPixelBounds(handleGeometry, size);
-        const float centerX = (handleRegion.left + handleRegion.right) * 0.5F;
-        const float centerY = (handleRegion.top + handleRegion.bottom) * 0.5F;
-        const bool hasTargetGap = item.collapseMode == ModuleCollapseMode::Inside &&
-                                  !item.collapseTargetIsWindow;
-        if (hasTargetGap) {
-            // Stored track contains equal button and target-gap halves.
-            const float storedWidth = std::max(0.0F, handleRegion.right - handleRegion.left);
-            const float storedHeight = std::max(0.0F, handleRegion.bottom - handleRegion.top);
-            const float expectedWidth = verticalHandle
-                ? std::min(width, kModuleCollapseHandleHeight) : storedWidth;
-            const float expectedHeight = verticalHandle
-                ? storedHeight : std::min(height, kModuleCollapseHandleHeight);
-            actualWidth = verticalHandle
-                ? (storedWidth > expectedWidth * 1.5F ? expectedWidth : storedWidth * 0.5F)
-                : storedWidth;
-            actualHeight = verticalHandle
-                ? storedHeight
-                : (storedHeight > expectedHeight * 1.5F ? expectedHeight : storedHeight * 0.5F);
-        } else {
-            // Other handles retain normal orientation-specific control size.
-            const float expandedWidth = item.expandedWidth > 0.0F
-                ? item.expandedWidth * width : 0.0F;
-            const float expandedHeight = item.expandedHeight > 0.0F
-                ? item.expandedHeight * height : 0.0F;
-            actualWidth = verticalHandle
-                ? std::min(width, kModuleCollapseHandleHeight)
-                : std::min(width, expandedWidth * kModuleCollapseHandleWidthFraction);
-            actualHeight = verticalHandle
-                ? std::min(height, expandedHeight * kModuleCollapseHandleWidthFraction)
-                : std::min(height, kModuleCollapseHandleHeight);
-        }
-        switch (item.collapseSide) {
-        case ModuleCollapseSide::Left:
-            left = outsideModuleCollapse ? handleRegion.right - actualWidth : handleRegion.left;
-            top = centerY - actualHeight * 0.5F;
-            break;
-        case ModuleCollapseSide::Right:
-            left = outsideModuleCollapse ? handleRegion.left : handleRegion.right - actualWidth;
-            top = centerY - actualHeight * 0.5F;
-            break;
-        case ModuleCollapseSide::Top:
-            left = centerX - actualWidth * 0.5F;
-            top = outsideModuleCollapse ? handleRegion.bottom - actualHeight : handleRegion.top;
-            break;
-        case ModuleCollapseSide::Bottom:
-            left = centerX - actualWidth * 0.5F;
-            top = outsideModuleCollapse ? handleRegion.top : handleRegion.bottom - actualHeight;
-            break;
-        case ModuleCollapseSide::None:
-            left = centerX - actualWidth * 0.5F;
-            top = centerY - actualHeight * 0.5F;
-            break;
-        }
-    } else {
-        // Module-edge outside collapses move the control to the panel's outer edge
-        // after expansion. Window and inside collapses retain their inward-facing
-        // control so their existing edge behavior stays unchanged.
-        const auto moduleRegion = ModulePixelBounds(item, size);
-        const bool hasTargetGap = item.collapseMode == ModuleCollapseMode::Inside &&
-                                  !item.collapseTargetIsWindow;
-        if (hasTargetGap) {
-            // Match collapsed button size. Remaining track half is target gap.
-            const float storedWidth = item.handleWidth * width;
-            const float storedHeight = item.handleHeight * height;
-            const float expectedWidth = verticalHandle
-                ? std::min(width, kModuleCollapseHandleHeight) : storedWidth;
-            const float expectedHeight = verticalHandle
-                ? storedHeight : std::min(height, kModuleCollapseHandleHeight);
-            actualWidth = verticalHandle
-                ? (storedWidth > expectedWidth * 1.5F ? expectedWidth : storedWidth * 0.5F)
-                : storedWidth;
-            actualHeight = verticalHandle
-                ? storedHeight
-                : (storedHeight > expectedHeight * 1.5F ? expectedHeight : storedHeight * 0.5F);
-        } else {
-            const auto rawModuleRegion = ModuleRawPixelBounds(item, size);
-            const float moduleWidth = std::max(0.0F, rawModuleRegion.right - rawModuleRegion.left);
-            const float moduleHeight = std::max(0.0F, rawModuleRegion.bottom - rawModuleRegion.top);
-            actualWidth = verticalHandle
-                ? std::min(width, kModuleCollapseHandleHeight)
-                : std::min(width, moduleWidth * kModuleCollapseHandleWidthFraction);
-            actualHeight = verticalHandle
-                ? std::min(height, moduleHeight * kModuleCollapseHandleWidthFraction)
-                : std::min(height, kModuleCollapseHandleHeight);
-        }
-        switch (item.collapseSide) {
-        case ModuleCollapseSide::Left:
-            left = outsideModuleCollapse ? moduleRegion.left - actualWidth : moduleRegion.right;
-            top = (moduleRegion.top + moduleRegion.bottom - actualHeight) * 0.5F;
-            break;
-        case ModuleCollapseSide::Right:
-            left = outsideModuleCollapse ? moduleRegion.right : moduleRegion.left - actualWidth;
-            top = (moduleRegion.top + moduleRegion.bottom - actualHeight) * 0.5F;
-            break;
-        case ModuleCollapseSide::Top:
-            left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
-            top = outsideModuleCollapse ? moduleRegion.top - actualHeight : moduleRegion.bottom;
-            break;
-        case ModuleCollapseSide::Bottom:
-            left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
-            top = outsideModuleCollapse ? moduleRegion.bottom : moduleRegion.top - actualHeight;
-            break;
-        case ModuleCollapseSide::None:
-            left = (moduleRegion.left + moduleRegion.right - actualWidth) * 0.5F;
-            top = (moduleRegion.top + moduleRegion.bottom - actualHeight) * 0.5F;
-            break;
-        }
-    }
-    if (!(actualWidth > 0.0F) || !(actualHeight > 0.0F)) return {};
-    left = std::clamp(left, 0.0F, std::max(0.0F, width - actualWidth));
-    top = std::clamp(top, 0.0F, std::max(0.0F, height - actualHeight));
-    return D2D1::RectF(left, top, left + actualWidth, top + actualHeight);
-}
-
-[[nodiscard]] const wchar_t* ModuleCollapseArrow(ModuleCollapseSide side) noexcept {
-    switch (side) {
-    case ModuleCollapseSide::Left: return L"\u25C0";
-    case ModuleCollapseSide::Right: return L"\u25B6";
-    case ModuleCollapseSide::Top: return L"\u25B2";
-    case ModuleCollapseSide::Bottom: return L"\u25BC";
-    case ModuleCollapseSide::None: break;
-    }
-    return L"\u25A0";
-}
-
-[[nodiscard]] const wchar_t* ModuleCollapseArrow(const ModuleLayoutItem& item) noexcept {
-    ModuleCollapseSide direction = item.collapseSide;
-    const bool outsideModuleCollapse = item.collapseMode == ModuleCollapseMode::Outside &&
-                                       !item.collapseTargetIsWindow;
-    if (item.collapsed != outsideModuleCollapse) {
-        switch (direction) {
-        case ModuleCollapseSide::Left: direction = ModuleCollapseSide::Right; break;
-        case ModuleCollapseSide::Right: direction = ModuleCollapseSide::Left; break;
-        case ModuleCollapseSide::Top: direction = ModuleCollapseSide::Bottom; break;
-        case ModuleCollapseSide::Bottom: direction = ModuleCollapseSide::Top; break;
-        case ModuleCollapseSide::None: break;
-        }
-    }
-    return ModuleCollapseArrow(direction);
-}
-
 [[nodiscard]] HICON LoadRivanIcon(HINSTANCE instance, int width, int height) noexcept {
     HICON icon = reinterpret_cast<HICON>(LoadImageW(
         instance, MAKEINTRESOURCEW(IDI_RIVAN), IMAGE_ICON, width, height, LR_DEFAULTCOLOR | LR_SHARED));
@@ -463,7 +257,8 @@ void ColorToHsv(skin::Color color, float& hue, float& saturation, float& value) 
 
 } // namespace
 
-struct Win32Ui::Impl {
+struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
+                       Win32UiRenderState, Win32UiPreviewState, Win32UiPlaylistState {
     enum class HitKind : std::uint8_t {
         Command, Playlist, PlaylistToggle, Track, Seek, Volume, Setting,
         PlaylistSearch, WindowControl, Studio, Refresh, SettingsAction, TimeToggle,
@@ -474,43 +269,6 @@ struct Win32Ui::Impl {
         // Playlist Editor bottom-row buttons and the tree "new playlist" (+) button.
         EditorAdd, EditorRemove, NewPlaylist
     };
-    enum class SearchTarget : std::uint8_t { None, Playlist };
-    enum class StudioAction : std::uint64_t {
-        AddRectangle = 20,
-        AddEllipse = 21,
-        AddLine = 22,
-        ToggleShapeFill = 23,
-        ImportImage = 30,
-        SelectColors = 80,
-        SelectGeneral = 81,
-        SelectElements = 84,
-        ShowElementEditor = 85,
-        ShowLayers = 86,
-        ToggleImageOverPanels = 122,
-        ToggleImageOverScreens = 123,
-        ToggleShapeOverScreens = 148,
-        ToggleShapeOverPanels = 149,
-        ScreenEyedropper = 91,
-        OpenShapeRecolor = 151,
-        OpenImageTint = 152,
-        ClearImageTint = 153,
-        ElementEyedropper = 154,
-        ElementHexEdit = 155,
-    };
-
-    // Color picker can edit palette slots (Colors section) or decor recolor/tint (Elements).
-    enum class StudioColorTarget : std::uint8_t { Palette, Shape, ImageTint };
-
-    static constexpr std::uint64_t kSelectColorBase = 300;
-    static constexpr std::uint64_t kOpenColorPickerBase = 400;
-    static constexpr std::uint64_t kSelectImageBase = 500;
-    static constexpr std::uint64_t kSelectShapeBase = 1000;
-    static constexpr std::uint64_t kSelectLayerBase = 1200;
-
-    [[nodiscard]] static constexpr std::uint64_t Action(StudioAction action) noexcept {
-        return static_cast<std::uint64_t>(action);
-    }
-
     struct HitRegion {
         D2D1_RECT_F bounds{};
         HitKind kind{HitKind::Command};
@@ -530,260 +288,22 @@ struct Win32Ui::Impl {
     WindowOptions options{};
     HWND window{};
     HINSTANCE instance{};
-    ComPtr<ID2D1Factory> d2dFactory;
-    ComPtr<IDWriteFactory> writeFactory;
-    ComPtr<ID2D1HwndRenderTarget> target;
-    ComPtr<IDWriteTextFormat> regularFormat;
-    ComPtr<IDWriteTextFormat> smallFormat;
-    ComPtr<IDWriteTextFormat> tinyFormat;
-    ComPtr<IDWriteTextFormat> headingFormat;
-    ComPtr<IDWriteTextFormat> digitalFormat;
-    ComPtr<IDWriteTextFormat> studioIconFormat;
-    ComPtr<IWICImagingFactory> wicFactory;
-    // Persistent solid brushes; colors updated in place each paint (no COM recreate).
-    std::array<ComPtr<ID2D1SolidColorBrush>, 14> solidBrushes;
-    visualization::VisualizationRenderer visualizationRenderer;
-    // Cache of decoded skin images keyed by resolved absolute path. Reset when the
-    // render target is recreated (device-dependent bitmaps).
-    std::map<std::wstring, ComPtr<ID2D1Bitmap>> imageCache;
-    struct TrackCoverCacheEntry {
-        ComPtr<ID2D1Bitmap> bitmap;
-        std::uint64_t lastUsed{};
-    };
-    // Covers are decoded directly to display size and bounded, including no-cover paths.
-    // This prevents repeated Shell extraction and retains only a small GPU cache.
-    std::map<std::wstring, TrackCoverCacheEntry> trackCoverCache;
-    std::uint64_t trackCoverUseCounter{};
-    // Shell artwork extraction can touch disk. Admit one uncached path per interval so
-    // scrolling remains responsive even when a library has no embedded covers.
-    std::chrono::steady_clock::time_point nextTrackCoverLookup{};
-    struct DecorRef {
-        bool image{};
-        std::size_t index{};
-        std::uint8_t priority{};
-    };
-    UINT currentTimerMs{};
-    ComPtr<ID2D1SolidColorBrush> decorBrush;
-    std::uint64_t cachedTrackRowsRevision{~std::uint64_t{0}};
-    std::wstring cachedTrackRowsQuery;
-    std::vector<const TrackView*> cachedTrackRows;
-    struct CachedSectionRow {
-        bool header{};
-        std::wstring label;
-        const TrackView* track{};
-    };
-    std::uint64_t cachedSectionRowsRevision{~std::uint64_t{0}};
-    std::wstring cachedSectionRowsQuery;
-    std::vector<CachedSectionRow> cachedSectionRows;
-    std::uint64_t cachedPlaylistDurationRevision{~std::uint64_t{0}};
-    double cachedPlaylistDuration{};
-    // Font signature (family|customFile|baseSize) used to rebuild text formats only
-    // when the active skin's typography actually changes.
-    std::wstring fontSignature;
     UiModel model;
     std::vector<HitRegion> hits;
     struct ColorFocusRegion { D2D1_RECT_F bounds{}; std::size_t index{}; };
     std::vector<ColorFocusRegion> colorFocusRegions;
-    std::array<ID2D1Brush*, 14> currentBrushes{};
-    std::vector<D2D1_RECT_F> screenBounds;
-    std::vector<D2D1_RECT_F> panelBounds;
-    // Bounds of the built-in top-level modules in the current layout. These are kept
-    // separately from generic skin panel bounds so future layout code can identify a
-    // section without changing the existing decor masking behaviour.
-    struct ModuleRegion {
-        ModuleId id{ModuleId::Rivan};
-        D2D1_RECT_F bounds{};
-    };
-    std::vector<ModuleRegion> moduleRegions;
-    std::vector<D2D1_RECT_F> decorControlBounds;
-    bool registerScreenBounds{true};
-    struct DeferredText {
-        std::wstring value;
-        D2D1_RECT_F bounds{};
-        ID2D1Brush* brush{};
-        IDWriteTextFormat* format{};
-        DWRITE_TEXT_ALIGNMENT alignment{DWRITE_TEXT_ALIGNMENT_LEADING};
-        DWRITE_PARAGRAPH_ALIGNMENT vertical{DWRITE_PARAGRAPH_ALIGNMENT_CENTER};
-    };
-    std::vector<DeferredText> deferredTexts;
-    bool deferTexts{};
-    std::wstring playlistQuery;
-    bool playlistQuerySelectAll{};
-
-    bool previewFullscreen{};
-    std::wstring previewPath;
-    D2D1_RECT_F previewVideoBounds{};
-    D2D1_RECT_F previewFullscreenCloseBounds{};
-    ComPtr<ID2D1Bitmap> previewBitmap;
-    std::jthread previewWorker;
-    std::mutex previewFrameMutex;
-    std::mutex previewRequestMutex;
-    std::condition_variable_any previewWake;
-    std::wstring requestedPreviewPath;
-    std::uint64_t requestedPreviewGeneration{};
-    std::vector<BYTE> pendingPreviewPixels;
-    UINT pendingPreviewWidth{};
-    UINT pendingPreviewHeight{};
-    UINT pendingPreviewStride{};
-    std::atomic<double> previewWantedSeconds{0.0};
-    std::atomic<std::uint64_t> pendingPreviewFrameVersion{};
-    std::atomic_bool previewWorkerFailed{false};
-    std::uint64_t uploadedPreviewFrameVersion{};
-    bool previewIsVideo{};
-    bool previewHasPresentedFrame{};
-    SearchTarget activeSearch{SearchTarget::None};
-    std::size_t playlistScroll{};
-    std::size_t playlistSearchScroll{};
-    std::size_t playlistRows{};
-    std::size_t playlistSearchRows{};
-    D2D1_RECT_F playlistListBounds{};
-    D2D1_RECT_F playlistSearchBounds{};
-    D2D1_RECT_F treeListBounds{};
-    // Folder-tree row hit target for expand/collapse; scroll offset for the tree list.
-    std::size_t treeScroll{};
     // Draggable application titlebar region reported as HTCAPTION so the borderless
     // window can be moved independently of the module layout.
-    D2D1_RECT_F captionRect{};
-    std::vector<D2D1_RECT_F> titlebarControlBounds;
-    POINT titlebarMouse{-1, -1};
     bool draggingSeek{};
     bool draggingVolume{};
     // Player LCD time readout toggles between elapsed and remaining on click.
     bool showRemaining{};
     POINT mouse{-1, -1};
 
-    // ---- Track / playlist multi-selection, drag reorder, inline naming ------
-    // Selected track positions (indices into model.tracks). Shared by the Playlist
-    // Editor and the Library current-folder pane since both render the same list.
-    std::set<std::size_t> trackSelection;
-    // Anchor for shift-range track selection; npos when none.
-    std::size_t trackAnchor{static_cast<std::size_t>(-1)};
-    // Playlist id the current track selection belongs to; selection resets when it changes.
-    std::uint64_t trackSelectionPlaylist{};
-    // Model index of the row that was playing on the previous paint. Lets a click-to-play
-    // mono-selection follow playback instead of leaving a stale highlight behind when the
-    // transport auto-advances to the next track. npos when nothing was playing.
-    std::size_t lastPlayingModelIndex{static_cast<std::size_t>(-1)};
-    // Selected library-tree playlist ids (multi-select for reorder / delete).
-    std::set<std::uint64_t> playlistSelection;
-    std::uint64_t playlistAnchorId{};
-
-    // Pointer-drag state machine. A press on a row arms a "maybe" drag; motion past a
-    // threshold promotes it to an active drag; release either reorders (drag) or
-    // activates/selects (click).
-    enum class DragKind : std::uint8_t { None, Track, Playlist };
-    DragKind dragKind{DragKind::None};
-    bool dragActive{};  // promoted past the movement threshold
-    D2D1_POINT_2F dragStart{};
-    std::size_t dragTrackIndex{static_cast<std::size_t>(-1)};
-    std::uint64_t dragTrackPlaylistId{};
-    std::uint64_t dragPlaylistId{};
-    // Sibling-group key of the dragged row, so reorder snaps only within its group.
-    std::uint64_t dragPlaylistParent{};
-    // Pending single-click activation resolved on release when no drag occurred.
-    bool pendingTrackActivate{};
-    std::uint64_t pendingTrackActivateId{};
-    // Current drop insertion row (track list) / target playlist id, for the indicator.
-    std::size_t dropTrackIndex{static_cast<std::size_t>(-1)};
-    std::uint64_t dropBeforePlaylistId{};
-    // Folder row accepting the dragged folder as a child. Mutually exclusive with
-    // dropBeforePlaylistId/dropAtPlaylistEnd, which represent sibling ordering.
-    std::uint64_t dropIntoPlaylistId{};
-    bool dropAtPlaylistEnd{};
-
-    // Main-window module drag state. Module bounds are normalized in ModuleLayout;
-    // pointer coordinates remain in client pixels while the gesture is active.
-    std::optional<ModuleId> draggingModule;
-    enum class ModuleGesture : std::uint8_t { None, Move, Resize };
-    ModuleGesture moduleGesture{ModuleGesture::None};
-    bool moduleResizeRight{};
-    bool moduleResizeBottom{};
-    bool moduleResizeLeft{};
-    bool moduleResizeTop{};
-    bool moduleDragActive{};
-    bool moduleDetachTabOnMove{};
-    bool moduleMoveTabbedGroup{};
-    bool moduleMoveSnapGroup{};
-    ModuleId moduleDragSnapRoot{ModuleId::Rivan};
-    D2D1_POINT_2F moduleDragStart{};
-    D2D1_POINT_2F moduleDragOffset{};
-    std::optional<ModuleId> moduleDropTarget;
-    ModuleDropZone moduleDropZone{ModuleDropZone::None};
-    ModuleWindowDropZone moduleWindowDropZone{ModuleWindowDropZone::None};
-    std::optional<ModuleId> moduleCollapseTarget;
-    ModuleCollapseSide moduleCollapseSide{ModuleCollapseSide::None};
-    ModuleCollapseMode moduleCollapseMode{ModuleCollapseMode::None};
-    bool moduleCollapseTargetIsWindow{};
-    std::optional<ModuleId> collapsedArrowPress;
-    D2D1_POINT_2F collapsedArrowPressStart{};
-    D2D1_RECT_F collapsedArrowPressBounds{};
-    bool collapsedArrowDragStarted{};
-    bool moduleDragFromCollapsedArrow{};
-    D2D1_RECT_F moduleCollapsedArrowOrigin{};
-    ModuleLayout moduleLayoutPreview{ModuleLayout::Defaults()};
-    bool moduleDropPreviewValid{};
-    D2D1_POINT_2F moduleDropLastPointer{-1.0F, -1.0F};
-    ModuleLayout moduleLayoutDraft{ModuleLayout::Defaults()};
-    bool moduleExpansionResizePending{};
-    std::optional<ModuleId> moduleExpansionResizeModule;
-    ModuleLayout moduleExpansionRestoreLayout{ModuleLayout::Defaults()};
-    bool internalModuleResize{};
-    int moduleExpansionRestoreWidth{};
-    int moduleExpansionRestoreHeight{};
-
-    // Inline playlist-name editor (create via + or rename via context menu).
-    bool playlistNameEditing{};
-    bool playlistNameRenaming{};       // true = rename existing, false = create new
-    std::uint64_t playlistRenameId{};  // target when renaming
-    std::wstring playlistNameBuffer;
-    D2D1_RECT_F newPlaylistButtonBounds{};
-    // Inline file-name editor opened from the song context menu.
-    bool trackNameEditing{};
-    std::size_t trackRenameIndex{static_cast<std::size_t>(-1)};
-    std::wstring trackNameBuffer;
-    std::size_t trackNameCursor{};
-    bool trackNameSelectAll{};
-
-    // Skin Studio editing state. draft is the working copy live-previewed through the
-    // host. studioOpen tracks whether the draft was seeded from the active skin.
-    skin::Skin studioDraft;
-    bool studioOpen{};
-    std::size_t studioColorIndex{};
-    // Active left-rail section of the redesigned Skin Studio.
-    enum class StudioSection : std::uint8_t { General, Colors, Elements };
-    StudioSection studioSection{StudioSection::General};
-    // HEX entry buffer for the color picker. Active when studioHexEditing is set; the
-    // user types a #RRGGBB[AA] value that is applied to the selected color on Enter.
-    std::wstring studioHex;
-    bool studioHexEditing{};
-    bool studioHexSelectAll{};
-    D2D1_RECT_F studioColorPickerBounds{};
-    D2D1_RECT_F studioHueBounds{};
-    bool studioColorPickerVisible{};
-    StudioColorTarget studioColorTarget{StudioColorTarget::Palette};
-    std::uint64_t seenColorFocusRevision{};
-    std::uint64_t seenElementFocusRevision{};
-    bool studioNameEditing{};
-    std::wstring studioName;
+    // Skin Manager rename state remains with the settings coordinator.
     bool managerNameEditing{};
     std::size_t managerSkinIndex{};
     std::wstring managerSkinName;
-    bool draggingStudioColor{};
-    bool draggingStudioHue{};
-    // Screen-wide eyedropper: sample any desktop pixel into the selected studio color.
-    bool pickingScreenColor{};
-    bool eyedropperSkipUp{};
-    std::size_t studioImageIndex{};
-    std::size_t studioImageScroll{};
-    std::size_t studioImageRows{};
-    D2D1_RECT_F studioImageListBounds{};
-    std::size_t studioShapeIndex{};
-    bool studioImageFocused{};
-    bool studioShapeFocused{};
-    bool studioLayersTab{};
-    std::size_t studioLayerScroll{};
-    std::size_t studioLayerRows{};
-    D2D1_RECT_F studioLayerBounds{};
     // Preferences detail pane: pixel scroll for General content that exceeds the window.
     float settingsScrollY{};
     float settingsContentHeight{};
@@ -792,21 +312,7 @@ struct Win32Ui::Impl {
     std::size_t settingsSkinScroll{};
     std::size_t settingsSkinRows{};
     D2D1_RECT_F settingsSkinListBounds{};
-    int draggingLayer{};
-    std::size_t studioLayerDropPosition{};
-    bool studioFontDropdown{};
-    // Selected decor element for drag-move on the canvas: 0=none, else 1-based.
-    // Positive = shape index+1, negative = -(image index+1).
-    int draggingDecor{};
-    enum class DecorDragMode : std::uint8_t { Move, Resize, Rotate };
-    DecorDragMode decorDragMode{DecorDragMode::Move};
-    float dragStartAngle{};
-    float dragStartRotation{};
-    bool previewPending{};
-    ULONGLONG lastPreviewTick{};
     D2D1_SIZE_F lastCanvas{};
-    D2D1_POINT_2F dragOffset{};
-    D2D1_RECT_F studioPanelBounds{};
     std::unique_ptr<Win32Ui> settingsWindow;
     std::unique_ptr<Win32Ui> studioWindow;
     // True while the notification-area icon is live (exit-to-tray hid the window).
@@ -866,10 +372,6 @@ struct Win32Ui::Impl {
     void EnterPreviewFullscreen() noexcept;
 
     void SyncFilePreview(bool advanceVideo = true);
-    // Small palette of retro-friendly system fonts to cycle without a font dialog.
-    static constexpr std::array<const wchar_t*, 6> kFontChoices{
-        L"Segoe UI", L"Tahoma", L"Verdana", L"Lucida Console", L"Consolas", L"Courier New"};
-
     void SelectStudioSection(StudioSection section);
 
     [[nodiscard]] skin::Color* ActiveStudioColor();
@@ -1022,9 +524,6 @@ struct Win32Ui::Impl {
     // Decodes a skin image file into a device bitmap, caching by absolute path.
     [[nodiscard]] ID2D1Bitmap* LoadSkinBitmap(const std::filesystem::path& relative);
 
-    std::uint64_t decorOrderRevision{~std::uint64_t{0}};
-    std::vector<DecorRef> decorOrder;
-
     [[nodiscard]] static std::vector<DecorRef> DecorOrder(const skin::Skin& value);
 
     [[nodiscard]] const std::vector<DecorRef>& CachedDecorOrder();
@@ -1055,7 +554,6 @@ struct Win32Ui::Impl {
 
     // ---- Skin Studio (implementations in Win32Ui.SkinStudio.cpp) ------------
 
-    struct ColorField { const wchar_t* name; skin::Color skin::SkinPalette::* member; };
     [[nodiscard]] static const std::array<ColorField, 13>& StudioColorFields();
     void EnsureStudioDraft();
     void PushPreview();
@@ -1121,6 +619,7 @@ struct Win32Ui::Impl {
 
     void Resize(UINT width, UINT height);
 
+    // ---- Module interaction (implementation in Win32Ui.ModuleInteraction.cpp) ----
     void BeginModuleDrag(ModuleId id, float x, float y,
                          const ModuleLayout* layoutOverride = nullptr,
                          bool detachTabOnMove = false);

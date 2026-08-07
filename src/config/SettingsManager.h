@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include "../ui/UiModule.h"
+#include "../ui/layout/ModuleLayout.h"
 
 namespace rivan::config {
 

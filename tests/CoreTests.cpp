@@ -3,12 +3,13 @@
 // The test executable returns nonzero at the first failed invariant.
 #include "../src/audio/AudioAnalysisBuffer.h"
 #include "../src/config/SettingsManager.h"
+#include "../src/core/IniValueCodec.h"
 #include "../src/library/LibraryScanner.h"
 #include "../src/playlist/PlaybackQueue.h"
 #include "../src/playlist/PlaylistManager.h"
 #include "../src/skin/Skin.h"
 #include "../src/visualization/Visualization.h"
-#include "../src/ui/UiModule.h"
+#include "../src/ui/layout/ModuleLayout.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -759,6 +760,21 @@ void TestWindowSnapping() {
           "resize expansion grows the canvas while preserving module pixel widths");
 }
 
+void TestIniValueCodec() {
+    const std::string value = "folder name=100%";
+    const auto encoded = rivan::core::EncodeIniValue(value);
+    Check(encoded == "folder%20name%3D100%25",
+          "INI codec percent-encodes reserved bytes");
+    Check(rivan::core::DecodeIniValue(encoded) == value,
+          "INI codec restores encoded UTF-8 values");
+    Check(!rivan::core::DecodeIniValue("%Q0"),
+          "INI codec rejects malformed percent escapes");
+    Check(!rivan::core::DecodeIniValue("%FF"),
+          "strict INI codec rejects invalid UTF-8");
+    Check(rivan::core::DecodeIniValue("%FF", false) == std::string{"\xFF", 1},
+          "relaxed INI codec preserves legacy playlist bytes");
+}
+
 void TestCollapsibleSnapping() {
     using rivan::ui::ModuleCollapseMode;
     using rivan::ui::ModuleCollapseSide;
@@ -1130,6 +1146,7 @@ int main() {
     TestSkinCustomizationRoundTrip();
     TestSkinRejectsUnsafeAssets();
     TestFilePreviewSettingRoundTrip();
+    TestIniValueCodec();
     TestUiModuleRegistry();
     TestWindowSnapping();
     TestCollapsibleSnapping();

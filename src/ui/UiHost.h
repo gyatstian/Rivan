@@ -3,7 +3,7 @@
 #pragma once
 #include "../skin/Skin.h"
 #include "../visualization/Visualization.h"
-#include "UiModule.h"
+#include "layout/ModuleLayout.h"
 
 #include <cstddef>
 #include <cstdint>

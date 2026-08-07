@@ -29,19 +29,31 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="tests\CoreTests.cpp" />
+    <ClCompile Include="src\ui\layout\ModuleLayout.cpp" />
+    <ClCompile Include="src\ui\layout\ModuleDropZones.cpp" />
+    <ClCompile Include="src\ui\layout\ModuleLayoutSnapping.cpp" />
+    <ClCompile Include="src\ui\layout\ModuleLayoutTabs.cpp" />
+    <ClCompile Include="src\ui\layout\ModuleLayoutCollapse.cpp" />
     <ClCompile Include="src\audio\AudioAnalysisBuffer.cpp" />
     <ClCompile Include="src\library\Track.cpp" />
     <ClCompile Include="src\library\LibraryScanner.cpp" />
     <ClCompile Include="src\playlist\PlaybackQueue.cpp" />
     <ClCompile Include="src\playlist\PlaylistManager.cpp" />
     <ClCompile Include="src\core\IniDocument.cpp" />
+    <ClCompile Include="src\core\IniValueCodec.cpp" />
     <ClCompile Include="src\core\AppPaths.cpp" />
     <ClCompile Include="src\config\SettingsManager.cpp" />
+    <ClCompile Include="src\config\SettingsManager.Settings.cpp" />
+    <ClCompile Include="src\config\SettingsManager.Session.cpp" />
     <ClCompile Include="src\skin\Skin.cpp" />
     <ClCompile Include="src\visualization\Visualization.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\ui\layout\ModuleDropZones.h" />
+    <ClInclude Include="src\ui\layout\ModuleLayout.h" />
+    <ClInclude Include="src\ui\layout\ModuleTypes.h" />
     <ClInclude Include="src\ui\UiModule.h" />
+    <ClInclude Include="src\config\SettingsManager.Persistence.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
