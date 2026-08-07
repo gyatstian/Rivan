@@ -127,7 +127,13 @@ void Win32Ui::Impl::FlushDeferredTexts() {
         for (const auto& text : texts) {
             DrawText(text.value, text.bounds, text.brush, text.format, text.alignment, text.vertical);
         }
-    }
+        auto layouts = std::move(deferredTextLayouts);
+        deferredTextLayouts.clear();
+        for (const auto& text : layouts) {
+            target->DrawTextLayout(text.origin, text.layout.Get(), text.brush,
+                                   D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        }
+}
 
 void Win32Ui::Impl::DrawBevel(const D2D1_RECT_F& bounds, ID2D1Brush* fill, ID2D1Brush* light,
                    ID2D1Brush* dark, bool inset, float thickness) {

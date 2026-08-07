@@ -88,6 +88,12 @@ struct Win32UiRenderState {
         DWRITE_PARAGRAPH_ALIGNMENT vertical{DWRITE_PARAGRAPH_ALIGNMENT_CENTER};
     };
     std::vector<DeferredText> deferredTexts;
+    struct DeferredTextLayout {
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+        D2D1_POINT_2F origin{};
+        ID2D1Brush* brush{};
+    };
+    std::vector<DeferredTextLayout> deferredTextLayouts;
     bool deferTexts{};
 
     std::uint64_t decorOrderRevision{~std::uint64_t{0}};

@@ -14,6 +14,7 @@
 #include "visualization/Visualization.h"
 #include "discord/DiscordPresence.h"
 #include "youtube/YoutubeService.h"
+#include "lyrics/LyricsService.h"
 
 #include <atomic>
 #include <chrono>
@@ -54,6 +55,7 @@ public:
     void SetExitToTray(bool enabled) override;
     void SetModuleExpansionBehavior(ui::ModuleExpansionBehavior behavior) override;
     void SetYoutubeEnabled(bool enabled) override;
+    void SetLyricsCacheEnabled(bool enabled) override;
     void SetModuleLayout(ui::ModuleLayout layout) override;
     void SetDiscordEnabled(bool enabled) override;
     void SetDiscordShowArtist(bool enabled) override;
@@ -110,6 +112,7 @@ public:
 
     // Called from YoutubeService notify (may be worker thread) via PostMessage.
     void OnYoutubeServiceUpdated();
+    void OnLyricsServiceUpdated();
 
 private:
     void StartLibraryScan();
@@ -162,10 +165,12 @@ private:
     std::atomic_bool endOfStream_{false};
     std::atomic_bool audioChanged_{false};
     std::atomic_bool youtubeDirty_{false};
+    std::atomic_bool lyricsDirty_{false};
     audio::AudioEngine audio_;
     // 512-point FFT is enough for spectrum bars; halves FFT cost vs 1024.
     visualization::FloatSnapshotAnalyzer analyzer_{512};
     youtube::YoutubeService youtube_;
+    lyrics::LyricsService lyrics_;
     discord::DiscordPresence discord_;
     std::unique_ptr<ui::Win32Ui> window_;
 

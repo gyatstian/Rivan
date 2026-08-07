@@ -290,8 +290,9 @@ void Win32Ui::Impl::DrawMini(const D2D1_SIZE_F size,
         Win32Ui::Impl::DrawSkinDecor(size);
         screenBounds.clear();
         panelBounds.clear();
-        moduleRegions.clear();
-        decorControlBounds.clear();
+    moduleRegions.clear();
+    decorControlBounds.clear();
+    deferredTextLayouts.clear();
         deferTexts = true;
         const auto bounds = Rect(4, 4, size.width - 4, size.height - 4);
         auto content = DrawPanel(bounds, L"RIVAN // SHADE MODE", b[1].Get(), b[2].Get(), b[3].Get(),

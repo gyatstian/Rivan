@@ -11,13 +11,13 @@
 namespace rivan::ui {
 
 struct ModuleLayout final {
-    std::array<ModuleLayoutItem, 5> items{};
-    std::array<ModuleId, 5> tabOrder{};
+    std::array<ModuleLayoutItem, 6> items{};
+    std::array<ModuleId, 6> tabOrder{};
     std::size_t tabCount{};
     std::size_t activeTab{};
-    std::array<ModuleId, 5> snapGroup{
+    std::array<ModuleId, 6> snapGroup{
         ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
-        ModuleId::RivanLibrary, ModuleId::VideoPreview};
+        ModuleId::RivanLibrary, ModuleId::VideoPreview, ModuleId::Lyrics};
 
     [[nodiscard]] static ModuleLayout Defaults() noexcept;
 
@@ -26,6 +26,8 @@ struct ModuleLayout final {
     [[nodiscard]] bool IsTabbed(ModuleId id) const noexcept;
     [[nodiscard]] bool IsSnapped(ModuleId id) const noexcept;
     [[nodiscard]] bool IsCollapsed(ModuleId id) const noexcept;
+    [[nodiscard]] bool IsEffectivelyCollapsed(ModuleId id) const noexcept;
+    [[nodiscard]] bool IsCollapseHandleVisible(ModuleId id) const noexcept;
     void ClearModuleCollapse(ModuleId id) noexcept;
     void ClearCollapseReferences(ModuleId target) noexcept;
 
@@ -77,10 +79,10 @@ struct ModuleLayout final {
     [[nodiscard]] static ModuleNormalizedRect Bounds(const ModuleLayoutItem& item) noexcept;
     [[nodiscard]] static bool Intersects(const ModuleNormalizedRect& first,
                                          const ModuleNormalizedRect& second) noexcept;
-    [[nodiscard]] static bool Contains(const std::array<ModuleId, 5>& ids,
+    [[nodiscard]] static bool Contains(const std::array<ModuleId, 6>& ids,
                                        std::size_t count, ModuleId id) noexcept;
     [[nodiscard]] std::size_t MovingMembers(ModuleId id,
-                                             std::array<ModuleId, 5>& members) const noexcept;
+                                              std::array<ModuleId, 6>& members) const noexcept;
     [[nodiscard]] bool HasGeometryConflict(ModuleId firstId,
                                            ModuleId secondId) const noexcept;
     [[nodiscard]] bool HasConflictingGeometry() const noexcept;

@@ -19,6 +19,9 @@ void ModuleLayout::MakeTab(ModuleId first, ModuleId second) noexcept {
     ClearTabs();
     tabOrder[tabCount++] = first;
     if (first != second) tabOrder[tabCount++] = second;
+    for (std::size_t index = 0; index < tabCount; ++index) {
+        if (auto* item = Find(tabOrder[index])) SyncExpandedGeometry(*item);
+    }
     activeTab = 0;
 }
 
@@ -26,7 +29,7 @@ void ModuleLayout::RemoveTab(ModuleId id) noexcept {
     if (!IsTabbed(id)) return;
     ModuleLayoutItem groupGeometry{};
     if (const auto* root = Find(tabOrder[0])) groupGeometry = *root;
-    std::array<ModuleId, 5> remaining{};
+    std::array<ModuleId, 6> remaining{};
     std::size_t remainingCount = 0;
     const auto count = TabCount();
     for (std::size_t index = 0; index < count; ++index) {
@@ -56,7 +59,7 @@ void ModuleLayout::TabWith(ModuleId source, ModuleId target) noexcept {
     const ModuleId geometryId = TabRoot(target);
     ModuleLayoutItem groupGeometry{};
     if (const auto* root = Find(geometryId)) groupGeometry = *root;
-    std::array<ModuleId, 5> group{};
+    std::array<ModuleId, 6> group{};
     std::size_t count = 0;
     const auto append = [&](ModuleId id) {
         for (std::size_t index = 0; index < count; ++index) {
@@ -92,6 +95,7 @@ void ModuleLayout::TabWith(ModuleId source, ModuleId target) noexcept {
             item->y = groupGeometry.y;
             item->width = groupGeometry.width;
             item->height = groupGeometry.height;
+            SyncExpandedGeometry(*item);
             item->dockState = Find(geometryId)
                 ? Find(geometryId)->dockState : ModuleDockState::Floating;
         }

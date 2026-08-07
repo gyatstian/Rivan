@@ -180,6 +180,16 @@ bool ModuleLayout::CollapseToWindow(ModuleId source, ModuleCollapseSide side,
     const auto* sourceItem = Find(source);
     if (!sourceItem) return false;
     const ModuleLayout before = *this;
+    const bool sourceWasSnapGrouped = IsSnapGrouped(source);
+    if (sourceWasSnapGrouped) {
+        std::array<ModuleId, 6> members{};
+        const auto memberCount = MovingMembers(source, members);
+        for (std::size_t index = 0; index < memberCount; ++index) {
+            if (auto* member = Find(members[index]); member != nullptr && !member->collapsed) {
+                SyncExpandedGeometry(*member);
+            }
+        }
+    }
     const float width = sourceItem->width;
     const float height = sourceItem->height;
     if (width < 0.10F || height < 0.10F) return false;
@@ -236,7 +246,7 @@ bool ModuleLayout::CollapseToWindow(ModuleId source, ModuleCollapseSide side,
     auto* item = Find(source);
     if (!item) return false;
     SetCollapsedGeometry(*item, handle, expanded, ModuleCollapseMode::Outside, side, source, true);
-    snapGroup[static_cast<std::size_t>(item - items.data())] = source;
+    if (!sourceWasSnapGrouped) snapGroup[static_cast<std::size_t>(item - items.data())] = source;
     if (HasNewConflictingGeometry(before)) {
         *this = before;
         return false;
@@ -254,11 +264,35 @@ bool ModuleLayout::CollapseToModule(ModuleId source, ModuleId target, ModuleColl
     const auto* sourceItem = Find(source);
     const auto targetRoot = TabRoot(target);
     const auto* targetItem = Find(targetRoot);
-    if (!sourceItem || !targetItem || !targetItem->visible || targetItem->collapsed ||
+    if (!sourceItem || !targetItem || !targetItem->visible ||
+        IsEffectivelyCollapsed(targetRoot) ||
         (IsTabbed(source) && IsTabbed(target) && TabRoot(source) == targetRoot)) {
         return false;
     }
+    std::array<ModuleId, 6> collapseTargets{};
+    std::size_t collapseTargetCount = 0;
+    ModuleId collapseTarget = targetRoot;
+    while (const auto* candidate = Find(collapseTarget)) {
+        if (collapseTarget == source) return false;
+        if (candidate->collapseMode != ModuleCollapseMode::Inside ||
+            candidate->collapseTargetIsWindow) break;
+        collapseTarget = TabRoot(candidate->collapseTarget);
+        if (Contains(collapseTargets, collapseTargetCount, collapseTarget)) return false;
+        if (collapseTargetCount < collapseTargets.size()) {
+            collapseTargets[collapseTargetCount++] = collapseTarget;
+        }
+    }
     const ModuleLayout before = *this;
+    const bool sourceWasSnapGrouped = IsSnapGrouped(source);
+    if (sourceWasSnapGrouped) {
+    std::array<ModuleId, 6> members{};
+        const auto memberCount = MovingMembers(source, members);
+        for (std::size_t index = 0; index < memberCount; ++index) {
+            if (auto* member = Find(members[index]); member != nullptr && !member->collapsed) {
+                SyncExpandedGeometry(*member);
+            }
+        }
+    }
     const auto targetBounds = Bounds(*targetItem);
     ModuleNormalizedRect expanded{};
     ModuleNormalizedRect handle{};
@@ -362,7 +396,7 @@ bool ModuleLayout::CollapseToModule(ModuleId source, ModuleId target, ModuleColl
     }
     auto* item = Find(source);
     if (!item) return false;
-    snapGroup[static_cast<std::size_t>(item - items.data())] = source;
+    if (!sourceWasSnapGrouped) snapGroup[static_cast<std::size_t>(item - items.data())] = source;
     SetCollapsedGeometry(*item, handle, expanded, mode, side, targetRoot, false);
     if (mode == ModuleCollapseMode::Inside) SetTabGroupGeometry(targetRoot, collapsedTargetBounds);
     if (HasNewConflictingGeometry(before)) {

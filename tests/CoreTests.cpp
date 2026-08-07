@@ -9,6 +9,7 @@
 #include "../src/playlist/PlaylistManager.h"
 #include "../src/skin/Skin.h"
 #include "../src/visualization/Visualization.h"
+#include "../src/lyrics/LyricsService.h"
 #include "../src/ui/layout/ModuleLayout.h"
 
 #ifndef NOMINMAX
@@ -462,7 +463,11 @@ void TestFilePreviewSettingRoundTrip() {
     Check(reader.Settings().exitToTray,
           "exit to tray survives settings round-trip");
     Check(reader.Settings().discordShowGithubButton,
-          "Discord GitHub button setting survives settings round-trip");
+           "Discord GitHub button setting survives settings round-trip");
+    settings.lyricsCacheEnabled = true;
+    Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error) &&
+              reader.LoadSettings(&error) && reader.Settings().lyricsCacheEnabled,
+          "lyrics cache setting survives settings round-trip");
 
     settings.filePreviewEnabled = true;
     settings.trackCoverArtEnabled = true;
@@ -479,7 +484,7 @@ void TestUiModuleRegistry() {
     using rivan::ui::UiModuleRegistry;
 
     const auto modules = UiModuleRegistry::Modules();
-    Check(modules.size() == 5, "the built-in UI module registry contains five sections");
+    Check(modules.size() == 6, "the built-in UI module registry contains six sections");
     Check(UiModuleRegistry::Get(ModuleId::Rivan).Key() == "rivan",
            "the Rivan section has a stable key");
     Check(UiModuleRegistry::Get(ModuleId::Rivan).Title() == L"PLAYER",
@@ -496,16 +501,22 @@ void TestUiModuleRegistry() {
           "the video preview section has a stable key");
     Check(UiModuleRegistry::Get(ModuleId::VideoPreview).Title() == L"VIDEO PREVIEW",
           "the video preview section has a stable title");
+    Check(UiModuleRegistry::Get(ModuleId::Lyrics).Key() == "lyrics" &&
+              UiModuleRegistry::Get(ModuleId::Lyrics).Title() == L"LYRICS",
+          "the lyrics section has stable identity metadata");
 
     auto layout = rivan::ui::ModuleLayout::Defaults();
     Check(layout.Find(ModuleId::Rivan)->width > 0.0F,
           "module defaults provide normalized geometry");
     const auto* videoPreview = layout.Find(ModuleId::VideoPreview);
     Check(videoPreview != nullptr && std::abs(videoPreview->x - 0.46F) < 0.001F &&
-              std::abs(videoPreview->y - 0.68F) < 0.001F &&
+              std::abs(videoPreview->y - 0.49F) < 0.001F &&
               std::abs(videoPreview->width - 0.54F) < 0.001F &&
-              std::abs(videoPreview->height - 0.30F) < 0.001F,
-          "module defaults reserve a standalone video preview section");
+              std::abs(videoPreview->height - 0.24F) < 0.001F,
+           "module defaults reserve a standalone video preview section");
+    const auto* lyrics = layout.Find(ModuleId::Lyrics);
+    Check(lyrics != nullptr && lyrics->visible && lyrics->width > 0.0F,
+          "module defaults reserve a lyrics section");
     layout.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
     Check(layout.tabCount == 2 && layout.IsTabbed(ModuleId::AllMusic),
           "module layout can create a tab group");
@@ -1012,6 +1023,113 @@ void TestCollapsibleSnapping() {
               std::abs(nestedSource->handleX + nestedSource->handleWidth - 0.40F) < 0.001F &&
               nestedSource->expandedX + nestedSource->expandedWidth <= 0.40F + 0.001F,
           "resizing a collapse target scales its nested handle and expanded bounds");
+
+    auto tabbedCollapse = ModuleLayout::Defaults();
+    for (auto& item : tabbedCollapse.items) item.visible = false;
+    auto* tabbedRoot = tabbedCollapse.Find(ModuleId::Rivan);
+    auto* tabbedChild = tabbedCollapse.Find(ModuleId::AllMusic);
+    tabbedRoot->visible = true;
+    tabbedRoot->x = 0.0F;
+    tabbedRoot->y = 0.0F;
+    tabbedRoot->width = 0.50F;
+    tabbedRoot->height = 1.0F;
+    tabbedChild->visible = false;
+    tabbedChild->x = 0.0F;
+    tabbedChild->y = 0.0F;
+    tabbedChild->width = 0.50F;
+    tabbedChild->height = 1.0F;
+    Check(tabbedCollapse.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Left) &&
+              tabbedCollapse.ToggleCollapsedModule(ModuleId::Rivan),
+          "tab collapse fixture restores a previously collapsible root");
+    tabbedChild->visible = true;
+    tabbedCollapse.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
+    Check(tabbedCollapse.ToggleCollapsedModule(ModuleId::Rivan) &&
+              tabbedCollapse.IsEffectivelyCollapsed(ModuleId::AllMusic) &&
+              tabbedCollapse.IsCollapseHandleVisible(ModuleId::Rivan),
+          "collapsing a tab root hides whole tab group but keeps one handle");
+    const bool tabbedExpanded = tabbedCollapse.ToggleCollapsedModule(ModuleId::Rivan);
+    Check(tabbedExpanded, "expanding a tab root succeeds");
+    Check(!tabbedCollapse.IsEffectivelyCollapsed(ModuleId::AllMusic),
+          "expanding a tab root clears effective collapse");
+    Check(std::abs(tabbedCollapse.Find(ModuleId::AllMusic)->width - 0.50F) < 0.001F,
+          "expanding a tab root restores every tab geometry");
+
+    auto nestedCollapse = ModuleLayout::Defaults();
+    for (auto& item : nestedCollapse.items) item.visible = false;
+    auto* nestedParent = nestedCollapse.Find(ModuleId::Rivan);
+    auto* nestedChildCollapse = nestedCollapse.Find(ModuleId::AllMusic);
+    nestedParent->visible = true;
+    nestedParent->x = 0.0F;
+    nestedParent->y = 0.0F;
+    nestedParent->width = 0.50F;
+    nestedParent->height = 1.0F;
+    nestedChildCollapse->visible = true;
+    nestedChildCollapse->x = 0.50F;
+    nestedChildCollapse->y = 0.0F;
+    nestedChildCollapse->width = 0.50F;
+    nestedChildCollapse->height = 1.0F;
+    Check(nestedCollapse.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Left) &&
+              nestedCollapse.ToggleCollapsedModule(ModuleId::Rivan) &&
+              nestedCollapse.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                               ModuleCollapseSide::Right,
+                                               ModuleCollapseMode::Inside) &&
+              nestedCollapse.ToggleCollapsedModule(ModuleId::Rivan) &&
+              !nestedCollapse.IsCollapseHandleVisible(ModuleId::AllMusic),
+          "parent collapse hides nested child handle");
+    Check(nestedCollapse.ToggleCollapsedModule(ModuleId::Rivan) &&
+              nestedCollapse.IsCollapseHandleVisible(ModuleId::AllMusic),
+          "parent expansion restores nested child handle");
+
+    auto snappedCollapse = ModuleLayout::Defaults();
+    for (auto& item : snappedCollapse.items) item.visible = false;
+    auto* snappedParent = snappedCollapse.Find(ModuleId::Rivan);
+    auto* snappedChild = snappedCollapse.Find(ModuleId::AllMusic);
+    snappedParent->visible = true;
+    snappedParent->x = 0.0F;
+    snappedParent->y = 0.0F;
+    snappedParent->width = 0.50F;
+    snappedParent->height = 1.0F;
+    snappedChild->visible = true;
+    snappedChild->x = 0.50F;
+    snappedChild->y = 0.0F;
+    snappedChild->width = 0.50F;
+    snappedChild->height = 1.0F;
+    Check(snappedCollapse.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Left) &&
+              snappedCollapse.ToggleCollapsedModule(ModuleId::Rivan) &&
+              snappedCollapse.SnapTo(ModuleId::AllMusic, ModuleId::Rivan,
+                                    ModuleDropZone::Right) &&
+              snappedCollapse.ToggleCollapsedModule(ModuleId::Rivan) &&
+              snappedCollapse.IsEffectivelyCollapsed(ModuleId::AllMusic),
+          "collapsing a snapped root hides complete snap group");
+    Check(snappedCollapse.ToggleCollapsedModule(ModuleId::Rivan) &&
+              !snappedCollapse.IsEffectivelyCollapsed(ModuleId::AllMusic),
+          "expanding a snapped root restores complete snap group");
+    Check(std::abs(snappedCollapse.Find(ModuleId::AllMusic)->width - 0.25F) < 0.001F &&
+              std::abs(snappedCollapse.Find(ModuleId::Rivan)->width - 0.25F) < 0.001F,
+          "snapped peer geometry survives a collapse and expand cycle");
+
+    auto cyclicCollapse = ModuleLayout::Defaults();
+    for (auto& item : cyclicCollapse.items) item.visible = false;
+    auto* firstCycleMember = cyclicCollapse.Find(ModuleId::Rivan);
+    auto* secondCycleMember = cyclicCollapse.Find(ModuleId::AllMusic);
+    firstCycleMember->visible = true;
+    firstCycleMember->x = 0.0F;
+    firstCycleMember->y = 0.0F;
+    firstCycleMember->width = 0.50F;
+    firstCycleMember->height = 1.0F;
+    secondCycleMember->visible = true;
+    secondCycleMember->x = 0.50F;
+    secondCycleMember->y = 0.0F;
+    secondCycleMember->width = 0.50F;
+    secondCycleMember->height = 1.0F;
+    Check(cyclicCollapse.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                          ModuleCollapseSide::Right,
+                                          ModuleCollapseMode::Inside) &&
+              cyclicCollapse.ToggleCollapsedModule(ModuleId::AllMusic) &&
+              !cyclicCollapse.CollapseToModule(ModuleId::Rivan, ModuleId::AllMusic,
+                                                ModuleCollapseSide::Left,
+                                                ModuleCollapseMode::Inside),
+          "inside collapse rejects target ancestry cycles");
 }
 
 void TestSnappingWithExistingLayoutConflict() {
@@ -1132,9 +1250,84 @@ void TestModuleLayoutSessionRoundTrip() {
               std::abs(loadedCollapsible->expandedY - 0.08F) < 0.001F &&
               std::abs(loadedCollapsible->expandedWidth - 0.34F) < 0.001F &&
               std::abs(loadedCollapsible->expandedHeight - 0.40F) < 0.001F,
-          "resized collapsible geometry survives a session round-trip");
+           "resized collapsible geometry survives a session round-trip");
+
+    auto cyclicSession = writer.Session();
+    cyclicSession.moduleLayout = rivan::ui::ModuleLayout::Defaults();
+    auto* firstCycle = cyclicSession.moduleLayout.Find(rivan::ui::ModuleId::Rivan);
+    auto* secondCycle = cyclicSession.moduleLayout.Find(rivan::ui::ModuleId::AllMusic);
+    firstCycle->collapseMode = rivan::ui::ModuleCollapseMode::Inside;
+    firstCycle->collapseSide = rivan::ui::ModuleCollapseSide::Right;
+    firstCycle->collapseTarget = rivan::ui::ModuleId::AllMusic;
+    firstCycle->collapsed = true;
+    secondCycle->collapseMode = rivan::ui::ModuleCollapseMode::Inside;
+    secondCycle->collapseSide = rivan::ui::ModuleCollapseSide::Left;
+    secondCycle->collapseTarget = rivan::ui::ModuleId::Rivan;
+    secondCycle->collapsed = true;
+    Check(writer.SetSession(cyclicSession, &error) && writer.SaveSession(&error) &&
+              reader.LoadSession(&error),
+          "cyclic collapse session round-trip loads");
+    Check(!(reader.Session().moduleLayout.Find(rivan::ui::ModuleId::Rivan)->collapsed &&
+            reader.Session().moduleLayout.Find(rivan::ui::ModuleId::AllMusic)->collapsed),
+          "session load breaks cyclic collapse metadata");
+    Check(reader.Session().moduleLayout.HasValidGeometry(),
+          "cycle cleanup leaves valid expanded module geometry");
 
     std::filesystem::remove_all(root, ec);
+}
+
+void TestLyricsParsing() {
+    const auto document = rivan::lyrics::LyricsService::ParseLrc(
+        L"[ar:Artist]\n[00:01.20][00:02.30]First line\n[01:02.50]Second line\n");
+    Check(document.synced && document.lines.size() == 3,
+          "LRC parser expands repeated timestamps");
+    Check(document.lines[0].timestampSeconds > 1.19 &&
+              document.lines[0].timestampSeconds < 1.21 &&
+              document.lines[0].text == L"First line",
+          "LRC parser reads timestamp and text");
+    const auto plain = rivan::lyrics::LyricsService::ParseLrclibResponse(
+        R"({"syncedLyrics":null,"plainLyrics":"One\nTwo"})");
+    Check(!plain.synced && plain.PlainText() == L"One\nTwo",
+          "LRCLIB parser falls back to plain lyrics");
+    const auto escaped = rivan::lyrics::LyricsService::ParseLrclibResponse(
+        R"({"syncedLyrics":null,"plainLyrics":"Caf\u00e9\nIt\u0027s fine"})");
+    Check(!escaped.synced && escaped.PlainText() == L"Café\nIt's fine",
+          "LRCLIB parser decodes JSON unicode escapes");
+    const auto astral = rivan::lyrics::LyricsService::ParseLrclibResponse(
+        R"({"syncedLyrics":null,"plainLyrics":"Smile \ud83d\ude00"})");
+    Check(!astral.Empty() && astral.PlainText() == L"Smile 😀",
+          "LRCLIB parser decodes JSON surrogate pairs");
+    const auto result = rivan::lyrics::LyricsService::ParseLrclibResponse(
+        R"({"id":1,"trackName":"misery.","artistName":"pupsies","plainLyrics":"One\nTwo","syncedLyrics":"[00:00.50]One\n[00:01.00]Two"})");
+    Check(result.synced && result.lines.size() == 2 && result.lines[1].timestampSeconds > 0.99,
+          "LRCLIB search result parses synchronized lyrics");
+    const auto structural = rivan::lyrics::LyricsService::ParseLrclibResponse(
+        R"({"plainLyrics":"The phrase \"syncedLyrics\" is text","syncedLyrics":null})");
+    Check(!structural.synced && structural.PlainText() == L"The phrase \"syncedLyrics\" is text",
+          "LRCLIB parser ignores field-like lyric text");
+}
+
+void TestLyricsLayoutMigration() {
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanLyricsMigrationTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    {
+        std::ofstream session(root / L"session.ini", std::ios::binary);
+        session << "[meta]\nformat=1\n[modules]\n";
+        session << "module_3_x=0.46\nmodule_3_y=0\nmodule_3_width=0.54\nmodule_3_height=0.66\n";
+        session << "module_4_x=0.46\nmodule_4_y=0.68\nmodule_4_width=0.54\nmodule_4_height=0.30\n";
+    }
+    rivan::config::SettingsManager settings(root / L"settings.ini", root / L"session.ini");
+    std::string loadError;
+    Check(settings.LoadSession(&loadError), "five-module session loads for lyrics migration");
+    const auto* lyrics = settings.Session().moduleLayout.Find(rivan::ui::ModuleId::Lyrics);
+    const auto* preview = settings.Session().moduleLayout.Find(rivan::ui::ModuleId::VideoPreview);
+    Check(lyrics != nullptr && lyrics->visible && preview != nullptr &&
+              std::abs(preview->y - 0.49F) < 0.001F,
+          "five-module default session migrates to visible lyrics layout");
+    std::filesystem::remove_all(root, error);
 }
 
 } // namespace
@@ -1154,6 +1347,8 @@ int main() {
     TestCollapsibleSnapping();
     TestSnappingWithExistingLayoutConflict();
     TestModuleLayoutSessionRoundTrip();
+    TestLyricsParsing();
+    TestLyricsLayoutMigration();
     if (failures == 0) std::cout << "Rivan core tests passed\n";
     return failures == 0 ? 0 : 1;
 }

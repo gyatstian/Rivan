@@ -238,6 +238,21 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
         InvalidateRect(window, nullptr, FALSE);
         return;
     }
+    if (windowKind == WindowKind::Main) {
+        const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        if (control && shift) {
+            switch (key) {
+            case L'S': HandleLyricsAction(1); return;
+            case L'P': HandleLyricsAction(2); return;
+            case L'L': HandleLyricsAction(3); return;
+            case L'E': HandleLyricsAction(4); return;
+            case L'R': HandleLyricsAction(5); return;
+            case L'C': HandleLyricsAction(6); return;
+            default: break;
+            }
+        }
+    }
     if (windowKind == WindowKind::Main && !model.miniPlayer && key == VK_F2 && !trackSelection.empty()) {
         const auto chosen = trackSelection.contains(trackAnchor) ? trackAnchor : *trackSelection.begin();
         BeginTrackRename(chosen);

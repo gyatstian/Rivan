@@ -4,6 +4,7 @@
 #include "../skin/Skin.h"
 #include "../visualization/Visualization.h"
 #include "../youtube/YoutubeService.h"
+#include "../lyrics/LyricsService.h"
 #include "layout/ModuleLayout.h"
 
 #include <cstddef>
@@ -146,6 +147,8 @@ struct UiModel {
     bool startAtStartup{};
     bool exitToTray{};
     bool youtubeEnabled{};
+    bool lyricsCacheEnabled{};
+    lyrics::LyricsSnapshot lyrics;
     // Discord Rich Presence preference (IPC worker runs only when true).
     bool discordEnabled{};
     bool discordShowArtist{true};
@@ -228,6 +231,7 @@ public:
     virtual void SetModuleExpansionBehavior(ModuleExpansionBehavior behavior) = 0;
     // Enables/disables the optional YouTube library section. Off = no YT workers or UI.
     virtual void SetYoutubeEnabled(bool enabled) = 0;
+    virtual void SetLyricsCacheEnabled(bool enabled) = 0;
     // Applies the normalized geometry, visibility, and tab state of the main modules.
     virtual void SetModuleLayout(ModuleLayout layout) = 0;
     // Enables/disables Discord Rich Presence. Off = clear activity and stop IPC.

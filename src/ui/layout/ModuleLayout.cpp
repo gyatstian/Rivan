@@ -9,17 +9,19 @@ namespace rivan::ui {
 
 ModuleLayout ModuleLayout::Defaults() noexcept {
     return ModuleLayout{
-        {{{ModuleId::Rivan, 0.0F, 0.0F, 0.44F, 0.30F, true, ModuleDockState::Floating},
-          {ModuleId::AllMusic, 0.0F, 0.33F, 0.44F, 0.49F, true, ModuleDockState::Floating},
-          {ModuleId::GraphicEqualizer, 0.0F, 0.84F, 0.44F, 0.16F, true,
-           ModuleDockState::Floating},
-          {ModuleId::RivanLibrary, 0.46F, 0.0F, 0.54F, 0.66F, true,
-           ModuleDockState::Floating},
-          {ModuleId::VideoPreview, 0.46F, 0.68F, 0.54F, 0.30F, true,
-           ModuleDockState::Floating}}},
+        {{{ModuleId::Rivan, 0.0F, 0.0F, 0.44F, 0.24F, true, ModuleDockState::Floating},
+           {ModuleId::AllMusic, 0.0F, 0.27F, 0.44F, 0.45F, true, ModuleDockState::Floating},
+           {ModuleId::GraphicEqualizer, 0.0F, 0.75F, 0.44F, 0.25F, true,
+            ModuleDockState::Floating},
+           {ModuleId::RivanLibrary, 0.46F, 0.0F, 0.54F, 0.46F, true,
+            ModuleDockState::Floating},
+           {ModuleId::VideoPreview, 0.46F, 0.49F, 0.54F, 0.24F, true,
+            ModuleDockState::Floating},
+           {ModuleId::Lyrics, 0.46F, 0.76F, 0.54F, 0.24F, true,
+            ModuleDockState::Floating}}},
         {}, 0, 0,
         {ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
-         ModuleId::RivanLibrary, ModuleId::VideoPreview}};
+          ModuleId::RivanLibrary, ModuleId::VideoPreview, ModuleId::Lyrics}};
 }
 
 ModuleLayoutItem* ModuleLayout::Find(ModuleId id) noexcept {
@@ -55,8 +57,75 @@ bool ModuleLayout::IsCollapsed(ModuleId id) const noexcept {
     return item != nullptr && item->collapsed && item->collapseMode != ModuleCollapseMode::None;
 }
 
+bool ModuleLayout::IsEffectivelyCollapsed(ModuleId id) const noexcept {
+    const auto* item = Find(id);
+    if (!item) return false;
+
+    std::array<ModuleId, 6> visited{};
+    std::size_t visitedCount = 0;
+    ModuleId current = id;
+    while (const auto* currentItem = Find(current)) {
+        std::array<ModuleId, 6> members{};
+        const auto memberCount = MovingMembers(current, members);
+        for (std::size_t index = 0; index < memberCount; ++index) {
+            const auto* member = Find(members[index]);
+            if (member != nullptr && member->collapsed &&
+                member->collapseMode != ModuleCollapseMode::None) {
+                return true;
+            }
+        }
+        if (currentItem->collapseMode != ModuleCollapseMode::Inside ||
+            currentItem->collapseTargetIsWindow) {
+            break;
+        }
+        current = TabRoot(currentItem->collapseTarget);
+        if (current == id || Contains(visited, visitedCount, current)) return true;
+        if (visitedCount < visited.size()) visited[visitedCount++] = current;
+    }
+    return false;
+}
+
+bool ModuleLayout::IsCollapseHandleVisible(ModuleId id) const noexcept {
+    const auto* item = Find(id);
+    if (!item || item->collapseMode == ModuleCollapseMode::None) return false;
+
+    std::array<ModuleId, 6> members{};
+    const auto memberCount = MovingMembers(id, members);
+    for (std::size_t index = 0; index < memberCount; ++index) {
+        if (members[index] == id) continue;
+        const auto* member = Find(members[index]);
+        if (member != nullptr && member->collapsed &&
+            member->collapseMode != ModuleCollapseMode::None) {
+            return false;
+        }
+    }
+
+    if (item->collapseMode == ModuleCollapseMode::Inside &&
+        !item->collapseTargetIsWindow &&
+        TabRoot(item->collapseTarget) != id &&
+        IsEffectivelyCollapsed(TabRoot(item->collapseTarget))) return false;
+    return true;
+}
+
 void ModuleLayout::ClearModuleCollapse(ModuleId id) noexcept {
     if (auto* item = Find(id)) {
+        if (item->collapsed) {
+            const bool hasExpandedGeometry = item->expandedWidth >= 0.10F &&
+                item->expandedHeight >= 0.10F && item->expandedX >= 0.0F &&
+                item->expandedY >= 0.0F && item->expandedX + item->expandedWidth <= 1.0F &&
+                item->expandedY + item->expandedHeight <= 1.0F;
+            if (hasExpandedGeometry) {
+                item->x = item->expandedX;
+                item->y = item->expandedY;
+                item->width = item->expandedWidth;
+                item->height = item->expandedHeight;
+            } else {
+                item->width = std::clamp(item->width, 0.10F, 1.0F);
+                item->height = std::clamp(item->height, 0.10F, 1.0F);
+                item->x = std::clamp(item->x, 0.0F, 1.0F - item->width);
+                item->y = std::clamp(item->y, 0.0F, 1.0F - item->height);
+            }
+        }
         item->collapseMode = ModuleCollapseMode::None;
         item->collapseSide = ModuleCollapseSide::None;
         item->collapseTarget = id;
@@ -131,7 +200,7 @@ void ModuleLayout::SetCollapsedGeometry(ModuleLayoutItem& item, ModuleNormalized
 }
 
 void ModuleLayout::SyncExpandedGeometry(ModuleLayoutItem& item) noexcept {
-    if (item.collapseMode == ModuleCollapseMode::None || item.collapsed) return;
+    if (item.collapsed) return;
     item.expandedX = item.x;
     item.expandedY = item.y;
     item.expandedWidth = item.width;
@@ -277,7 +346,7 @@ bool ModuleLayout::Intersects(const ModuleNormalizedRect& first,
            first.top < second.bottom && first.bottom > second.top;
 }
 
-bool ModuleLayout::Contains(const std::array<ModuleId, 5>& ids,
+bool ModuleLayout::Contains(const std::array<ModuleId, 6>& ids,
                             std::size_t count, ModuleId id) noexcept {
     for (std::size_t index = 0; index < count; ++index) {
         if (ids[index] == id) return true;
@@ -286,7 +355,7 @@ bool ModuleLayout::Contains(const std::array<ModuleId, 5>& ids,
 }
 
 std::size_t ModuleLayout::MovingMembers(ModuleId id,
-                                        std::array<ModuleId, 5>& members) const noexcept {
+                                        std::array<ModuleId, 6>& members) const noexcept {
     std::size_t count = 0;
     const auto append = [&](ModuleId candidate) {
         if (Contains(members, count, candidate) || count >= members.size()) return;
@@ -316,7 +385,7 @@ bool ModuleLayout::HasGeometryConflict(ModuleId firstId, ModuleId secondId) cons
     if (IsInsideCollapseOverlap(*first, *second) || IsInsideCollapseOverlap(*second, *first)) {
         return false;
     }
-    if (first->collapsed || second->collapsed) return false;
+    if (IsEffectivelyCollapsed(firstId) || IsEffectivelyCollapsed(secondId)) return false;
     return Intersects(Bounds(*first), Bounds(*second));
 }
 
@@ -352,12 +421,14 @@ bool ModuleLayout::FindplusWindowRectangle(
         return false;
     }
 
-    std::array<ModuleId, 5> moving{};
+    std::array<ModuleId, 6> moving{};
     const auto movingCount = MovingMembers(source, moving);
-    std::array<ModuleNormalizedRect, 5> obstacles{};
+    std::array<ModuleNormalizedRect, 6> obstacles{};
     std::size_t obstacleCount = 0;
     for (const auto& item : items) {
-        if (!item.visible || Contains(moving, movingCount, item.id)) continue;
+        if (!item.visible ||
+            (IsEffectivelyCollapsed(item.id) && !item.collapsed) ||
+            Contains(moving, movingCount, item.id)) continue;
         if (IsTabbed(item.id) && TabRoot(item.id) != item.id) continue;
         const auto bounds = Bounds(item);
         if (bounds.right <= region.left || bounds.left >= region.right ||
@@ -478,7 +549,7 @@ bool ModuleLayout::IsSnapGrouped(ModuleId id) const noexcept {
 void ModuleLayout::DetachSnapModule(ModuleId id) noexcept {
     if (!IsSnapGrouped(id)) return;
     const auto oldRoot = SnapRoot(id);
-    std::array<ModuleId, 5> remaining{};
+    std::array<ModuleId, 6> remaining{};
     std::size_t remainingCount = 0;
     for (const auto& item : items) {
         if (item.visible && item.id != id && SnapRoot(item.id) == oldRoot) {

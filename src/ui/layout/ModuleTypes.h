@@ -15,6 +15,7 @@ enum class ModuleId : std::uint8_t {
     GraphicEqualizer,
     RivanLibrary,
     VideoPreview,
+    Lyrics,
 };
 
 enum class ModuleDockState : std::uint8_t {
@@ -131,10 +132,11 @@ private:
         UiModule{ModuleId::GraphicEqualizer, "graphic_equalizer", L"GRAPHIC EQUALIZER"},
         UiModule{ModuleId::RivanLibrary, "rivan_library", L"LIBRARY"},
         UiModule{ModuleId::VideoPreview, "video_preview", L"VIDEO PREVIEW"},
+        UiModule{ModuleId::Lyrics, "lyrics", L"LYRICS"},
     };
 };
 
-static_assert(UiModuleRegistry::Modules().size() == 5,
-              "The initial main-window module catalog must contain five sections.");
+static_assert(UiModuleRegistry::Modules().size() == 6,
+              "The initial main-window module catalog must contain six sections.");
 
 } // namespace rivan::ui

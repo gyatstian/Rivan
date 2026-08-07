@@ -2,11 +2,44 @@
 // Creates stable, dependency-free track records from filesystem paths.
 #include "Track.h"
 
+#include <shobjidl.h>
+#include <propkey.h>
+#include <propsys.h>
+#include <propvarutil.h>
+#include <wrl/client.h>
+
 #include <cwctype>
 #include <system_error>
 
 namespace rivan::library {
 namespace {
+
+std::wstring ReadProperty(IPropertyStore* properties, REFPROPERTYKEY key) {
+    if (properties == nullptr) return {};
+    PROPVARIANT value{};
+    PropVariantInit(&value);
+    std::wstring result;
+    if (SUCCEEDED(properties->GetValue(key, &value))) {
+        PWSTR text = nullptr;
+        if (SUCCEEDED(PropVariantToStringAlloc(value, &text)) && text != nullptr) {
+            result = text;
+            CoTaskMemFree(text);
+        }
+    }
+    PropVariantClear(&value);
+    return result;
+}
+
+void ReadEmbeddedMetadata(const std::filesystem::path& path, Track& track) {
+    Microsoft::WRL::ComPtr<IPropertyStore> properties;
+    if (FAILED(SHGetPropertyStoreFromParsingName(path.c_str(), nullptr, GPS_DEFAULT,
+                                                  IID_PPV_ARGS(properties.GetAddressOf())))) {
+        return;
+    }
+    track.title = ReadProperty(properties.Get(), PKEY_Title);
+    track.artist = ReadProperty(properties.Get(), PKEY_Music_Artist);
+    track.album = ReadProperty(properties.Get(), PKEY_Music_AlbumTitle);
+}
 
 std::filesystem::path NormalizePath(const std::filesystem::path& path) {
     std::error_code ec;
@@ -73,7 +106,8 @@ Track Track::FromFile(const std::filesystem::path& path) {
     Track track;
     track.filePath = NormalizePath(path);
     track.id = PathId(track.filePath);
-    track.title = track.filePath.stem().wstring();
+    ReadEmbeddedMetadata(track.filePath, track);
+    if (track.title.empty()) track.title = track.filePath.stem().wstring();
     return track;
 }
 

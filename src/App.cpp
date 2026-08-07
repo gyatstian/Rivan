@@ -39,17 +39,25 @@ std::wstring CurrentExecutablePath() {
 } // namespace
 
 App::App(HINSTANCE instance)
-    : instance_(instance) {
+    : instance_(instance), lyrics_(core::AppPaths::LocalDataRoot() / L"lyrics") {
     youtube_.SetNotify([this]() {
         youtubeDirty_.store(true, std::memory_order_release);
         if (window_ && window_->WindowHandle()) {
             PostMessageW(window_->WindowHandle(), WM_APP + 40, 0, 0);
         }
     });
+    lyrics_.SetNotify([this]() {
+        lyricsDirty_.store(true, std::memory_order_release);
+        if (window_ && window_->WindowHandle()) {
+            PostMessageW(window_->WindowHandle(), WM_APP + 42, 0, 0);
+        }
+    });
 }
 
 App::~App() {
     youtube_.Reset();
+    lyrics_.Reset();
+    lyrics_.Shutdown();
     if (scanThread_.joinable()) {
         scanThread_.request_stop();
         scanThread_.join();
@@ -80,6 +88,7 @@ bool App::Initialize() {
         if (filesystemError) return false;
     }
     (void)settings_.SetSettings(applicationSettings, &error);
+    lyrics_.SetCacheEnabled(applicationSettings.lyricsCacheEnabled);
     std::wstring startupError;
     if (!SyncStartupRegistration(applicationSettings.startAtStartup, &startupError)) {
         applicationSettings.startAtStartup = false;
@@ -139,6 +148,9 @@ int App::Run() {
         HandleAudioSignals();
         if (youtubeDirty_.exchange(false, std::memory_order_acq_rel)) {
             OnYoutubeServiceUpdated();
+        }
+        if (lyricsDirty_.exchange(false, std::memory_order_acq_rel)) {
+            OnLyricsServiceUpdated();
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);

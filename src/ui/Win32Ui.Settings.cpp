@@ -146,8 +146,8 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
             return label;
         };
         constexpr std::array moduleIds{ModuleId::Rivan, ModuleId::AllMusic,
-                                       ModuleId::GraphicEqualizer, ModuleId::RivanLibrary,
-                                       ModuleId::VideoPreview};
+                                        ModuleId::GraphicEqualizer, ModuleId::RivanLibrary,
+                                        ModuleId::VideoPreview, ModuleId::Lyrics};
         for (std::size_t i = 0; i < moduleIds.size(); i += 2) {
             const float optionWidth = (right - left - 8.0F) * 0.5F;
             SettingsButton(Rect(left, y, left + optionWidth, y + 24), moduleLabel(moduleIds[i]), 60 + i, b);
@@ -156,14 +156,14 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
             }
             y += 30;
         }
-        SettingsButton(Rect(left, y, right, y + 24), L"RESET MODULE LAYOUT", 65, b);
+        SettingsButton(Rect(left, y, right, y + 24), L"RESET MODULE LAYOUT", 66, b);
         y += 34;
         DrawText(L"Drag a title to move. Center drops create tabs; side drops snap.", Rect(left, y, right, y + 28), b[6].Get(), tinyFormat.Get());
         y += 36;
         DrawText(L"EXPANDING BEHAVIOR ON NO SPACE", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
         y += 29;
         SettingsButton(Rect(left, y, right, y + 24),
-                       model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash ? L"ON EXPAND: SQUASH" : L"ON EXPAND: RESIZE", 66, b);
+                       model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash ? L"ON EXPAND: SQUASH" : L"ON EXPAND: RESIZE", 67, b);
         y += 26;
         DrawText(model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
                      ? L"Shrinks other modules to make room."
@@ -196,6 +196,13 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
     }
 
     if (model.settingsCategory == SettingCategory::Online) {
+        DrawText(L"LYRICS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+        y += 29;
+        SettingsButton(Rect(left, y, right, y + 24),
+                       model.lyricsCacheEnabled ? L"SAVE FETCHED LYRICS: ON" : L"SAVE FETCHED LYRICS: OFF", 7, b);
+        y += 26;
+        DrawText(L"Stores fetched lyrics locally for offline retrieval.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+        y += 28;
         DrawText(L"YOUTUBE", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
         y += 29;
         SettingsButton(Rect(left, y, right, y + 24), model.youtubeEnabled ? L"YOUTUBE DOWNLOADER: ON" : L"YOUTUBE DOWNLOADER: OFF", 4, b);
@@ -321,6 +328,7 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 4: host.SetYoutubeEnabled(!model.youtubeEnabled); break;
         case 5: if (!model.youtubeYtDlpInstalled && !model.youtubeInstallingYtDlp) host.InstallYoutubeTool(true); break;
         case 6: if (!model.youtubeFfmpegInstalled && !model.youtubeInstallingFfmpeg) host.InstallYoutubeTool(false); break;
+        case 7: host.SetLyricsCacheEnabled(!model.lyricsCacheEnabled); break;
         case 14: host.SetFilePreviewEnabled(!model.filePreviewEnabled); break;
         case 15: host.SetStartAtStartup(!model.startAtStartup); break;
         case 16: host.SetExitToTray(!model.exitToTray); break;
@@ -330,7 +338,7 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 21: host.SetDiscordShowImageText(!model.discordShowImageText); break;
         case 22: host.SetTrackCoverArtEnabled(!model.trackCoverArtEnabled); break;
         case 23: host.SetDiscordShowGithubButton(!model.discordShowGithubButton); break;
-        case 60: case 61: case 62: case 63: case 64: {
+        case 60: case 61: case 62: case 63: case 64: case 65: {
             auto layout = model.moduleLayout;
             const auto id = static_cast<ModuleId>(action - 60);
             if (auto* item = layout.Find(id)) {
@@ -343,8 +351,8 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
             }
             break;
         }
-        case 65: host.SetModuleLayout(ModuleLayout::Defaults()); break;
-        case 66: host.SetModuleExpansionBehavior(model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
+        case 66: host.SetModuleLayout(ModuleLayout::Defaults()); break;
+        case 67: host.SetModuleExpansionBehavior(model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
                                                       ? ModuleExpansionBehavior::Resize : ModuleExpansionBehavior::Squash); break;
         case 50: if (window) KillTimer(window, kYoutubeSearchDebounceTimer); host.SubmitYoutubeQuery(playlistQuery); break;
         case 51: if (model.youtubeCanPagePrev && model.youtubePage > 0) host.SetYoutubeSearchPage(model.youtubePage - 1); break;

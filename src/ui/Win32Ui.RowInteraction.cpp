@@ -2,6 +2,8 @@
 // Row and list scrolling for Win32Ui::Impl.
 #include "Win32UiImpl.h"
 
+#include <cmath>
+
 namespace rivan::ui {
 
 void Win32Ui::Impl::Scroll(float x, float y, int direction) {
@@ -40,6 +42,28 @@ void Win32Ui::Impl::Scroll(float x, float y, int direction) {
         const float maxScroll = std::max(0.0F, settingsContentHeight - viewportH);
         settingsScrollY = std::clamp(
             settingsScrollY + static_cast<float>(direction) * 24.0F, 0.0F, maxScroll);
+    } else if (windowKind == WindowKind::Main && Contains(lyricsContentBounds, x, y)) {
+        const auto visibleHeight = std::max(0.0F, lyricsContentBounds.bottom - lyricsContentBounds.top);
+        float contentHeight = 0.0F;
+        const float textWidth = std::max(1.0F, lyricsContentBounds.right - lyricsContentBounds.left - 12.0F);
+        for (const auto& line : model.lyrics.document.lines) {
+            ComPtr<IDWriteTextLayout> layout;
+            if (SUCCEEDED(writeFactory->CreateTextLayout(line.text.data(),
+                                                          static_cast<UINT32>(line.text.size()),
+                                                          regularFormat.Get(), textWidth, 10000.0F,
+                                                          layout.ReleaseAndGetAddressOf()))) {
+                layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+                DWRITE_TEXT_METRICS metrics{};
+                if (SUCCEEDED(layout->GetMetrics(&metrics))) {
+                    contentHeight += std::max(20.0F, std::ceil(metrics.height));
+                    continue;
+                }
+            }
+            contentHeight += 20.0F;
+        }
+        const auto maxScroll = std::max(0.0F, contentHeight - visibleHeight);
+        lyricsScrollY = std::clamp(lyricsScrollY + static_cast<float>(direction) * 40.0F,
+                                     0.0F, maxScroll);
     }
     InvalidateRect(window, nullptr, FALSE);
 }

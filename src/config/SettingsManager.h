@@ -41,6 +41,8 @@ struct AppSettings final {
     bool exitToTray = false;
     // Optional YouTube browse/download (yt-dlp). Off by default; no YT work when false.
     bool youtubeEnabled = false;
+    // Persist fetched online lyrics under the application local-data directory.
+    bool lyricsCacheEnabled = false;
     // YouTube chooser defaults. These are not exposed in Preferences; chooser updates them.
     int youtubeDownloadKind = 1;       // 0 = video + audio, 1 = audio only
     int youtubeAudioOutputFormat = 0;  // 0 = native, 1 = mp3, 2 = aac, 3 = opus, 4 = flac, 5 = wav

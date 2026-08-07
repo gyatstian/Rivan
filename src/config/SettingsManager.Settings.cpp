@@ -31,6 +31,7 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     document.Set("application", "start_at_startup", BoolText(settings.startAtStartup));
     document.Set("application", "exit_to_tray", BoolText(settings.exitToTray));
     document.Set("youtube", "enabled", BoolText(settings.youtubeEnabled));
+    document.Set("online", "lyrics_cache_enabled", BoolText(settings.lyricsCacheEnabled));
     document.Set("youtube", "download_kind", std::to_string(settings.youtubeDownloadKind));
     document.Set("youtube", "audio_output_format", std::to_string(settings.youtubeAudioOutputFormat));
     document.Set("youtube", "audio_quality", std::to_string(settings.youtubeAudioQuality));
@@ -136,6 +137,7 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
         else AddWarning(warnings, "Ignoring invalid appearance.module_expansion_behavior");
     }
     ReadBoolField(*document, "youtube", "enabled", settings_.youtubeEnabled, warnings);
+    ReadBoolField(*document, "online", "lyrics_cache_enabled", settings_.lyricsCacheEnabled, warnings);
     ReadIntegerField(*document, "youtube", "download_kind", 0, 1,
                      settings_.youtubeDownloadKind, warnings);
     ReadIntegerField(*document, "youtube", "audio_output_format", 0, 5,

@@ -266,6 +266,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
         ModuleTitle,
         ModuleTab,
         ModuleCollapseToggle,
+        LyricsAction,
         // Playlist Editor bottom-row buttons and the tree "new playlist" (+) button.
         EditorAdd, EditorRemove, NewPlaylist
     };
@@ -308,6 +309,11 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     float settingsScrollY{};
     float settingsContentHeight{};
     D2D1_RECT_F settingsDetailsBounds{};
+    D2D1_RECT_F lyricsContentBounds{};
+    float lyricsScrollY{};
+    bool lyricsSyncedMode_{true};
+    std::uint64_t lyricsRevision_{};
+    DWRITE_TEXT_ALIGNMENT lyricsAlignment_{DWRITE_TEXT_ALIGNMENT_LEADING};
     // Skin Manager saved-skins list row scroll.
     std::size_t settingsSkinScroll{};
     std::size_t settingsSkinRows{};
@@ -513,6 +519,11 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
 
     void DrawLibrary(const D2D1_RECT_F& bounds,
                      std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void DrawLyrics(const D2D1_RECT_F& bounds,
+                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
+    void HandleLyricsAction(std::uint64_t action);
 
     void DrawMini(const D2D1_SIZE_F size,
                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);

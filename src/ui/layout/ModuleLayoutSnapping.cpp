@@ -18,8 +18,8 @@ bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone)
     const ModuleId targetSnapRoot = SnapRoot(targetRoot);
     if (sourceSnapRoot == targetSnapRoot) return false;
     const auto* targetItem = Find(targetRoot);
-    if (!targetItem || targetItem->collapsed || !Find(sourceTabRoot)) return false;
-    std::array<ModuleId, 5> sourceMembers{};
+    if (!targetItem || IsEffectivelyCollapsed(targetRoot) || !Find(sourceTabRoot)) return false;
+    std::array<ModuleId, 6> sourceMembers{};
     const std::size_t sourceMemberCount = MovingMembers(source, sourceMembers);
     const ModuleLayoutItem targetGeometry = *targetItem;
     if ((zone == ModuleDropZone::Left || zone == ModuleDropZone::Right) &&
@@ -97,15 +97,18 @@ bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone)
                     sourceDestination.left + (item->x + item->width - sourceBounds.left) * scaleX,
                     sourceDestination.top + (item->y + item->height - sourceBounds.top) * scaleY};
             setGeometry(*item, transformed, ModuleDockState::Snapped);
+            SyncExpandedGeometry(*item);
         }
     }
     if (auto* item = Find(targetRoot)) {
         setGeometry(*item, targetDestination, ModuleDockState::Snapped);
+        SyncExpandedGeometry(*item);
     }
     if (targetWasTabbed) {
         for (std::size_t index = 0; index < TabCount(); ++index) {
             if (auto* item = Find(tabOrder[index])) {
                 setGeometry(*item, targetDestination, ModuleDockState::Snapped);
+                SyncExpandedGeometry(*item);
             }
         }
     }
@@ -114,6 +117,7 @@ bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone)
             const auto itemIndex = static_cast<std::size_t>(item - items.data());
             snapGroup[itemIndex] = targetSnapRoot;
             item->dockState = ModuleDockState::Snapped;
+            SyncExpandedGeometry(*item);
         }
     }
     if (HasNewConflictingGeometry(before)) {
@@ -132,14 +136,15 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
     const bool freeDestination = FindplusWindowRectangle(
         source, region, pointerX, pointerY, 0.10F, 0.10F, destination);
 
-    std::array<ModuleId, 5> moving{};
+    std::array<ModuleId, 6> moving{};
     const auto movingCount = MovingMembers(source, moving);
     ModuleId targetRoot{};
     bool splitTargetFound = false;
     if (!freeDestination) {
         const ModuleLayoutItem* target = nullptr;
         for (const auto& item : items) {
-            if (!item.visible || item.collapsed || Contains(moving, movingCount, item.id)) continue;
+            if (!item.visible || IsEffectivelyCollapsed(item.id) ||
+                Contains(moving, movingCount, item.id)) continue;
             if (IsTabbed(item.id) && TabRoot(item.id) != item.id) continue;
             const auto bounds = Bounds(item);
             if (pointerX >= bounds.left && pointerX <= bounds.right &&
@@ -215,6 +220,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
                 item->height *= scaleY;
             }
             item->dockState = ModuleDockState::Snapped;
+            SyncExpandedGeometry(*item);
         }
     }
     if (!freeDestination && splitTargetFound) {
@@ -240,6 +246,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
             target->width = remainder.right - remainder.left;
             target->height = remainder.bottom - remainder.top;
             target->dockState = ModuleDockState::Snapped;
+            SyncExpandedGeometry(*target);
             for (std::size_t tab = 0; tab < TabCount(); ++tab) {
                 if (auto* tabItem = Find(tabOrder[tab]);
                     tabItem != nullptr && TabRoot(tabItem->id) == targetRoot) {
@@ -247,6 +254,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
                     tabItem->y = target->y;
                     tabItem->width = target->width;
                     tabItem->height = target->height;
+                    SyncExpandedGeometry(*tabItem);
                 }
             }
             for (std::size_t index = 0; index < movingCount; ++index) {

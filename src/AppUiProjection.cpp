@@ -40,6 +40,9 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     if (youtubeDirty_.exchange(false, std::memory_order_acq_rel)) {
         OnYoutubeServiceUpdated();
     }
+    if (lyricsDirty_.exchange(false, std::memory_order_acq_rel)) {
+        OnLyricsServiceUpdated();
+    }
 
     // Paint path uses lock-free transport; full Status() only when catalog rebuilds.
     const auto live = audio_.Live();
@@ -70,6 +73,8 @@ void App::SnapshotUiModel(ui::UiModel& out) {
         // Avoid re-copying FFT vectors when the analyzer has not published a new frame.
         analyzer_.CopySnapshot(model.visualization);
         model.revision = revision_;
+        model.lyrics = lyrics_.Snapshot();
+        model.lyricsCacheEnabled = settings_.Settings().lyricsCacheEnabled;
     };
 
     // Library/catalog work is expensive; reuse last snapshot when only transport/viz moved.

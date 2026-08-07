@@ -11,13 +11,16 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
     panelBounds.clear();
     moduleRegions.clear();
     decorControlBounds.clear();
+    deferredTextLayouts.clear();
     previewVideoBounds = {};
+    lyricsContentBounds = {};
     const auto& layout = moduleGesture != ModuleGesture::None
         ? moduleLayoutDraft : model.moduleLayout;
     const auto boundsFor = [size](const ModuleLayoutItem& item) {
         return ModulePixelBounds(item, size);
     };
     const auto tabActive = [&layout](ModuleId id) {
+        if (layout.IsEffectivelyCollapsed(id)) return false;
         return !layout.IsTabbed(id) || layout.tabOrder[layout.ActiveTabIndex()] == id;
     };
     const auto draw = [this, &b, &boundsFor](ModuleId id, const ModuleLayoutItem& item,
@@ -30,6 +33,7 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
         case ModuleId::GraphicEqualizer: DrawEqualizer(bounds, b); break;
         case ModuleId::RivanLibrary: DrawLibrary(bounds, b); break;
         case ModuleId::VideoPreview: DrawVideoPreview(bounds, b); break;
+        case ModuleId::Lyrics: DrawLyrics(bounds, b); break;
         }
     };
 
@@ -41,7 +45,7 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
 
     deferTexts = true;
     for (const auto& item : layout.items) {
-        if (!item.visible || item.collapsed || !tabActive(item.id)) continue;
+        if (!item.visible || !tabActive(item.id)) continue;
         if (layout.IsTabbed(item.id) && layout.TabCount() > 1) {
             const auto* base = layout.Find(layout.tabOrder[0]);
             if (!base) continue;
@@ -55,7 +59,8 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
             draw(item.id, item);
         }
     }
-    if (layout.TabCount() > 0) {
+    if (layout.TabCount() > 0 &&
+        !layout.IsEffectivelyCollapsed(layout.tabOrder[0])) {
         const auto* base = layout.Find(layout.tabOrder[0]);
         if (base) {
             const auto tabBounds = boundsFor(*base);
@@ -148,7 +153,7 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
         }
     }
     for (const auto& item : layout.items) {
-        if (!item.visible || item.collapseMode == ModuleCollapseMode::None) continue;
+        if (!item.visible || !layout.IsCollapseHandleVisible(item.id)) continue;
         const auto handle = ModuleCollapseHandleBounds(item, size);
         if (Width(handle) <= 1.0F || Height(handle) <= 1.0F) continue;
         const bool hot = Contains(handle, static_cast<float>(mouse.x),

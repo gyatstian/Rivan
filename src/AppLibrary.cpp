@@ -16,6 +16,26 @@
 namespace rivan {
 namespace {
 
+std::pair<std::wstring, std::wstring> LyricsMetadata(const library::Track& track) {
+    std::wstring title = track.title.empty() ? track.filePath.stem().wstring() : track.title;
+    std::wstring artist = track.artist;
+    const auto clean = [](std::wstring value) {
+        while (!value.empty() && (value.front() == L' ' || value.front() == L'\t')) value.erase(value.begin());
+        while (!value.empty() && (value.back() == L' ' || value.back() == L'\t')) value.pop_back();
+        return value;
+    };
+    const auto separator = title.find(L" - ");
+    if (artist.empty() && separator != std::wstring::npos && separator > 0 && separator + 3 < title.size()) {
+        artist = clean(title.substr(0, separator));
+        title = clean(title.substr(separator + 3));
+    }
+    if (artist.empty()) {
+        const auto parent = track.filePath.parent_path().filename().wstring();
+        if (!parent.empty() && parent != L"Music" && parent != L"music") artist = parent;
+    }
+    return {clean(std::move(title)), clean(std::move(artist))};
+}
+
 std::optional<std::uint64_t> ParseId(const std::string& text) noexcept {
     std::uint64_t value{};
     const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
@@ -140,6 +160,9 @@ void App::RestoreSessionAfterScan() {
     if (selectedIndex && queue_.Current()) {
         selectedTrack_ = queue_.Current()->id;
         activeTrack_ = *queue_.Current();
+        const auto metadata = LyricsMetadata(*activeTrack_);
+        lyrics_.Request(activeTrack_->id, metadata.first, metadata.second,
+                        activeTrack_->album, activeTrack_->durationSeconds);
         audio_.Load(queue_.Current()->filePath);
         if (settings_.Session().positionMilliseconds != 0) {
             audio_.Seek(std::chrono::milliseconds(settings_.Session().positionMilliseconds));
@@ -162,6 +185,9 @@ void App::PlayNavigation(const playlist::QueueNavigation& navigation, bool start
     selectedTrack_ = navigation.track->id;
     activeTrack_ = *navigation.track;
     audio_.Load(navigation.track->filePath);
+    const auto metadata = LyricsMetadata(*navigation.track);
+    lyrics_.Request(navigation.track->id, metadata.first, metadata.second,
+                    navigation.track->album, navigation.track->durationSeconds);
     if (startPlayback) audio_.Play();
     UpdateDiscordPresence();
     ++revision_;

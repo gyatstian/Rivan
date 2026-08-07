@@ -259,7 +259,8 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
     // remains correct while the idle preview is showing a different layout.
     for (auto iterator = moduleLayoutDraft.items.rbegin();
          iterator != moduleLayoutDraft.items.rend(); ++iterator) {
-        if (!iterator->visible || iterator->collapsed || iterator->id == *draggingModule) continue;
+        if (!iterator->visible || moduleLayoutDraft.IsEffectivelyCollapsed(iterator->id) ||
+            iterator->id == *draggingModule) continue;
         if (moduleLayoutDraft.SnapRoot(iterator->id) ==
             moduleLayoutDraft.SnapRoot(*draggingModule)) continue;
         if (moduleLayoutDraft.IsTabbed(*draggingModule) &&
@@ -346,7 +347,9 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
     if (!previewCanApply) {
         for (auto iterator = moduleLayoutDraft.items.rbegin();
              iterator != moduleLayoutDraft.items.rend(); ++iterator) {
-            if (!iterator->visible || iterator->id == *draggingModule || iterator->collapsed) continue;
+            if (!iterator->visible ||
+                moduleLayoutDraft.IsEffectivelyCollapsed(iterator->id) ||
+                iterator->id == *draggingModule) continue;
             if (moduleDragFromCollapsedArrow && Contains(moduleCollapsedArrowOrigin, x, y)) continue;
             if (moduleLayoutDraft.SnapRoot(iterator->id) ==
                 moduleLayoutDraft.SnapRoot(*draggingModule)) continue;

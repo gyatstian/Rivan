@@ -101,6 +101,8 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
 
     auto layout = ui::ModuleLayout::Defaults();
     const bool hasVideoPreviewGeometry = document->Get("modules", "module_4_x").has_value();
+    const bool hasLyricsGeometry = document->Get("modules", "module_5_x").has_value();
+    bool migratedLegacyVideoPreviewDefault = false;
     for (std::size_t i = 0; i < layout.items.size(); ++i) {
         auto& item = layout.items[i];
         const std::string key = "module_" + std::to_string(i) + "_";
@@ -173,6 +175,7 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
             std::abs(library->y) < 0.0001F && std::abs(library->width - 0.54F) < 0.0001F &&
             std::abs(library->height - 1.0F) < 0.0001F;
         if (legacyDefaultLibrary && videoPreview != nullptr) {
+            migratedLegacyVideoPreviewDefault = true;
             const auto defaults = ui::ModuleLayout::Defaults();
             if (const auto* defaultLibrary = defaults.Find(ui::ModuleId::RivanLibrary)) {
                 library->x = defaultLibrary->x;
@@ -191,6 +194,28 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
             videoPreview->collapseTarget = ui::ModuleId::VideoPreview;
             videoPreview->collapseTargetIsWindow = false;
             videoPreview->collapsed = false;
+        }
+    }
+
+    // Sessions written before Lyrics used module_4 for Video Preview. Migrate the old
+    // built-in five-module geometry to the six-panel default; retain custom layouts
+    // unchanged and hide Lyrics so it never obscures a user-arranged panel.
+    if (!hasLyricsGeometry) {
+        const auto* library = layout.Find(ui::ModuleId::RivanLibrary);
+        const auto* videoPreview = layout.Find(ui::ModuleId::VideoPreview);
+        const bool oldFiveModuleDefault = library != nullptr && videoPreview != nullptr &&
+            library->visible && videoPreview->visible && !library->collapsed &&
+            !videoPreview->collapsed && std::abs(library->x - 0.46F) < 0.0001F &&
+            std::abs(library->y) < 0.0001F && std::abs(library->width - 0.54F) < 0.0001F &&
+            std::abs(library->height - 0.66F) < 0.0001F &&
+            std::abs(videoPreview->x - 0.46F) < 0.0001F &&
+            std::abs(videoPreview->y - 0.68F) < 0.0001F &&
+            std::abs(videoPreview->width - 0.54F) < 0.0001F &&
+            std::abs(videoPreview->height - 0.30F) < 0.0001F;
+        if (migratedLegacyVideoPreviewDefault || oldFiveModuleDefault) {
+            layout = ui::ModuleLayout::Defaults();
+        } else if (auto* lyrics = layout.Find(ui::ModuleId::Lyrics)) {
+            lyrics->visible = false;
         }
     }
 
@@ -218,6 +243,34 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
     if (const auto active = document->Get("modules", "active_tab")) {
         if (const auto parsed = ParseInteger<std::size_t>(*active)) {
             layout.activeTab = std::min(*parsed, layout.tabCount == 0 ? 0U : layout.tabCount - 1U);
+        }
+    }
+
+    for (const auto& item : layout.items) {
+        std::array<ui::ModuleId, 6> path{};
+        std::size_t pathCount = 0;
+        ui::ModuleId current = item.id;
+        while (const auto* candidate = layout.Find(current)) {
+            std::size_t cycleStart = pathCount;
+            for (std::size_t index = 0; index < pathCount; ++index) {
+                if (path[index] == current) {
+                    cycleStart = index;
+                    break;
+                }
+            }
+            if (cycleStart != pathCount) {
+                for (std::size_t index = cycleStart; index < pathCount; ++index) {
+                    layout.ClearModuleCollapse(path[index]);
+                }
+                break;
+            }
+            if (pathCount >= path.size()) break;
+            path[pathCount++] = current;
+            if (candidate->collapseMode != ui::ModuleCollapseMode::Inside ||
+                candidate->collapseTargetIsWindow) {
+                break;
+            }
+            current = layout.TabRoot(candidate->collapseTarget);
         }
     }
     session_.moduleLayout = layout;

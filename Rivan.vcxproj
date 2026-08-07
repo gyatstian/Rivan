@@ -91,6 +91,7 @@
     <ClInclude Include="src\discord\DiscordPresence.h" />
     <ClInclude Include="src\library\LibraryScanner.h" />
     <ClInclude Include="src\library\Track.h" />
+    <ClInclude Include="src\lyrics\LyricsService.h" />
     <ClInclude Include="src\playlist\PlaybackQueue.h" />
     <ClInclude Include="src\playlist\Playlist.h" />
     <ClInclude Include="src\playlist\PlaylistManager.h" />
@@ -123,6 +124,7 @@
     <ClCompile Include="src\App.cpp" />
     <ClCompile Include="src\AppUiProjection.cpp" />
     <ClCompile Include="src\AppYoutube.cpp" />
+    <ClCompile Include="src\AppLyrics.cpp" />
     <ClCompile Include="src\AppSkins.cpp" />
     <ClCompile Include="src\AppPlaylists.cpp" />
     <ClCompile Include="src\AppPlaylistPersistence.cpp" />
@@ -140,6 +142,7 @@
     <ClCompile Include="src\discord\DiscordPresence.cpp" />
     <ClCompile Include="src\library\LibraryScanner.cpp" />
     <ClCompile Include="src\library\Track.cpp" />
+    <ClCompile Include="src\lyrics\LyricsService.cpp" />
     <ClCompile Include="src\playlist\PlaybackQueue.cpp" />
     <ClCompile Include="src\playlist\PlaylistManager.cpp" />
     <ClCompile Include="src\plugin\PluginHost.cpp" />
@@ -178,6 +181,7 @@
     <ClCompile Include="src\modules\GraphicEqualizerModule.cpp" />
     <ClCompile Include="src\modules\RivanLibraryModule.cpp" />
     <ClCompile Include="src\modules\VideoPreviewModule.cpp" />
+    <ClCompile Include="src\modules\LyricsModule.cpp" />
     <ClCompile Include="src\visualization\Visualization.cpp" />
     <ClCompile Include="src\visualization\VisualizationRenderer.cpp" />
     <ClCompile Include="src\youtube\YoutubeService.cpp" />

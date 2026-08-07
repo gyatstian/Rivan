@@ -343,6 +343,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
         case HitKind::PlaylistToggle: host.TogglePlaylistExpanded(hit.id); break;
         case HitKind::Refresh: host.RefreshLibrary(); break;
         case HitKind::SettingsAction: HandleSettingsAction(hit.id); return;
+        case HitKind::LyricsAction: HandleLyricsAction(hit.id); return;
         case HitKind::Track:
             // Selection now; activation (play) deferred to release when no drag happened.
             BeginTrackPress(hit, x, y);
