@@ -41,16 +41,15 @@ struct AppSettings final {
     bool exitToTray = false;
     // Optional YouTube browse/download (yt-dlp). Off by default; no YT work when false.
     bool youtubeEnabled = false;
-    // Library Youtube pane: search YouTube Music instead of plain YouTube.
-    bool youtubeMusicSearch = false;
-    // Download format: 0 = MP3 (ffmpeg transcode), 1 = Original (native m4a/opus,
-    // no ffmpeg, instant), 2 = Video (mp4). Defaults to MP3.
-    int youtubeDownloadMode = 0;
-    // yt-dlp audio quality 0 = best .. 9 = worst. Shared by all modes: MP3 encode VBR,
-    // Original stream pick, and Video audio-stream pick (0-9 mapped to best/mid/worst).
-    int youtubeAudioQuality = 0;
-    // Video mode only: video height ladder 0 = lowest .. 5 = best height.
-    int youtubeMp4VideoQuality = 0;
+    // YouTube chooser defaults. These are not exposed in Preferences; chooser updates them.
+    int youtubeDownloadKind = 1;       // 0 = video + audio, 1 = audio only
+    int youtubeAudioOutputFormat = 0;  // 0 = native, 1 = mp3, 2 = aac, 3 = opus, 4 = flac, 5 = wav
+    int youtubeAudioQuality = 0;       // 0 = best .. 9 = smallest
+    int youtubeVideoHeight = 0;
+    int youtubeVideoFps = 0;
+    std::string youtubeVideoExtension = "mp4";
+    std::string youtubeAudioExtension = "m4a";
+    int youtubeAudioBitrate = 0;
     // Right-click "Duplicate": false = add a second reference to the same track within
     // the playlist (no file copied); true = copy the underlying file on disk and add it.
     bool duplicateAsFile = false;

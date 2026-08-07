@@ -115,6 +115,7 @@
     <ClInclude Include="src\visualization\Visualization.h" />
     <ClInclude Include="src\visualization\VisualizationRenderer.h" />
     <ClInclude Include="src\youtube\YoutubeService.h" />
+    <ClInclude Include="src\youtube\YoutubeService.Internal.h" />
     <ClInclude Include="resources\resource.h" />
   </ItemGroup>
   <ItemGroup>
@@ -158,6 +159,7 @@
     <ClCompile Include="src\ui\Win32Ui.Input.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Keyboard.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Pointer.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.YoutubeChooser.cpp" />
     <ClCompile Include="src\ui\Win32Ui.RowInteraction.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Settings.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.cpp" />
@@ -179,6 +181,11 @@
     <ClCompile Include="src\visualization\Visualization.cpp" />
     <ClCompile Include="src\visualization\VisualizationRenderer.cpp" />
     <ClCompile Include="src\youtube\YoutubeService.cpp" />
+    <ClCompile Include="src\youtube\YoutubeService.Process.cpp" />
+    <ClCompile Include="src\youtube\YoutubeService.Search.cpp" />
+    <ClCompile Include="src\youtube\YoutubeService.Download.cpp" />
+    <ClCompile Include="src\youtube\YoutubeService.Probe.cpp" />
+    <ClCompile Include="src\youtube\YoutubeService.Tools.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="src\app.manifest" />

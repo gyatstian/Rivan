@@ -95,6 +95,20 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
         impl_->studioWindow = std::unique_ptr<Win32Ui>(new Win32Ui(impl_->host, WindowKind::SkinStudio));
         if (!impl_->studioWindow->Create(instance, studioOptions)) return false;
         PositionToolWindow(impl_->studioWindow->WindowHandle(), impl_->window, 70);
+
+        WindowOptions youtubeOptions;
+        youtubeOptions.title = L"Rivan YouTube Download";
+        youtubeOptions.initialWidth = 760;
+        youtubeOptions.initialHeight = 620;
+        youtubeOptions.minimumWidth = 520;
+        youtubeOptions.minimumHeight = 420;
+        youtubeOptions.acceptFileDrops = false;
+        youtubeOptions.owner = impl_->window;
+        youtubeOptions.initiallyVisible = false;
+        impl_->youtubeWindow = std::unique_ptr<Win32Ui>(
+            new Win32Ui(impl_->host, WindowKind::YoutubeChooser));
+        if (!impl_->youtubeWindow->Create(instance, youtubeOptions)) return false;
+        PositionToolWindow(impl_->youtubeWindow->WindowHandle(), impl_->window, 110);
     }
     return true;
 }
@@ -115,6 +129,11 @@ void Win32Ui::Refresh() noexcept {
     if (impl_->studioWindow && impl_->studioWindow->WindowHandle()) {
         ShowWindow(impl_->studioWindow->WindowHandle(), current.skinStudioVisible ? SW_SHOWNORMAL : SW_HIDE);
         if (current.skinStudioVisible) impl_->studioWindow->Refresh();
+    }
+    if (impl_->youtubeWindow && impl_->youtubeWindow->WindowHandle()) {
+        ShowWindow(impl_->youtubeWindow->WindowHandle(),
+                   current.youtubeChooserVisible ? SW_SHOWNORMAL : SW_HIDE);
+        if (current.youtubeChooserVisible) impl_->youtubeWindow->Refresh();
     }
 }
 
@@ -251,6 +270,10 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (impl_->windowKind == WindowKind::SkinStudio) {
             impl_->studioOpen = false;
             impl_->InvokeSafely(Command::ToggleSkinStudio);
+            return 0;
+        }
+        if (impl_->windowKind == WindowKind::YoutubeChooser) {
+            try { impl_->host.SetYoutubeChooserVisible(false); } catch (...) {}
             return 0;
         }
         if (impl_->windowKind == WindowKind::Main) {

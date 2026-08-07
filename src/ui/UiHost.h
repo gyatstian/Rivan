@@ -3,6 +3,7 @@
 #pragma once
 #include "../skin/Skin.h"
 #include "../visualization/Visualization.h"
+#include "../youtube/YoutubeService.h"
 #include "layout/ModuleLayout.h"
 
 #include <cstddef>
@@ -22,7 +23,7 @@ enum class SettingCategory : std::uint8_t {
     General,
     Appearance,
     Discord,
-    Downloading,
+    Online,
     SkinManager,
 };
 enum class SkinAssetKind : std::uint8_t { BackgroundImage, Font };
@@ -151,15 +152,6 @@ struct UiModel {
     bool discordShowImageText{true};
     bool discordShowGithubButton{};
     ModuleExpansionBehavior moduleExpansionBehavior{ModuleExpansionBehavior::Squash};
-    // Youtube pane source: false = YouTube, true = YouTube Music search/download.
-    bool youtubeMusicSearch{};
-    // Download format: 0 = MP3 (ffmpeg transcode), 1 = Original (native m4a/opus,
-    // no ffmpeg), 2 = Video (mp4). Defaults to MP3.
-    int youtubeDownloadMode{};
-    // yt-dlp audio quality 0 (best) .. 9 (worst). Shared by all modes.
-    int youtubeAudioQuality{};
-    // Video mode only: video height 0=lowest .. 5=best.
-    int youtubeMp4VideoQuality{};
     bool youtubeBrowsing{};  // selected playlist is the virtual Youtube browser
     bool youtubeBusy{};
     bool youtubeYtDlpInstalled{};
@@ -173,6 +165,11 @@ struct UiModel {
     bool youtubeCanPagePrev{};
     bool youtubeCanPageNext{};
     std::vector<YoutubeResultView> youtubeResults;
+    // Transient state for the separate download-format chooser window.
+    bool youtubeChooserVisible{};
+    std::uint64_t youtubeChooserEntryId{};
+    std::optional<youtube::YoutubeProbe> youtubeProbe;
+    youtube::YoutubeDownloadSelection youtubeDownloadSelection;
     std::vector<SkinSummary> skins;
     skin::Skin activeSkin{skin::Skin::BuiltInDarkPurple()};
     visualization::VisualizationSnapshot visualization;
@@ -239,20 +236,23 @@ public:
     virtual void SetDiscordShowArtist(bool enabled) = 0;
     virtual void SetDiscordShowImageText(bool enabled) = 0;
     virtual void SetDiscordShowGithubButton(bool enabled) = 0;
-    // Youtube pane: search/download via YouTube Music (covers + often better audio).
-    virtual void SetYoutubeMusicSearch(bool enabled) = 0;
-    // Download format: 0 = MP3 (ffmpeg), 1 = Original (native), 2 = Video (mp4).
-    virtual void SetYoutubeDownloadMode(int mode) = 0;
-    // yt-dlp audio quality 0 (best/slow) .. 9 (worst/fast). Shared by all modes.
-    virtual void SetYoutubeAudioQuality(int quality) = 0;
-    // Video mode only: video height ladder 0..5.
-    virtual void SetYoutubeMp4VideoQuality(int quality) = 0;
     // One-click install of yt-dlp or ffmpeg into %LOCALAPPDATA%\Rivan\tools.
     virtual void InstallYoutubeTool(bool ytDlp) = 0;
     // Search or resolve a URL when the Youtube playlist is selected.
     virtual void SubmitYoutubeQuery(std::wstring query) = 0;
     // Download (if needed) and play a Youtube result.
     virtual void ActivateYoutubeResult(std::uint64_t id) = 0;
+    // Controls the transient format chooser. Hiding through this callback cancels the
+    // pending play request; confirmation uses ConfirmYoutubeDownload instead.
+    virtual void SetYoutubeChooserVisible(bool visible) = 0;
+    virtual void SetYoutubeDownloadKind(youtube::YoutubeDownloadKind kind) = 0;
+    virtual void CycleYoutubeVideoFormat(int direction) = 0;
+    virtual void CycleYoutubeVideoQuality(int direction) = 0;
+    virtual void CycleYoutubeVideoFps(int direction) = 0;
+    virtual void CycleYoutubeAudioFormat(int direction) = 0;
+    virtual void CycleYoutubeAudioOutput(int direction) = 0;
+    virtual void SetYoutubeAudioQuality(int quality) = 0;
+    virtual void ConfirmYoutubeDownload() = 0;
     // Client-side search page (0-based).
     virtual void SetYoutubeSearchPage(std::size_t page) = 0;
     // Applies an installed/built-in skin by id and persists the choice.

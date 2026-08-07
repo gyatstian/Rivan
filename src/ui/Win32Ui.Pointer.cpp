@@ -357,6 +357,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
             BeginCreatePlaylist();
             break;
         case HitKind::YoutubeResult: host.ActivateYoutubeResult(hit.id); break;
+        case HitKind::YoutubeChooserAction: HandleYoutubeChooserAction(hit.id); return;
         case HitKind::FilePreviewFullscreen:
             EnterPreviewFullscreen();
             break;

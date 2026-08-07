@@ -31,11 +31,14 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     document.Set("application", "start_at_startup", BoolText(settings.startAtStartup));
     document.Set("application", "exit_to_tray", BoolText(settings.exitToTray));
     document.Set("youtube", "enabled", BoolText(settings.youtubeEnabled));
-    document.Set("youtube", "music_search", BoolText(settings.youtubeMusicSearch));
-    document.Set("youtube", "download_mode", std::to_string(settings.youtubeDownloadMode));
+    document.Set("youtube", "download_kind", std::to_string(settings.youtubeDownloadKind));
+    document.Set("youtube", "audio_output_format", std::to_string(settings.youtubeAudioOutputFormat));
     document.Set("youtube", "audio_quality", std::to_string(settings.youtubeAudioQuality));
-    document.Set("youtube", "mp4_video_quality",
-                 std::to_string(settings.youtubeMp4VideoQuality));
+    document.Set("youtube", "video_height", std::to_string(settings.youtubeVideoHeight));
+    document.Set("youtube", "video_fps", std::to_string(settings.youtubeVideoFps));
+    document.Set("youtube", "video_extension", settings.youtubeVideoExtension);
+    document.Set("youtube", "audio_extension", settings.youtubeAudioExtension);
+    document.Set("youtube", "audio_bitrate", std::to_string(settings.youtubeAudioBitrate));
     document.Set("library", "duplicate_as_file", BoolText(settings.duplicateAsFile));
     document.Set("discord", "enabled", BoolText(settings.discordEnabled));
     document.Set("discord", "show_artist", BoolText(settings.discordShowArtist));
@@ -133,20 +136,24 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
         else AddWarning(warnings, "Ignoring invalid appearance.module_expansion_behavior");
     }
     ReadBoolField(*document, "youtube", "enabled", settings_.youtubeEnabled, warnings);
-    ReadBoolField(*document, "youtube", "music_search", settings_.youtubeMusicSearch, warnings);
-    if (document->Get("youtube", "download_mode")) {
-        ReadIntegerField(*document, "youtube", "download_mode", 0, 2,
-                         settings_.youtubeDownloadMode, warnings);
-    } else {
-        // Legacy migration: old convert_to_mp3 bool. true -> MP3 (0), false -> Video (2).
-        bool legacyConvert = true;
-        ReadBoolField(*document, "youtube", "convert_to_mp3", legacyConvert, warnings);
-        settings_.youtubeDownloadMode = legacyConvert ? 0 : 2;
-    }
+    ReadIntegerField(*document, "youtube", "download_kind", 0, 1,
+                     settings_.youtubeDownloadKind, warnings);
+    ReadIntegerField(*document, "youtube", "audio_output_format", 0, 5,
+                     settings_.youtubeAudioOutputFormat, warnings);
     ReadIntegerField(*document, "youtube", "audio_quality", 0, 9,
                      settings_.youtubeAudioQuality, warnings);
-    ReadIntegerField(*document, "youtube", "mp4_video_quality", 0, 5,
-                     settings_.youtubeMp4VideoQuality, warnings);
+    ReadIntegerField(*document, "youtube", "video_height", 0, 10000,
+                     settings_.youtubeVideoHeight, warnings);
+    ReadIntegerField(*document, "youtube", "video_fps", 0, 1000,
+                     settings_.youtubeVideoFps, warnings);
+    if (const auto value = document->Get("youtube", "video_extension"); value && IsIdentifier(*value)) {
+        settings_.youtubeVideoExtension = std::string(*value);
+    }
+    if (const auto value = document->Get("youtube", "audio_extension"); value && IsIdentifier(*value)) {
+        settings_.youtubeAudioExtension = std::string(*value);
+    }
+    ReadIntegerField(*document, "youtube", "audio_bitrate", 0, 10000,
+                     settings_.youtubeAudioBitrate, warnings);
     ReadBoolField(*document, "discord", "enabled", settings_.discordEnabled, warnings);
     ReadBoolField(*document, "discord", "show_artist", settings_.discordShowArtist, warnings);
     ReadBoolField(*document, "discord", "show_image_text", settings_.discordShowImageText, warnings);
@@ -187,16 +194,15 @@ bool SettingsManager::Validate(const AppSettings& settings, std::string* error) 
         SetError(error, "Volume must be between 0 and 100");
         return false;
     }
-    if (settings.youtubeAudioQuality < 0 || settings.youtubeAudioQuality > 9) {
-        SetError(error, "YouTube audio quality must be between 0 and 9");
-        return false;
-    }
-    if (settings.youtubeMp4VideoQuality < 0 || settings.youtubeMp4VideoQuality > 5) {
-        SetError(error, "YouTube MP4 video quality must be between 0 and 5");
-        return false;
-    }
-    if (settings.youtubeDownloadMode < 0 || settings.youtubeDownloadMode > 2) {
-        SetError(error, "YouTube download mode must be between 0 and 2");
+    if (settings.youtubeDownloadKind < 0 || settings.youtubeDownloadKind > 1 ||
+        settings.youtubeAudioOutputFormat < 0 || settings.youtubeAudioOutputFormat > 5 ||
+        settings.youtubeAudioQuality < 0 || settings.youtubeAudioQuality > 9 ||
+        settings.youtubeVideoHeight < 0 || settings.youtubeVideoHeight > 10000 ||
+        settings.youtubeVideoFps < 0 || settings.youtubeVideoFps > 1000 ||
+        settings.youtubeAudioBitrate < 0 || settings.youtubeAudioBitrate > 10000 ||
+        !IsIdentifier(settings.youtubeVideoExtension) ||
+        !IsIdentifier(settings.youtubeAudioExtension)) {
+        SetError(error, "Invalid YouTube chooser defaults");
         return false;
     }
     if (!IsIdentifier(settings.skinId)) {

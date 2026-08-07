@@ -213,7 +213,7 @@ void ColorToHsv(skin::Color color, float& hue, float& saturation, float& value) 
     case SettingCategory::General: return L"GENERAL";
     case SettingCategory::Appearance: return L"APPEARANCE";
     case SettingCategory::Discord: return L"DISCORD";
-    case SettingCategory::Downloading: return L"DOWNLOADING";
+    case SettingCategory::Online: return L"ONLINE";
     case SettingCategory::SkinManager: return L"SKIN MANAGER";
     }
     return L"SETTINGS";
@@ -262,7 +262,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     enum class HitKind : std::uint8_t {
         Command, Playlist, PlaylistToggle, Track, Seek, Volume, Setting,
         PlaylistSearch, WindowControl, Studio, Refresh, SettingsAction, TimeToggle,
-        YoutubeResult, FilePreviewFullscreen, FilePreviewExitFullscreen,
+        YoutubeResult, YoutubeChooserAction, FilePreviewFullscreen, FilePreviewExitFullscreen,
         ModuleTitle,
         ModuleTab,
         ModuleCollapseToggle,
@@ -315,6 +315,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     D2D1_SIZE_F lastCanvas{};
     std::unique_ptr<Win32Ui> settingsWindow;
     std::unique_ptr<Win32Ui> studioWindow;
+    std::unique_ptr<Win32Ui> youtubeWindow;
     // True while the notification-area icon is live (exit-to-tray hid the window).
     bool trayIconAdded{};
 
@@ -540,6 +541,9 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void DrawSettings(const D2D1_SIZE_F size,
                       std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
 
+    void DrawYoutubeChooser(const D2D1_SIZE_F size,
+                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+
     // General pane: music folder list. Show every configured root, then one empty
     // slot so the next folder can be chosen. After each choice another empty slot
     // appears (no limit). Subfolders of all roots become playlists.
@@ -564,6 +568,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void SettingsButton(const D2D1_RECT_F& bounds, const std::wstring& label, std::uint64_t action,
                         std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
     void HandleSettingsAction(std::uint64_t action);
+    void HandleYoutubeChooserAction(std::uint64_t action);
     [[nodiscard]] std::optional<std::filesystem::path> PickFolder();
     void StudioRailButton(const D2D1_RECT_F& bounds, const wchar_t* icon, const wchar_t* label,
                           StudioSection section, std::uint64_t action,

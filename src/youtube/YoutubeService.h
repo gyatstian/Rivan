@@ -9,6 +9,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -27,9 +28,48 @@ struct YoutubeEntry final {
     float downloadProgress{-1.0F};
 };
 
-enum class YoutubeJobKind : std::uint8_t { Idle, Search, Download, Install };
+enum class YoutubeJobKind : std::uint8_t { Idle, Search, Probe, Download, Install };
 
 enum class YoutubeTool : std::uint8_t { YtDlp, Ffmpeg };
+
+struct YoutubeVideoFormat final {
+    std::wstring formatId;
+    std::wstring extension;
+    int height{};
+    double fps{};
+    std::uint64_t filesize{};
+};
+
+struct YoutubeAudioFormat final {
+    std::wstring formatId;
+    std::wstring extension;
+    double abr{};
+    std::uint64_t filesize{};
+};
+
+struct YoutubeProbe final {
+    std::wstring title;
+    double durationSeconds{};
+    std::vector<YoutubeVideoFormat> videoFormats;
+    std::vector<YoutubeAudioFormat> audioFormats;
+};
+
+enum class YoutubeDownloadKind : std::uint8_t { Video, AudioOnly };
+
+enum class YoutubeAudioOutputFormat : std::uint8_t { Native, Mp3, Aac, Opus, Flac, Wav };
+
+struct YoutubeDownloadSelection final {
+    YoutubeDownloadKind kind{YoutubeDownloadKind::AudioOnly};
+    std::wstring videoFormatId;
+    std::wstring preferredVideoExtension;
+    int videoHeight{};
+    double videoFps{};
+    std::wstring audioFormatId;
+    std::wstring preferredAudioExtension;
+    int preferredAudioBitrate{};
+    YoutubeAudioOutputFormat audioOutput{YoutubeAudioOutputFormat::Native};
+    int audioQuality{};
+};
 
 inline constexpr std::size_t kSearchPageSize = 20;
 // Cap yt-dlp batch size; results stream into the UI one line at a time.
@@ -40,6 +80,8 @@ struct YoutubeSnapshot final {
     bool busy{};
     std::wstring status;
     std::vector<YoutubeEntry> entries;
+    std::optional<YoutubeProbe> probe;
+    std::uint64_t probeEntryId{};
     std::uint64_t generation{};
     bool ytDlpInstalled{};
     bool ffmpegInstalled{};
@@ -83,19 +125,13 @@ public:
     // One-click HTTPS download into ToolsDirectory() (async).
     void InstallTool(YoutubeTool tool);
 
-    // Search or resolve a URL into entries (async).
-    // musicSearch: use YouTube Music search + music.youtube.com watch URLs.
-    void SubmitQuery(std::wstring query, bool musicSearch = false);
+    // Search or resolve a plain YouTube query/URL into entries (async).
+    void SubmitQuery(std::wstring query);
+    // Probe one entry's title, duration, and available media formats (async).
+    void Probe(std::uint64_t entryId);
     // Download one entry by id into musicRoot/Youtube (async).
-    // downloadMode: 0 = MP3 (ffmpeg transcode), 1 = Original (native m4a/opus, no ffmpeg),
-    //   2 = Video (mp4 with picked audio stream).
-    // audioQuality: yt-dlp audio quality 0 (best) .. 9 (worst). Shared by all modes:
-    //   MP3 encode VBR, Original stream pick, Video audio-stream pick.
-    // mp4VideoQuality: 0=lowest .. 5=best height (Video mode only).
-    // musicSearch: prefer music.youtube.com URL + music player client for audio.
     void Download(std::uint64_t entryId, std::filesystem::path musicRoot,
-                  int audioQuality = 0, int downloadMode = 0, int mp4VideoQuality = 0,
-                  bool musicSearch = false);
+                  YoutubeDownloadSelection selection);
     // Flip client-side search page (0-based). Returns false if out of range / not paged.
     bool SetSearchPage(std::size_t page);
 
@@ -103,10 +139,10 @@ public:
 
 private:
     void Notify() const;
-    void RunSearch(std::stop_token stop, std::wstring query, bool musicSearch);
+    void RunSearch(std::stop_token stop, std::wstring query);
+    void RunProbe(std::stop_token stop, std::uint64_t entryId);
     void RunDownload(std::stop_token stop, std::uint64_t entryId,
-                     std::filesystem::path musicRoot, int audioQuality, int downloadMode,
-                     int mp4VideoQuality, bool musicSearch);
+                     std::filesystem::path musicRoot, YoutubeDownloadSelection selection);
     void RunInstall(std::stop_token stop, YoutubeTool tool);
     void RunWarm(std::stop_token stop);
     void JoinWorker();
@@ -116,7 +152,7 @@ private:
     // Small in-memory LRU of recent search results so an identical re-search renders
     // instantly instead of re-spawning yt-dlp (process + network startup is the main
     // browsing latency). Most-recently-used lives at the back. Cleared on Reset().
-    // cacheKey includes source prefix (y: / m:) so YT and YTM stay separate.
+    // cacheKey includes the YouTube source prefix.
     struct CachedSearch final {
         std::wstring query;
         std::vector<YoutubeEntry> entries;

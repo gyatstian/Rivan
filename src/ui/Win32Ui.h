@@ -42,7 +42,7 @@ public:
     [[nodiscard]] LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
 private:
-    enum class WindowKind { Main, Settings, SkinStudio };
+    enum class WindowKind { Main, Settings, SkinStudio, YoutubeChooser };
     Win32Ui(IUiHost& host, WindowKind kind);
 
     struct Impl;

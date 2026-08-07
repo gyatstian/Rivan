@@ -490,6 +490,8 @@ void TestUiModuleRegistry() {
           "the graphic equalizer section has a stable key");
     Check(UiModuleRegistry::Find(ModuleId::RivanLibrary) != nullptr,
            "the Rivan Library section is discoverable by identity");
+    Check(UiModuleRegistry::Get(ModuleId::RivanLibrary).Title() == L"LIBRARY",
+          "the library section uses the short title");
     Check(UiModuleRegistry::Get(ModuleId::VideoPreview).Key() == "video_preview",
           "the video preview section has a stable key");
     Check(UiModuleRegistry::Get(ModuleId::VideoPreview).Title() == L"VIDEO PREVIEW",

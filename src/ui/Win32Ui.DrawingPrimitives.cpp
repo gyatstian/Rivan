@@ -313,12 +313,13 @@ void Win32Ui::Impl::DrawTitlebar(const D2D1_SIZE_F size,
          DrawBevel(bar, b[1].Get(), b[3].Get(), b[4].Get(), false, 1.0F);
 
          const bool main = windowKind == WindowKind::Main;
-         const float controlsWidth = main ? 4.0F * kTitlebarButtonSize + 3.0F * 3.0F
+         const float controlsWidth = main ? 3.0F * kTitlebarButtonSize + 2.0F * 3.0F
                                           : kTitlebarButtonSize;
          const float controlsLeft = std::max(4.0F, size.width - controlsWidth - 4.0F);
          const auto title = main ? std::wstring_view(L"RIVAN")
                                  : std::wstring_view(options.title ? options.title : L"RIVAN");
-         DrawText(title, Rect(9.0F, 0.0F, controlsLeft - 6.0F, bar.bottom),
+         const float titleLeft = main ? 4.0F + kTitlebarButtonSize + 3.0F : 9.0F;
+         DrawText(title, Rect(titleLeft, 0.0F, controlsLeft - 6.0F, bar.bottom),
                   b[13].Get(), headingFormat.Get());
 
          float right = size.width - 4.0F;
@@ -330,12 +331,9 @@ void Win32Ui::Impl::DrawTitlebar(const D2D1_SIZE_F size,
              right -= kTitlebarButtonSize + 3.0F;
          };
 
-         drawControl(L"X", 3);
          if (main) {
-             drawControl(L"^", 2);
-             drawControl(L"_", 1);
-             const auto settings = Rect(right - kTitlebarButtonSize, 3.0F,
-                                        right, 3.0F + kTitlebarButtonSize);
+             const auto settings = Rect(4.0F, 3.0F, 4.0F + kTitlebarButtonSize,
+                                        3.0F + kTitlebarButtonSize);
              const bool hot = Contains(settings, static_cast<float>(titlebarMouse.x),
                                        static_cast<float>(titlebarMouse.y));
              DrawBevel(settings, hot ? b[7].Get() : b[2].Get(), b[3].Get(), b[4].Get());
@@ -343,6 +341,12 @@ void Win32Ui::Impl::DrawTitlebar(const D2D1_SIZE_F size,
                       DWRITE_TEXT_ALIGNMENT_CENTER);
              AddIdHit(settings, HitKind::WindowControl, 4);
              titlebarControlBounds.push_back(settings);
+         }
+
+         drawControl(L"X", 3);
+         if (main) {
+             drawControl(L"^", 2);
+             drawControl(L"_", 1);
          }
      }
 

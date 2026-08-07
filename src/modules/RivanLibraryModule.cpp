@@ -324,34 +324,14 @@ void Win32Ui::Impl::DrawLibrary(const D2D1_RECT_F& bounds,
 
         if (model.youtubeBrowsing) {
             Win32Ui::Impl::DrawText(L"YOUTUBE — SEARCH OR PASTE URL", Rect(right.left, right.top, right.right,
-                                                            right.top + 18),
-                     b[8].Get(), tinyFormat.Get());
-            // Source toggle above search: YouTube vs YouTube Music (catalog audio + covers).
-            const float sourceMid = right.left + Width(right) * 0.5F;
-            const auto ytBtn = Rect(right.left, right.top + 19, sourceMid - 2.0F, right.top + 39);
-            const auto ytmBtn = Rect(sourceMid + 2.0F, right.top + 19, right.right, right.top + 39);
-            const bool ytHot =
-                Contains(ytBtn, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
-            const bool ytmHot =
-                Contains(ytmBtn, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
-            const bool ytOn = !model.youtubeMusicSearch;
-            const bool ytmOn = model.youtubeMusicSearch;
-            Win32Ui::Impl::DrawBevel(ytBtn, (ytOn || ytHot) ? b[7].Get() : b[2].Get(), b[3].Get(), b[4].Get(),
-                      ytOn);
-            Win32Ui::Impl::DrawBevel(ytmBtn, (ytmOn || ytmHot) ? b[7].Get() : b[2].Get(), b[3].Get(), b[4].Get(),
-                      ytmOn);
-            Win32Ui::Impl::DrawText(L"YOUTUBE", ytBtn, ytOn ? b[9].Get() : b[10].Get(), tinyFormat.Get(),
-                     DWRITE_TEXT_ALIGNMENT_CENTER);
-            Win32Ui::Impl::DrawText(L"YOUTUBE MUSIC", ytmBtn, ytmOn ? b[9].Get() : b[10].Get(), tinyFormat.Get(),
-                     DWRITE_TEXT_ALIGNMENT_CENTER);
-            Win32Ui::Impl::AddIdHit(ytBtn, HitKind::SettingsAction, 53);
-            Win32Ui::Impl::AddIdHit(ytmBtn, HitKind::SettingsAction, 54);
+                                                             right.top + 18),
+                      b[8].Get(), tinyFormat.Get());
 
             const auto localSearch =
-                Rect(right.left, right.top + 43, right.right - 72, right.top + 67);
+                Rect(right.left, right.top + 19, right.right - 72, right.top + 43);
             Win32Ui::Impl::DrawSearch(localSearch, playlistQuery, SearchTarget::Playlist, b[5].Get(), b[3].Get(),
                        b[4].Get(), b[6].Get(), b[6].Get());
-            const auto go = Rect(right.right - 68, right.top + 43, right.right, right.top + 67);
+            const auto go = Rect(right.right - 68, right.top + 19, right.right, right.top + 43);
             const bool goHot = Contains(go, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
             Win32Ui::Impl::DrawBevel(go, goHot ? b[7].Get() : b[2].Get(), b[3].Get(), b[4].Get(), false);
             Win32Ui::Impl::DrawText(L"GO", go, b[9].Get(), smallFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);

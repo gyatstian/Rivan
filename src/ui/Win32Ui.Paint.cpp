@@ -93,6 +93,11 @@ void Win32Ui::Impl::Paint() {
             DrawSkinStudio(canvasSize, brushes);
             target->SetTransform(D2D1::Matrix3x2F::Identity());
             Win32Ui::Impl::DrawTitlebar(size, brushes);
+        } else if (windowKind == WindowKind::YoutubeChooser) {
+            target->SetTransform(D2D1::Matrix3x2F::Translation(0.0F, kTitlebarHeight));
+            DrawYoutubeChooser(canvasSize, brushes);
+            target->SetTransform(D2D1::Matrix3x2F::Identity());
+            Win32Ui::Impl::DrawTitlebar(size, brushes);
         } else {
             if (model.skinElementFocusRevision != seenElementFocusRevision) {
                 const int focused = model.focusedSkinElement;

@@ -284,10 +284,6 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.discordShowImageText = settings_.Settings().discordShowImageText;
     out.discordShowGithubButton = settings_.Settings().discordShowGithubButton;
     out.moduleExpansionBehavior = settings_.Settings().moduleExpansionBehavior;
-    out.youtubeMusicSearch = settings_.Settings().youtubeMusicSearch;
-    out.youtubeDownloadMode = settings_.Settings().youtubeDownloadMode;
-    out.youtubeAudioQuality = settings_.Settings().youtubeAudioQuality;
-    out.youtubeMp4VideoQuality = settings_.Settings().youtubeMp4VideoQuality;
     out.youtubeBrowsing =
         YoutubeFeatureOn() && selectedPlaylist_ == playlist::YoutubePlaylistId;
     out.youtubeBusy = youtubeView_.busy;
@@ -296,6 +292,10 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.youtubeInstallingYtDlp = youtubeView_.installingYtDlp;
     out.youtubeInstallingFfmpeg = youtubeView_.installingFfmpeg;
     out.youtubeStatus = youtubeView_.status;
+    out.youtubeChooserVisible = youtubeChooserVisible_;
+    out.youtubeChooserEntryId = youtubeChooserEntryId_;
+    out.youtubeProbe = youtubeView_.probe;
+    out.youtubeDownloadSelection = youtubeDownloadSelection_;
     out.skins.reserve(skins_.Skins().size());
     for (const auto& skin : skins_.Skins()) {
         out.skins.push_back({core::Utf8ToWide(skin.id, L"Unable to decode error text"),

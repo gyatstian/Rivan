@@ -59,13 +59,18 @@ public:
     void SetDiscordShowArtist(bool enabled) override;
     void SetDiscordShowImageText(bool enabled) override;
     void SetDiscordShowGithubButton(bool enabled) override;
-    void SetYoutubeMusicSearch(bool enabled) override;
-    void SetYoutubeDownloadMode(int mode) override;
-    void SetYoutubeAudioQuality(int quality) override;
-    void SetYoutubeMp4VideoQuality(int quality) override;
     void InstallYoutubeTool(bool ytDlp) override;
     void SubmitYoutubeQuery(std::wstring query) override;
     void ActivateYoutubeResult(std::uint64_t id) override;
+    void SetYoutubeChooserVisible(bool visible) override;
+    void SetYoutubeDownloadKind(youtube::YoutubeDownloadKind kind) override;
+    void CycleYoutubeVideoFormat(int direction) override;
+    void CycleYoutubeVideoQuality(int direction) override;
+    void CycleYoutubeVideoFps(int direction) override;
+    void CycleYoutubeAudioFormat(int direction) override;
+    void CycleYoutubeAudioOutput(int direction) override;
+    void SetYoutubeAudioQuality(int quality) override;
+    void ConfirmYoutubeDownload() override;
     void SetYoutubeSearchPage(std::size_t page) override;
     void ApplySkin(std::wstring_view id) override;
     void EditSkin(std::wstring_view id) override;
@@ -117,6 +122,7 @@ private:
     [[nodiscard]] bool SyncStartupRegistration(bool enabled, std::wstring* error = nullptr);
     void ToggleMiniPlayer();
     void ApplyYoutubeSnapshot(bool playIfReady, std::uint64_t playEntryId);
+    void PersistYoutubeChooserSelection();
     void ShowYoutubeLocalLibrary();
     // User playlists persist to their own file so they survive restarts and rescans.
     void LoadUserPlaylists();
@@ -198,6 +204,9 @@ private:
     youtube::YoutubeSnapshot youtubeView_{};
     std::uint64_t youtubeSelectedResult_{};
     std::uint64_t pendingPlayYoutubeId_{};
+    bool youtubeChooserVisible_{};
+    std::uint64_t youtubeChooserEntryId_{};
+    youtube::YoutubeDownloadSelection youtubeDownloadSelection_{};
     ui::ModuleLayout moduleLayout_{ui::ModuleLayout::Defaults()};
 };
 

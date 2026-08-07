@@ -16,7 +16,7 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
                                  content.left + navigationWidth, content.bottom - 3);
     DrawBevel(navigation, b[5].Get(), b[3].Get(), b[4].Get(), true);
     const std::array categories{SettingCategory::General, SettingCategory::Appearance,
-                                SettingCategory::Discord, SettingCategory::Downloading,
+                                SettingCategory::Discord, SettingCategory::Online,
                                 SettingCategory::SkinManager};
     float top = navigation.top + 5;
     for (const auto category : categories) {
@@ -34,7 +34,7 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
     const bool integrationCategory = model.settingsCategory == SettingCategory::General ||
                                      model.settingsCategory == SettingCategory::Appearance ||
                                      model.settingsCategory == SettingCategory::Discord ||
-                                     model.settingsCategory == SettingCategory::Downloading;
+                                     model.settingsCategory == SettingCategory::Online;
     if (!integrationCategory) {
         DrawText(CategoryName(model.settingsCategory), Rect(details.left + 15, details.top + 13,
                  details.right - 15, details.top + 42), b[6].Get(), headingFormat.Get());
@@ -195,41 +195,11 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
         y += 22;
     }
 
-    if (model.settingsCategory == SettingCategory::Downloading) {
+    if (model.settingsCategory == SettingCategory::Online) {
         DrawText(L"YOUTUBE", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
         y += 29;
         SettingsButton(Rect(left, y, right, y + 24), model.youtubeEnabled ? L"YOUTUBE DOWNLOADER: ON" : L"YOUTUBE DOWNLOADER: OFF", 4, b);
         y += 30;
-        if (model.youtubeEnabled) {
-            const int mode = std::clamp(model.youtubeDownloadMode, 0, 2);
-            static constexpr const wchar_t* formats[] = {L"FORMAT: MP3 (FFMPEG)", L"FORMAT: ORIGINAL (M4A)", L"FORMAT: VIDEO (MP4)"};
-            SettingsButton(Rect(left, y, right, y + 24), formats[mode], 9, b);
-            y += 26;
-            const wchar_t* hint = mode == 0
-                ? (model.youtubeFfmpegInstalled ? L"Transcodes to .mp3 via ffmpeg (re-encode, universal)." : L"Needs ffmpeg — install below.")
-                : mode == 1 ? L"Instant, no ffmpeg, highest fidelity. Saves .m4a/.opus."
-                            : (model.youtubeFfmpegInstalled ? L"Video + audio merged to .mp4." : L"No ffmpeg: falls back to progressive .mp4.");
-            DrawText(hint, Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-            y += 18;
-            const auto drawQuality = [&](const wchar_t* caption, const wchar_t* label,
-                                         std::uint64_t minus, std::uint64_t plus) {
-                DrawText(caption, Rect(left, y, right, y + 16), b[8].Get(), tinyFormat.Get());
-                y += 18;
-                const float step = 28.0F;
-                const auto box = Rect(left + step + 4, y, right - step - 4, y + 24);
-                SettingsButton(Rect(left, y, left + step, y + 24), L"-", minus, b);
-                SettingsButton(Rect(right - step, y, right, y + 24), L"+", plus, b);
-                DrawBevel(box, b[5].Get(), b[3].Get(), b[4].Get(), true, 2.0F);
-                DrawText(label, Rect(box.left + 6, box.top, box.right - 6, box.bottom), b[6].Get(), tinyFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
-                y += 30;
-            };
-            static constexpr const wchar_t* audioLabels[] = {L"0 — best audio (highest fidelity, largest)", L"1 — very high audio", L"2 — high audio", L"3 — good audio", L"4 — good audio, smaller", L"5 — mid audio (~≤160 kb/s)", L"6 — mid audio, smaller", L"7 — low audio", L"8 — low audio, smaller", L"9 — worst audio (smallest file)"};
-            drawQuality(L"AUDIO QUALITY (lower number = better · shared by all formats)", audioLabels[std::clamp(model.youtubeAudioQuality, 0, 9)], 7, 8);
-            if (mode == 2) {
-                static constexpr const wchar_t* videoLabels[] = {L"0 — max 144p, smallest file", L"1 — max 240p", L"2 — max 360p", L"3 — max 480p", L"4 — max 720p", L"5 — max 1080p, largest file"};
-                drawQuality(L"VIDEO QUALITY (height cap · lower = smaller)", videoLabels[std::clamp(model.youtubeMp4VideoQuality, 0, 5)], 10, 11);
-            }
-        }
         const bool showYtInstall = !model.youtubeYtDlpInstalled || model.youtubeInstallingYtDlp;
         const bool showFfInstall = !model.youtubeFfmpegInstalled || model.youtubeInstallingFfmpeg;
         if (showYtInstall || showFfInstall) {
@@ -316,7 +286,7 @@ void Win32Ui::Impl::SettingsButton(const D2D1_RECT_F& bounds, const std::wstring
     const bool integrationCategory = model.settingsCategory == SettingCategory::General ||
                                      model.settingsCategory == SettingCategory::Appearance ||
                                      model.settingsCategory == SettingCategory::Discord ||
-                                     model.settingsCategory == SettingCategory::Downloading;
+                                     model.settingsCategory == SettingCategory::Online;
     const float clipTop = settingsDetailsBounds.top + (integrationCategory ? 15.0F : 50.0F);
     const float clipBottom = settingsDetailsBounds.bottom - 4.0F;
     const bool inViewport = windowKind != WindowKind::Settings ||
@@ -351,11 +321,6 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 4: host.SetYoutubeEnabled(!model.youtubeEnabled); break;
         case 5: if (!model.youtubeYtDlpInstalled && !model.youtubeInstallingYtDlp) host.InstallYoutubeTool(true); break;
         case 6: if (!model.youtubeFfmpegInstalled && !model.youtubeInstallingFfmpeg) host.InstallYoutubeTool(false); break;
-        case 7: if (model.youtubeEnabled) host.SetYoutubeAudioQuality(model.youtubeAudioQuality - 1); break;
-        case 8: if (model.youtubeEnabled) host.SetYoutubeAudioQuality(model.youtubeAudioQuality + 1); break;
-        case 9: host.SetYoutubeDownloadMode((model.youtubeDownloadMode + 1) % 3); break;
-        case 10: if (model.youtubeDownloadMode == 2) host.SetYoutubeMp4VideoQuality(model.youtubeMp4VideoQuality - 1); break;
-        case 11: if (model.youtubeDownloadMode == 2) host.SetYoutubeMp4VideoQuality(model.youtubeMp4VideoQuality + 1); break;
         case 14: host.SetFilePreviewEnabled(!model.filePreviewEnabled); break;
         case 15: host.SetStartAtStartup(!model.startAtStartup); break;
         case 16: host.SetExitToTray(!model.exitToTray); break;
@@ -384,8 +349,6 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 50: if (window) KillTimer(window, kYoutubeSearchDebounceTimer); host.SubmitYoutubeQuery(playlistQuery); break;
         case 51: if (model.youtubeCanPagePrev && model.youtubePage > 0) host.SetYoutubeSearchPage(model.youtubePage - 1); break;
         case 52: if (model.youtubeCanPageNext) host.SetYoutubeSearchPage(model.youtubePage + 1); break;
-        case 53: host.SetYoutubeMusicSearch(false); break;
-        case 54: host.SetYoutubeMusicSearch(true); break;
         default: break;
         }
     } catch (...) {}

@@ -129,7 +129,7 @@ private:
         UiModule{ModuleId::Rivan, "rivan", L"PLAYER"},
         UiModule{ModuleId::AllMusic, "all_music", L"ALL MUSIC"},
         UiModule{ModuleId::GraphicEqualizer, "graphic_equalizer", L"GRAPHIC EQUALIZER"},
-        UiModule{ModuleId::RivanLibrary, "rivan_library", L"RIVAN LIBRARY"},
+        UiModule{ModuleId::RivanLibrary, "rivan_library", L"LIBRARY"},
         UiModule{ModuleId::VideoPreview, "video_preview", L"VIDEO PREVIEW"},
     };
 };
