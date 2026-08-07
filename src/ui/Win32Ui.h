@@ -13,6 +13,8 @@
 
 namespace rivan::ui {
 
+inline constexpr UINT kAudioSignalMessage = WM_APP + 43;
+
 struct WindowOptions {
     const wchar_t* title{L"Rivan"};
     int initialWidth{1180};

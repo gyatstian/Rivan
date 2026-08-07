@@ -715,6 +715,16 @@ void TestWindowSnapping() {
     Check(!resizeCanvas.PreservePixelGeometry(700.0F, 800.0F, 400.0F, 800.0F),
           "client resize leaves normalized layout unchanged once modules no longer fit");
 
+    auto minimizedResize = ModuleLayout::Defaults();
+    const auto beforeMinimize = minimizedResize;
+    Check(!minimizedResize.PreservePixelGeometry(1000.0F, 800.0F, 1.0F, 1.0F),
+          "a minimized canvas cannot preserve module pixel geometry");
+    Check(std::abs(minimizedResize.Find(ModuleId::Rivan)->width -
+                   beforeMinimize.Find(ModuleId::Rivan)->width) < 0.0001F &&
+              std::abs(minimizedResize.Find(ModuleId::Rivan)->height -
+                       beforeMinimize.Find(ModuleId::Rivan)->height) < 0.0001F,
+          "failed pixel preservation leaves layout unchanged");
+
     auto expansion = ModuleLayout::Defaults();
     for (auto& item : expansion.items) item.visible = false;
     auto* expandable = expansion.Find(ModuleId::Rivan);

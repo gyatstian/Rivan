@@ -633,7 +633,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
 
     void Paint();
 
-    void Resize(UINT width, UINT height);
+    void Resize(UINT width, UINT height, bool minimized = false);
 
     // ---- Module interaction (implementation in Win32Ui.ModuleInteraction.cpp) ----
     void BeginModuleDrag(ModuleId id, float x, float y,

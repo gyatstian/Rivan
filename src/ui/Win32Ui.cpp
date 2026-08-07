@@ -150,7 +150,7 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         impl_->Paint();
         return 0;
     case WM_SIZE:
-        impl_->Resize(LOWORD(lParam), HIWORD(lParam));
+        impl_->Resize(LOWORD(lParam), HIWORD(lParam), wParam == SIZE_MINIMIZED);
         impl_->SyncRefreshTimer();
         return 0;
     case WM_SHOWWINDOW:
@@ -242,6 +242,9 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             KillTimer(impl_->window, kYoutubeSearchDebounceTimer);
             impl_->FlushYoutubeSearchDebounce();
         }
+        return 0;
+    case kAudioSignalMessage:
+        InvalidateRect(impl_->window, nullptr, FALSE);
         return 0;
     case WM_SETCURSOR:
         if (LOWORD(lParam) == HTCLIENT) {

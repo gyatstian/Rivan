@@ -119,6 +119,7 @@ private:
     void ApplyCompletedScan();
     void RestoreSessionAfterScan();
     void HandleAudioSignals();
+    void NotifyAudioSignal();
     void PlayNavigation(const playlist::QueueNavigation& navigation, bool startPlayback = true);
     void UpdateDiscordPresence();
     void PersistState();
@@ -164,6 +165,7 @@ private:
     // both services, which are destroyed later because members are destroyed in reverse order.
     std::atomic_bool endOfStream_{false};
     std::atomic_bool audioChanged_{false};
+    std::atomic<HWND> audioNotificationWindow_{nullptr};
     std::atomic_bool youtubeDirty_{false};
     std::atomic_bool lyricsDirty_{false};
     audio::AudioEngine audio_;

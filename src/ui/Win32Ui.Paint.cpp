@@ -29,6 +29,11 @@ void Win32Ui::Impl::SyncRefreshTimer() noexcept {
 void Win32Ui::Impl::Paint() {
         PAINTSTRUCT paint{};
         BeginPaint(window, &paint);
+        if (IsIconic(window)) {
+            EndPaint(window, &paint);
+            SyncRefreshTimer();
+            return;
+        }
         if (!CreateTarget()) {
             EndPaint(window, &paint);
             return;
@@ -134,7 +139,14 @@ void Win32Ui::Impl::Paint() {
         Win32Ui::Impl::SyncRefreshTimer();
     }
 
-void Win32Ui::Impl::Resize(UINT width, UINT height) {
+void Win32Ui::Impl::Resize(UINT width, UINT height, bool minimized) {
+        if (minimized || width == 0 || height == 0 || IsIconic(window)) {
+            if (target && (width == 0 || height == 0)) DiscardTarget();
+            if (internalModuleResize) internalModuleResize = false;
+            SyncRefreshTimer();
+            return;
+        }
+
         const D2D1_SIZE_F previousSize = lastCanvas;
         const D2D1_SIZE_F newSize{static_cast<float>(width),
                                   std::max(1.0F, static_cast<float>(height) -

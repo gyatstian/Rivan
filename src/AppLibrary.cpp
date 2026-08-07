@@ -180,6 +180,12 @@ void App::HandleAudioSignals() {
     }
 }
 
+void App::NotifyAudioSignal() {
+    const HWND window = audioNotificationWindow_.load(std::memory_order_acquire);
+    if (!window) return;
+    (void)PostMessageW(window, ui::kAudioSignalMessage, 0, 0);
+}
+
 void App::PlayNavigation(const playlist::QueueNavigation& navigation, bool startPlayback) {
     if (!navigation || navigation.track == nullptr) return;
     selectedTrack_ = navigation.track->id;

@@ -55,6 +55,7 @@ App::App(HINSTANCE instance)
 }
 
 App::~App() {
+    audioNotificationWindow_.store(nullptr, std::memory_order_release);
     youtube_.Reset();
     lyrics_.Reset();
     lyrics_.Shutdown();
@@ -119,6 +120,7 @@ bool App::Initialize() {
             endOfStream_.store(true, std::memory_order_release);
         }
         audioChanged_.store(true, std::memory_order_release);
+        NotifyAudioSignal();
     });
 
     youtube_.RefreshToolStatus();
@@ -131,6 +133,7 @@ bool App::Initialize() {
     options.initialWidth = miniPlayer_ ? 520 : settings_.Session().window.width;
     options.initialHeight = miniPlayer_ ? 210 : settings_.Session().window.height;
     if (!window_->Create(instance_, options)) return false;
+    audioNotificationWindow_.store(window_->WindowHandle(), std::memory_order_release);
 
     if (!miniPlayer_) {
         const auto& rectangle = settings_.Session().window;
