@@ -108,16 +108,14 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
         return;
     }
 
-    const bool url = LooksLikeUrl(query);
-    const std::wstring cacheKey = url ? query : (L"y:" + query);
+    const std::wstring cacheKey = L"y:" + query;
 
-    const auto publishEntries = [this, url](
-                                    const std::vector<YoutubeEntry>& entries, bool searching) {
+    const auto publishEntries = [this](const std::vector<YoutubeEntry>& entries, bool searching) {
         {
             std::scoped_lock lock(mutex_);
             state_.entries = entries;
             state_.searchPage = 0;
-            if (!url && !state_.entries.empty()) {
+            if (!state_.entries.empty()) {
                 state_.searchIsPaged = true;
                 state_.searchPageCount =
                     (state_.entries.size() + kSearchPageSize - 1) / kSearchPageSize;
@@ -127,8 +125,8 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
                 state_.searchPageCount = 1;
             }
             if (searching) {
-                const std::wstring prefix = url ? L"Resolving... " : L"Searching... ";
-                state_.status = prefix + std::to_wstring(state_.entries.size()) + L" result(s)";
+                state_.status = L"Searching... " + std::to_wstring(state_.entries.size()) +
+                                L" result(s)";
             } else if (state_.entries.empty()) {
                 state_.status = L"No results";
             } else if (state_.searchIsPaged) {
@@ -193,31 +191,24 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
     bool anyRan = false;
     std::vector<YoutubeEntry> best;
 
-    if (url) {
-        anyRan = runListing(query, best, lastOutput, lastError, lastExit, false, 0);
-        if (!best.empty()) {
-            publishEntries(best, false);
+    constexpr std::size_t kStages[] = {1, kSearchFetchCount};
+    for (const std::size_t count : kStages) {
+        if (stop.stop_requested()) break;
+        std::vector<YoutubeEntry> stage;
+        std::string output;
+        std::string error;
+        DWORD exitCode = 1;
+        const std::wstring target = L"ytsearch" + std::to_wstring(count) + L":" + query;
+        const bool ran = runListing(target, stage, output, error, exitCode, false, 0);
+        anyRan = anyRan || ran;
+        lastOutput = std::move(output);
+        lastError = std::move(error);
+        lastExit = exitCode;
+        if (!stage.empty()) {
+            best = std::move(stage);
+            publishEntries(best, count < kSearchFetchCount);
         }
-    } else {
-        constexpr std::size_t kStages[] = {1, kSearchFetchCount};
-        for (const std::size_t count : kStages) {
-            if (stop.stop_requested()) break;
-            std::vector<YoutubeEntry> stage;
-            std::string output;
-            std::string error;
-            DWORD exitCode = 1;
-            const std::wstring target = L"ytsearch" + std::to_wstring(count) + L":" + query;
-            const bool ran = runListing(target, stage, output, error, exitCode, false, 0);
-            anyRan = anyRan || ran;
-            lastOutput = std::move(output);
-            lastError = std::move(error);
-            lastExit = exitCode;
-            if (!stage.empty()) {
-                best = std::move(stage);
-                publishEntries(best, count < kSearchFetchCount);
-            }
-            if (ran && best.size() < count) break;
-        }
+        if (ran && best.size() < count) break;
     }
 
     if (stop.stop_requested()) {
@@ -246,7 +237,7 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
         state_.job = YoutubeJobKind::Idle;
         if (!best.empty()) state_.entries = std::move(best);
         state_.searchPage = 0;
-        if (!url && !state_.entries.empty()) {
+        if (!state_.entries.empty()) {
             state_.searchIsPaged = true;
             state_.searchPageCount =
                 (state_.entries.size() + kSearchPageSize - 1) / kSearchPageSize;
@@ -276,7 +267,7 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
         } else {
             state_.status = std::to_wstring(state_.entries.size()) + L" result(s)";
         }
-        if (!url && !state_.entries.empty()) StoreSearchCacheLocked(cacheKey, state_.entries);
+        if (!state_.entries.empty()) StoreSearchCacheLocked(cacheKey, state_.entries);
         ++state_.generation;
     }
     Notify();

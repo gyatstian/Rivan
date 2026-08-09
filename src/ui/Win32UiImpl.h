@@ -43,6 +43,7 @@
 #include <filesystem>
 #include <functional>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -72,12 +73,19 @@ constexpr UINT_PTR kRefreshTimer = 1;
 // Debounced live search while typing in the Youtube browser (ms).
 constexpr UINT_PTR kYoutubeSearchDebounceTimer = 2;
 constexpr UINT kYoutubeSearchDebounceMs = 200;
+constexpr UINT_PTR kYoutubeGrabberCopyTimer = 3;
+constexpr UINT_PTR kYoutubeGrabberAddressCopyTimer = 4;
+constexpr UINT_PTR kYoutubeGrabberClipboardTimer = 5;
+constexpr UINT kYoutubeGrabberCopyDelayMs = 75;
+constexpr UINT kYoutubeGrabberAddressCopyDelayMs = 125;
+constexpr UINT kYoutubeGrabberClipboardDelayMs = 100;
 // Notification-area (system tray) icon for the exit-to-tray feature. The callback
 // message is delivered to the Main window; the menu command IDs drive restore/exit.
 constexpr UINT kTrayCallbackMessage = WM_APP + 41;
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMenuOpen = 1;
 constexpr UINT kTrayMenuExit = 2;
+constexpr int kYoutubeGrabberHotkeyId = 3;
 // Preview only presents already-decoded frames. 60 Hz avoids paint pressure without
 // making the audio-clock-driven preview visibly sluggish.
 // A full scene repaint is enough at the analyzer's ~30 Hz cadence. Faster timer
@@ -324,6 +332,15 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     std::unique_ptr<Win32Ui> youtubeWindow;
     // True while the notification-area icon is live (exit-to-tray hid the window).
     bool trayIconAdded{};
+    bool youtubeGrabberHotkeyRegistered{};
+    bool youtubeGrabberHotkeyCapture{};
+    bool youtubeGrabberHotkeyCaptureFailed{};
+    std::uint32_t youtubeGrabberHotkeyModifiers{};
+    std::uint32_t youtubeGrabberHotkeyVirtualKey{};
+    std::uint32_t youtubeGrabberClipboardSequence{};
+    unsigned youtubeGrabberClipboardAttempts{};
+    HWND youtubeGrabberTargetWindow{};
+    ComPtr<IDataObject> youtubeGrabberClipboardBackup;
 
     void ClearFilePreview() noexcept;
 
@@ -662,6 +679,11 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
 
     // Right-click tray menu: Open restores the window, Exit closes for real.
     void ShowTrayMenu();
+
+    [[nodiscard]] bool RegisterYoutubeGrabberHotkey(std::uint32_t modifiers,
+                                                    std::uint32_t virtualKey) noexcept;
+
+    void UnregisterYoutubeGrabberHotkey() noexcept;
 
     // ---- Input (implementations in Win32Ui.Input.cpp) -----------------------
 

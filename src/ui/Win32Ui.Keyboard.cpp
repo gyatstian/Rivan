@@ -117,6 +117,31 @@ void Win32Ui::Impl::Character(wchar_t character) {
 }
 
 void Win32Ui::Impl::KeyDown(WPARAM key) {
+    if (windowKind == WindowKind::Settings && youtubeGrabberHotkeyCapture) {
+        if (key == VK_ESCAPE) {
+            youtubeGrabberHotkeyCapture = false;
+            youtubeGrabberHotkeyCaptureFailed = false;
+        } else if (key != VK_SHIFT && key != VK_CONTROL && key != VK_MENU &&
+                   key != VK_LWIN && key != VK_RWIN) {
+            std::uint32_t modifiers{};
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) modifiers |= MOD_CONTROL;
+            if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) modifiers |= MOD_SHIFT;
+            if ((GetKeyState(VK_MENU) & 0x8000) != 0) modifiers |= MOD_ALT;
+            if ((GetKeyState(VK_LWIN) & 0x8000) != 0 ||
+                (GetKeyState(VK_RWIN) & 0x8000) != 0) {
+                modifiers |= MOD_WIN;
+            }
+            bool registered = false;
+            try {
+                registered = host.SetYoutubeGrabberHotkey(
+                    modifiers, static_cast<std::uint32_t>(key));
+            } catch (...) {}
+            youtubeGrabberHotkeyCaptureFailed = !registered;
+            if (registered) youtubeGrabberHotkeyCapture = false;
+        }
+        InvalidateRect(window, nullptr, FALSE);
+        return;
+    }
     if (previewFullscreen && windowKind == WindowKind::Main) {
         if (key == VK_ESCAPE) {
             ExitPreviewFullscreen();

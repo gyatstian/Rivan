@@ -47,6 +47,39 @@ bool YoutubeService::LooksLikeUrl(std::wstring_view text) noexcept {
     return false;
 }
 
+bool YoutubeService::LooksLikeYoutubeUrl(std::wstring_view text) noexcept {
+    const auto trimmed = detail::Trim(std::wstring(text));
+    const auto scheme = trimmed.find(L"://");
+    if (scheme == std::wstring::npos) return false;
+    const auto protocol = detail::Lower(trimmed.substr(0, scheme));
+    if (protocol != L"http" && protocol != L"https") return false;
+    const std::size_t hostStart = scheme + 3;
+    const std::size_t hostEnd = trimmed.find_first_of(L"/?#", hostStart);
+    std::wstring host = detail::Lower(trimmed.substr(hostStart, hostEnd - hostStart));
+    if (host.empty()) return false;
+    if (const auto portSeparator = host.find(L':'); portSeparator != std::wstring::npos) {
+        const auto portText = std::wstring_view(host).substr(portSeparator + 1);
+        unsigned portNumber{};
+        if (portText.empty() || !std::all_of(portText.begin(), portText.end(),
+                                             [&portNumber](wchar_t character) {
+                                                 if (character < L'0' || character > L'9') return false;
+                                                 portNumber = portNumber * 10u +
+                                                              static_cast<unsigned>(character - L'0');
+                                                 return portNumber <= 65535u;
+                                             }) || portNumber == 0u) {
+            return false;
+        }
+        host.resize(portSeparator);
+    }
+    const auto isYoutubeDomain = [&host](std::wstring_view domain) {
+        return host == domain ||
+               (host.size() > domain.size() &&
+                host.compare(host.size() - domain.size(), domain.size(), domain) == 0 &&
+                host[host.size() - domain.size() - 1] == L'.');
+    };
+    return isYoutubeDomain(L"youtube.com") || isYoutubeDomain(L"youtu.be");
+}
+
 std::filesystem::path YoutubeService::DownloadDirectory(
     const std::filesystem::path& musicRoot) {
     return musicRoot / L"Youtube";
@@ -138,41 +171,65 @@ void YoutubeService::SubmitQuery(std::wstring query) {
 
     JoinWorker();
     const bool url = LooksLikeUrl(query);
-    const std::wstring cacheKey = url ? query : (L"y:" + query);
+    if (url) {
+        YoutubeEntry entry;
+        entry.id = detail::HashText(query);
+        entry.title = L"Preparing YouTube video...";
+        entry.webpageUrl = std::move(query);
+        const auto entryId = entry.id;
+        {
+            std::scoped_lock lock(mutex_);
+            state_.entries = {std::move(entry)};
+            state_.busy = true;
+            state_.job = YoutubeJobKind::Probe;
+            state_.status = L"Probing...";
+            state_.probe.reset();
+            state_.probeEntryId = entryId;
+            state_.searchPage = 0;
+            state_.searchPageCount = 1;
+            state_.searchIsPaged = false;
+            ++state_.generation;
+        }
+        Notify();
+        worker_ = std::jthread([this, entryId](std::stop_token stop) {
+            RunProbe(stop, entryId);
+        });
+        return;
+    }
+
+    const std::wstring cacheKey = L"y:" + query;
     bool cacheHit = false;
     {
         std::scoped_lock lock(mutex_);
-        if (!url) {
-            const auto cached = std::find_if(
-                searchCache_.begin(), searchCache_.end(),
-                [&cacheKey](const CachedSearch& entry) { return entry.query == cacheKey; });
-            if (cached != searchCache_.end() && !cached->entries.empty()) {
-                state_.entries = cached->entries;
-                state_.probe.reset();
-                state_.probeEntryId = 0;
-                state_.busy = false;
-                state_.job = YoutubeJobKind::Idle;
-                state_.searchPage = 0;
-                state_.searchIsPaged = true;
-                state_.searchPageCount =
-                    (state_.entries.size() + kSearchPageSize - 1) / kSearchPageSize;
-                if (state_.searchPageCount == 0) state_.searchPageCount = 1;
-                state_.status = std::to_wstring(state_.entries.size()) +
-                                L" result(s) · page 1/" +
-                                std::to_wstring(state_.searchPageCount);
-                CachedSearch hit = std::move(*cached);
-                searchCache_.erase(cached);
-                searchCache_.push_back(std::move(hit));
-                ++state_.generation;
-                cacheHit = true;
-            }
+        const auto cached = std::find_if(
+            searchCache_.begin(), searchCache_.end(),
+            [&cacheKey](const CachedSearch& entry) { return entry.query == cacheKey; });
+        if (cached != searchCache_.end() && !cached->entries.empty()) {
+            state_.entries = cached->entries;
+            state_.probe.reset();
+            state_.probeEntryId = 0;
+            state_.busy = false;
+            state_.job = YoutubeJobKind::Idle;
+            state_.searchPage = 0;
+            state_.searchIsPaged = true;
+            state_.searchPageCount =
+                (state_.entries.size() + kSearchPageSize - 1) / kSearchPageSize;
+            if (state_.searchPageCount == 0) state_.searchPageCount = 1;
+            state_.status = std::to_wstring(state_.entries.size()) +
+                            L" result(s) · page 1/" +
+                            std::to_wstring(state_.searchPageCount);
+            CachedSearch hit = std::move(*cached);
+            searchCache_.erase(cached);
+            searchCache_.push_back(std::move(hit));
+            ++state_.generation;
+            cacheHit = true;
         }
         if (cacheHit) {
             // Notify after releasing mutex_; Notify() takes the same lock to copy callback.
         } else {
             state_.busy = true;
             state_.job = YoutubeJobKind::Search;
-            state_.status = url ? L"Resolving..." : L"Searching...";
+            state_.status = L"Searching...";
             state_.entries.clear();
             state_.probe.reset();
             state_.probeEntryId = 0;

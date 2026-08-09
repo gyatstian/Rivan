@@ -27,6 +27,9 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     document.Set("appearance", "module_expansion_behavior",
                  settings.moduleExpansionBehavior == ui::ModuleExpansionBehavior::Resize
                      ? "resize" : "squash");
+    document.Set("appearance", "window_resize_behavior",
+                 settings.windowResizeBehavior == ui::WindowResizeBehavior::GrowTrailingModule
+                     ? "grow_trailing_module" : "scale_all");
     document.Set("library", "file_preview_enabled", BoolText(settings.filePreviewEnabled));
     document.Set("application", "start_at_startup", BoolText(settings.startAtStartup));
     document.Set("application", "exit_to_tray", BoolText(settings.exitToTray));
@@ -40,6 +43,10 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     document.Set("youtube", "video_extension", settings.youtubeVideoExtension);
     document.Set("youtube", "audio_extension", settings.youtubeAudioExtension);
     document.Set("youtube", "audio_bitrate", std::to_string(settings.youtubeAudioBitrate));
+    document.Set("youtube", "grabber_hotkey_modifiers",
+                 std::to_string(settings.youtubeGrabberHotkeyModifiers));
+    document.Set("youtube", "grabber_hotkey_vk",
+                 std::to_string(settings.youtubeGrabberHotkeyVirtualKey));
     document.Set("library", "duplicate_as_file", BoolText(settings.duplicateAsFile));
     document.Set("discord", "enabled", BoolText(settings.discordEnabled));
     document.Set("discord", "show_artist", BoolText(settings.discordShowArtist));
@@ -136,6 +143,14 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
         else if (*behavior == "resize") settings_.moduleExpansionBehavior = ui::ModuleExpansionBehavior::Resize;
         else AddWarning(warnings, "Ignoring invalid appearance.module_expansion_behavior");
     }
+    if (const auto behavior = document->Get("appearance", "window_resize_behavior")) {
+        if (*behavior == "scale_all") settings_.windowResizeBehavior = ui::WindowResizeBehavior::ScaleAll;
+        else if (*behavior == "grow_trailing_module") {
+            settings_.windowResizeBehavior = ui::WindowResizeBehavior::GrowTrailingModule;
+        } else {
+            AddWarning(warnings, "Ignoring invalid appearance.window_resize_behavior");
+        }
+    }
     ReadBoolField(*document, "youtube", "enabled", settings_.youtubeEnabled, warnings);
     ReadBoolField(*document, "online", "lyrics_cache_enabled", settings_.lyricsCacheEnabled, warnings);
     ReadIntegerField(*document, "youtube", "download_kind", 0, 1,
@@ -156,6 +171,21 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
     }
     ReadIntegerField(*document, "youtube", "audio_bitrate", 0, 10000,
                      settings_.youtubeAudioBitrate, warnings);
+    int grabberHotkeyModifiers = static_cast<int>(settings_.youtubeGrabberHotkeyModifiers);
+    ReadIntegerField(*document, "youtube", "grabber_hotkey_modifiers", 0, 0x0fu,
+                     grabberHotkeyModifiers, warnings);
+    constexpr int allowedGrabberHotkeyModifiers = 0x0001 | 0x0002 | 0x0004 | 0x0008;
+    if ((grabberHotkeyModifiers & ~allowedGrabberHotkeyModifiers) != 0) {
+        AddWarning(warnings, "Ignoring invalid youtube.grabber_hotkey_modifiers");
+    } else {
+        settings_.youtubeGrabberHotkeyModifiers =
+            static_cast<std::uint32_t>(grabberHotkeyModifiers);
+    }
+    int grabberHotkeyVirtualKey = static_cast<int>(settings_.youtubeGrabberHotkeyVirtualKey);
+    ReadIntegerField(*document, "youtube", "grabber_hotkey_vk", 1, 255,
+                     grabberHotkeyVirtualKey, warnings);
+    settings_.youtubeGrabberHotkeyVirtualKey =
+        static_cast<std::uint32_t>(grabberHotkeyVirtualKey);
     ReadBoolField(*document, "discord", "enabled", settings_.discordEnabled, warnings);
     ReadBoolField(*document, "discord", "show_artist", settings_.discordShowArtist, warnings);
     ReadBoolField(*document, "discord", "show_image_text", settings_.discordShowImageText, warnings);
@@ -205,6 +235,13 @@ bool SettingsManager::Validate(const AppSettings& settings, std::string* error) 
         !IsIdentifier(settings.youtubeVideoExtension) ||
         !IsIdentifier(settings.youtubeAudioExtension)) {
         SetError(error, "Invalid YouTube chooser defaults");
+        return false;
+    }
+    constexpr std::uint32_t allowedHotkeyModifiers = 0x0001u | 0x0002u | 0x0004u | 0x0008u;
+    if (settings.youtubeGrabberHotkeyVirtualKey == 0 ||
+        settings.youtubeGrabberHotkeyVirtualKey > 0xffu ||
+        (settings.youtubeGrabberHotkeyModifiers & ~allowedHotkeyModifiers) != 0u) {
+        SetError(error, "Invalid YouTube grabber hotkey");
         return false;
     }
     if (!IsIdentifier(settings.skinId)) {

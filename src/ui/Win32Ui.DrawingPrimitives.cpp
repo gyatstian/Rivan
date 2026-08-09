@@ -322,13 +322,22 @@ void Win32Ui::Impl::DrawTitlebar(const D2D1_SIZE_F size,
          const float controlsWidth = main ? 3.0F * kTitlebarButtonSize + 2.0F * 3.0F
                                           : kTitlebarButtonSize;
          const float controlsLeft = std::max(4.0F, size.width - controlsWidth - 4.0F);
-         const auto title = main ? std::wstring_view(L"RIVAN")
-                                 : std::wstring_view(options.title ? options.title : L"RIVAN");
-         const float titleLeft = main ? 4.0F + kTitlebarButtonSize + 3.0F : 9.0F;
-         DrawText(title, Rect(titleLeft, 0.0F, controlsLeft - 6.0F, bar.bottom),
-                  b[13].Get(), headingFormat.Get());
+          const auto title = main ? std::wstring_view(L"RIVAN")
+                                  : std::wstring_view(options.title ? options.title : L"RIVAN");
+          const float titleLeft = main ? 4.0F + kTitlebarButtonSize + 3.0F : 9.0F;
+          const float titleRight = main && model.moduleLayoutWarning
+              ? std::min(controlsLeft - 6.0F, titleLeft + 62.0F)
+              : controlsLeft - 6.0F;
+          DrawText(title, Rect(titleLeft, 0.0F, titleRight, bar.bottom),
+                   b[13].Get(), headingFormat.Get());
+          if (main && model.moduleLayoutWarning && titleRight + 4.0F < controlsLeft - 6.0F) {
+              ID2D1Brush* warning = warningBrush ? warningBrush.Get() : b[9].Get();
+              DrawText(L"! OVERLAPPING MODULE DISABLED",
+                       Rect(titleRight + 4.0F, 2.0F, controlsLeft - 6.0F, bar.bottom),
+                       warning, tinyFormat.Get());
+          }
 
-         float right = size.width - 4.0F;
+          float right = size.width - 4.0F;
          const auto drawControl = [this, &right, &b](const wchar_t* label, std::uint64_t action) {
              const auto bounds = Rect(right - kTitlebarButtonSize, 3.0F,
                                       right, 3.0F + kTitlebarButtonSize);

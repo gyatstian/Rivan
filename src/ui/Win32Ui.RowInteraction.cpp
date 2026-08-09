@@ -541,6 +541,8 @@ void Win32Ui::Impl::ShowTrackContextMenu(std::size_t modelIndex) {
         return index < model.tracks.size() && model.tracks[index].audioFile;
     });
     AppendMenuW(menu, MF_STRING | (hasAudio ? 0U : MF_GRAYED), 6, L"Change cover");
+    const bool hasPath = modelIndex < model.tracks.size() && !model.tracks[modelIndex].filePath.empty();
+    AppendMenuW(menu, MF_STRING | (hasPath ? 0U : MF_GRAYED), 7, L"Reveal in Explorer");
 
     POINT cursor{};
     GetCursorPos(&cursor);
@@ -573,6 +575,9 @@ void Win32Ui::Impl::ShowTrackContextMenu(std::size_t modelIndex) {
                 trackCoverUseCounter = 0;
                 nextTrackCoverLookup = {};
             }
+        } else if (command == 7 && hasPath) {
+            const std::wstring arguments = L"/select,\"" + model.tracks[modelIndex].filePath + L"\"";
+            ShellExecuteW(window, L"open", L"explorer.exe", arguments.c_str(), nullptr, SW_SHOWNORMAL);
         } else if (command >= static_cast<int>(kMoveBase)) {
             const std::size_t which = static_cast<std::size_t>(command) - kMoveBase;
             if (which < moveTargets.size() && !indices.empty()) {

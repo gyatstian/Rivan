@@ -150,9 +150,11 @@ void Win32Ui::Impl::DiscardTarget() noexcept {
         trackCoverUseCounter = 0;
         nextTrackCoverLookup = {};
         previewBitmap.Reset();
+        previewBitmapSourceRect = {};
         // D2D bitmaps are device-dependent. Force latest decoded frame to re-upload.
         uploadedPreviewFrameVersion = 0;
         for (auto& brush : solidBrushes) brush.Reset();
+        warningBrush.Reset();
         decorBrush.Reset();
         visualizationRenderer.DiscardDeviceResources();
         target.Reset();
@@ -196,6 +198,12 @@ void Win32Ui::Impl::DiscardTarget() noexcept {
         if (solidBrushes[5]) solidBrushes[5]->SetColor(screenColor);
         for (std::size_t index = 0; index < solidBrushes.size(); ++index) {
             currentBrushes[index] = solidBrushes[index].Get();
+        }
+        if (!warningBrush) {
+            target->CreateSolidColorBrush(D2D1::ColorF(0.90F, 0.05F, 0.05F, 1.0F),
+                                          warningBrush.ReleaseAndGetAddressOf());
+        } else {
+            warningBrush->SetColor(D2D1::ColorF(0.90F, 0.05F, 0.05F, 1.0F));
         }
         return solidBrushes;
     }

@@ -1,5 +1,5 @@
 // YoutubeService.h
-// Optional yt-dlp front-end: search, URL resolve, and audio download into the library.
+// Optional yt-dlp front-end: search, URL probe, and audio download into the library.
 #pragma once
 
 #include <cstdint>
@@ -48,6 +48,7 @@ struct YoutubeAudioFormat final {
 };
 
 struct YoutubeProbe final {
+    std::wstring videoId;
     std::wstring title;
     double durationSeconds{};
     std::vector<YoutubeVideoFormat> videoFormats;
@@ -108,6 +109,7 @@ public:
     [[nodiscard]] static std::optional<std::filesystem::path> LocateYtDlp();
     [[nodiscard]] static std::optional<std::filesystem::path> LocateFfmpeg();
     [[nodiscard]] static bool LooksLikeUrl(std::wstring_view text) noexcept;
+    [[nodiscard]] static bool LooksLikeYoutubeUrl(std::wstring_view text) noexcept;
     [[nodiscard]] static std::filesystem::path DownloadDirectory(
         const std::filesystem::path& musicRoot);
 
@@ -125,7 +127,7 @@ public:
     // One-click HTTPS download into ToolsDirectory() (async).
     void InstallTool(YoutubeTool tool);
 
-    // Search or resolve a plain YouTube query/URL into entries (async).
+    // Search a query or directly probe a URL (async).
     void SubmitQuery(std::wstring query);
     // Probe one entry's title, duration, and available media formats (async).
     void Probe(std::uint64_t entryId);

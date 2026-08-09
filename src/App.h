@@ -54,7 +54,11 @@ public:
     void SetStartAtStartup(bool enabled) override;
     void SetExitToTray(bool enabled) override;
     void SetModuleExpansionBehavior(ui::ModuleExpansionBehavior behavior) override;
+    void SetWindowResizeBehavior(ui::WindowResizeBehavior behavior) override;
     void SetYoutubeEnabled(bool enabled) override;
+    void GrabYoutubeLink(std::wstring url) override;
+    [[nodiscard]] bool SetYoutubeGrabberHotkey(std::uint32_t modifiers,
+                                               std::uint32_t virtualKey) override;
     void SetLyricsCacheEnabled(bool enabled) override;
     void SetModuleLayout(ui::ModuleLayout layout) override;
     void SetDiscordEnabled(bool enabled) override;
@@ -125,7 +129,7 @@ private:
     void PersistState();
     [[nodiscard]] bool SyncStartupRegistration(bool enabled, std::wstring* error = nullptr);
     void ToggleMiniPlayer();
-    void ApplyYoutubeSnapshot(bool playIfReady, std::uint64_t playEntryId);
+    void ApplyYoutubeSnapshot();
     void PersistYoutubeChooserSelection();
     void ShowYoutubeLocalLibrary();
     // User playlists persist to their own file so they survive restarts and rescans.
@@ -206,14 +210,16 @@ private:
     ui::UiModel cachedModel_{};
     std::uint64_t cachedModelRevision_{~std::uint64_t{0}};
     bool restored_{};
+    bool moduleLayoutWarning_{};
 
     // Youtube browser state mirrored for UI (updated on worker notify).
     youtube::YoutubeSnapshot youtubeView_{};
     std::uint64_t youtubeSelectedResult_{};
-    std::uint64_t pendingPlayYoutubeId_{};
     bool youtubeChooserVisible_{};
     std::uint64_t youtubeChooserEntryId_{};
     youtube::YoutubeDownloadSelection youtubeDownloadSelection_{};
+    bool pendingYoutubeGrab_{};
+    bool youtubeGrabberHotkeyAvailable_{true};
     ui::ModuleLayout moduleLayout_{ui::ModuleLayout::Defaults()};
 };
 

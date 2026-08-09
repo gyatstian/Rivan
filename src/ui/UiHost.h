@@ -147,6 +147,9 @@ struct UiModel {
     bool startAtStartup{};
     bool exitToTray{};
     bool youtubeEnabled{};
+    bool youtubeGrabberHotkeyAvailable{};
+    std::uint32_t youtubeGrabberHotkeyModifiers{};
+    std::uint32_t youtubeGrabberHotkeyVirtualKey{};
     bool lyricsCacheEnabled{};
     lyrics::LyricsSnapshot lyrics;
     // Discord Rich Presence preference (IPC worker runs only when true).
@@ -155,6 +158,7 @@ struct UiModel {
     bool discordShowImageText{true};
     bool discordShowGithubButton{};
     ModuleExpansionBehavior moduleExpansionBehavior{ModuleExpansionBehavior::Squash};
+    WindowResizeBehavior windowResizeBehavior{WindowResizeBehavior::ScaleAll};
     bool youtubeBrowsing{};  // selected playlist is the virtual Youtube browser
     bool youtubeBusy{};
     bool youtubeYtDlpInstalled{};
@@ -177,6 +181,7 @@ struct UiModel {
     skin::Skin activeSkin{skin::Skin::BuiltInDarkPurple()};
     visualization::VisualizationSnapshot visualization;
     ModuleLayout moduleLayout{ModuleLayout::Defaults()};
+    bool moduleLayoutWarning{};
     // Id of the currently selected playlist. User playlists support all edits; library
     // folders and All Music only accept imported tracks.
     std::uint64_t selectedPlaylistId{};
@@ -229,8 +234,12 @@ public:
     virtual void SetStartAtStartup(bool enabled) = 0;
     virtual void SetExitToTray(bool enabled) = 0;
     virtual void SetModuleExpansionBehavior(ModuleExpansionBehavior behavior) = 0;
+    virtual void SetWindowResizeBehavior(WindowResizeBehavior behavior) = 0;
     // Enables/disables the optional YouTube library section. Off = no YT workers or UI.
     virtual void SetYoutubeEnabled(bool enabled) = 0;
+    virtual void GrabYoutubeLink(std::wstring url) = 0;
+    [[nodiscard]] virtual bool SetYoutubeGrabberHotkey(std::uint32_t modifiers,
+                                                       std::uint32_t virtualKey) = 0;
     virtual void SetLyricsCacheEnabled(bool enabled) = 0;
     // Applies the normalized geometry, visibility, and tab state of the main modules.
     virtual void SetModuleLayout(ModuleLayout layout) = 0;
@@ -244,10 +253,9 @@ public:
     virtual void InstallYoutubeTool(bool ytDlp) = 0;
     // Search or resolve a URL when the Youtube playlist is selected.
     virtual void SubmitYoutubeQuery(std::wstring query) = 0;
-    // Download (if needed) and play a Youtube result.
+    // Opens a locally downloaded result or its download format chooser.
     virtual void ActivateYoutubeResult(std::uint64_t id) = 0;
-    // Controls the transient format chooser. Hiding through this callback cancels the
-    // pending play request; confirmation uses ConfirmYoutubeDownload instead.
+    // Controls the transient format chooser.
     virtual void SetYoutubeChooserVisible(bool visible) = 0;
     virtual void SetYoutubeDownloadKind(youtube::YoutubeDownloadKind kind) = 0;
     virtual void CycleYoutubeVideoFormat(int direction) = 0;

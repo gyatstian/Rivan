@@ -398,6 +398,30 @@ bool ModuleLayout::HasConflictingGeometry() const noexcept {
     return false;
 }
 
+bool ModuleLayout::DisableDuplicateIndependentModules() noexcept {
+    constexpr float tolerance = 0.0001F;
+    bool disabled = false;
+    for (std::size_t first = 0; first < items.size(); ++first) {
+        const auto& firstItem = items[first];
+        if (!firstItem.visible) continue;
+        for (std::size_t second = first + 1; second < items.size(); ++second) {
+            auto& secondItem = items[second];
+            if (!secondItem.visible) continue;
+            if (std::abs(firstItem.x - secondItem.x) > tolerance ||
+                std::abs(firstItem.y - secondItem.y) > tolerance ||
+                std::abs(firstItem.width - secondItem.width) > tolerance ||
+                std::abs(firstItem.height - secondItem.height) > tolerance) {
+                continue;
+            }
+            if (!HasGeometryConflict(firstItem.id, secondItem.id)) continue;
+            secondItem.visible = false;
+            RemoveTab(secondItem.id);
+            disabled = true;
+        }
+    }
+    return disabled;
+}
+
 bool ModuleLayout::HasNewConflictingGeometry(const ModuleLayout& before) const noexcept {
     for (std::size_t first = 0; first < items.size(); ++first) {
         for (std::size_t second = first + 1; second < items.size(); ++second) {
@@ -683,34 +707,73 @@ void ModuleLayout::ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
 }
 
 bool ModuleLayout::PreservePixelGeometry(float oldWidth, float oldHeight,
-                                         float newWidth, float newHeight) noexcept {
+                                          float newWidth, float newHeight,
+                                          bool resizeRight, bool resizeBottom,
+                                          bool resizeLeft, bool resizeTop) noexcept {
     if (!(oldWidth > 0.0F) || !(oldHeight > 0.0F) ||
         !(newWidth > 0.0F) || !(newHeight > 0.0F)) {
         return false;
     }
 
-    const auto preserveAxis = [this](float oldExtent, float newExtent, bool horizontal) {
+    const auto preserveAxis = [this](float oldExtent, float newExtent, bool horizontal,
+                                     bool resizeLeading, bool resizeTrailing) {
         if (std::abs(oldExtent - newExtent) < 0.01F) return false;
+
+        constexpr float edgeTolerance = 0.01F;
+        const bool edgeResize = resizeLeading || resizeTrailing;
+        const float delta = newExtent - oldExtent;
+        bool hasVisibleItem = false;
+        float shift = 0.0F;
         float minimum = std::numeric_limits<float>::infinity();
         float maximum = -std::numeric_limits<float>::infinity();
-        for (const auto& item : items) {
-            if (!item.visible) continue;
-            const float position = (horizontal ? item.x : item.y) * oldExtent;
-            const float length = (horizontal ? item.width : item.height) * oldExtent;
-            minimum = std::min(minimum, position);
-            maximum = std::max(maximum, position + length);
+        if (!edgeResize) {
+            for (const auto& item : items) {
+                if (!item.visible) continue;
+                hasVisibleItem = true;
+                const float position = (horizontal ? item.x : item.y) * oldExtent;
+                const float length = (horizontal ? item.width : item.height) * oldExtent;
+                minimum = std::min(minimum, position);
+                maximum = std::max(maximum, position + length);
+            }
+            if (!std::isfinite(minimum) || !std::isfinite(maximum) ||
+                maximum - minimum > newExtent) {
+                return false;
+            }
+            shift = std::clamp(0.0F, -minimum, newExtent - maximum);
+        } else {
+            for (const auto& item : items) {
+                if (item.visible) {
+                    hasVisibleItem = true;
+                    break;
+                }
+            }
         }
-        if (!std::isfinite(minimum) || !std::isfinite(maximum) ||
-            maximum - minimum > newExtent) {
-            return false;
-        }
+        if (!hasVisibleItem) return false;
 
-        const float shift = std::clamp(0.0F, -minimum, newExtent - maximum);
-        const auto transform = [oldExtent, newExtent, shift](float& position, float& length) {
-            position = (position * oldExtent + shift) / newExtent;
-            length = length * oldExtent / newExtent;
+        const auto transform = [oldExtent, newExtent, resizeLeading, resizeTrailing,
+                                edgeResize, delta, shift](float& position, float& length) {
+            constexpr float edgeTolerance = 0.01F;
+            float leading = position * oldExtent;
+            float trailing = leading + length * oldExtent;
+            if (edgeResize) {
+                const bool touchesLeading = leading <= edgeTolerance;
+                const bool touchesTrailing = trailing >= oldExtent - edgeTolerance;
+                if (resizeLeading) {
+                    leading += delta;
+                    trailing += delta;
+                    if (touchesLeading) leading = 0.0F;
+                }
+                if (resizeTrailing && touchesTrailing) trailing = newExtent;
+            } else {
+                leading += shift;
+                trailing += shift;
+            }
+            position = leading / newExtent;
+            length = (trailing - leading) / newExtent;
         };
-        for (auto& item : items) {
+
+        ModuleLayout candidate = *this;
+        for (auto& item : candidate.items) {
             if (!item.visible) continue;
             if (horizontal) {
                 transform(item.x, item.width);
@@ -725,13 +788,29 @@ bool ModuleLayout::PreservePixelGeometry(float oldWidth, float oldHeight,
                 }
                 if (item.collapsed) transform(item.expandedY, item.expandedHeight);
             }
-            SyncExpandedGeometry(item);
+            const float position = horizontal ? item.x : item.y;
+            const float length = horizontal ? item.width : item.height;
+            if (!std::isfinite(position) || !std::isfinite(length) || !(length > 0.0F) ||
+                position < -edgeTolerance || position + length > 1.0F + edgeTolerance) {
+                return false;
+            }
+            if (item.collapsed) {
+                const float expandedPosition = horizontal ? item.expandedX : item.expandedY;
+                const float expandedLength = horizontal ? item.expandedWidth : item.expandedHeight;
+                if (!std::isfinite(expandedPosition) || !std::isfinite(expandedLength) ||
+                    !(expandedLength >= 0.10F) || expandedPosition < -edgeTolerance ||
+                    expandedPosition + expandedLength > 1.0F + edgeTolerance) {
+                    return false;
+                }
+            }
+            ModuleLayout::SyncExpandedGeometry(item);
         }
+        *this = candidate;
         return true;
     };
 
-    const bool changedX = preserveAxis(oldWidth, newWidth, true);
-    const bool changedY = preserveAxis(oldHeight, newHeight, false);
+    const bool changedX = preserveAxis(oldWidth, newWidth, true, resizeLeft, resizeRight);
+    const bool changedY = preserveAxis(oldHeight, newHeight, false, resizeTop, resizeBottom);
     return changedX || changedY;
 }
 

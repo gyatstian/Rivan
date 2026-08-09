@@ -448,6 +448,9 @@ void TestFilePreviewSettingRoundTrip() {
     settings.startAtStartup = true;
     settings.exitToTray = true;
     settings.discordShowGithubButton = true;
+    settings.youtubeGrabberHotkeyModifiers = 0x0001u | 0x0002u;
+    settings.youtubeGrabberHotkeyVirtualKey = VK_F8;
+    settings.windowResizeBehavior = rivan::ui::WindowResizeBehavior::GrowTrailingModule;
     std::string error;
     Check(writer.SetSettings(settings, &error), "file preview setting accepts false");
     Check(writer.SaveSettings(&error), "file preview setting saves");
@@ -464,6 +467,11 @@ void TestFilePreviewSettingRoundTrip() {
           "exit to tray survives settings round-trip");
     Check(reader.Settings().discordShowGithubButton,
            "Discord GitHub button setting survives settings round-trip");
+    Check(reader.Settings().youtubeGrabberHotkeyModifiers == (0x0001u | 0x0002u) &&
+              reader.Settings().youtubeGrabberHotkeyVirtualKey == VK_F8,
+          "YouTube link grabber hotkey survives settings round-trip");
+    Check(reader.Settings().windowResizeBehavior == rivan::ui::WindowResizeBehavior::GrowTrailingModule,
+          "window resize behavior survives settings round-trip");
     settings.lyricsCacheEnabled = true;
     Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error) &&
               reader.LoadSettings(&error) && reader.Settings().lyricsCacheEnabled,
@@ -629,7 +637,43 @@ void TestUiModuleRegistry() {
               std::abs(resizedCollapsible->expandedY - resizedCollapsible->y) < 0.001F &&
               std::abs(resizedCollapsible->expandedWidth - resizedCollapsible->width) < 0.001F &&
               std::abs(resizedCollapsible->expandedHeight - resizedCollapsible->height) < 0.001F,
-          "resizing a snapped group keeps an expanded collapsible member's geometry in sync");
+           "resizing a snapped group keeps an expanded collapsible member's geometry in sync");
+}
+
+void TestDuplicateModuleGeometryRepair() {
+    using rivan::ui::ModuleId;
+    using rivan::ui::ModuleLayout;
+
+    auto layout = ModuleLayout::Defaults();
+    auto* first = layout.Find(ModuleId::Rivan);
+    auto* second = layout.Find(ModuleId::AllMusic);
+    second->x = first->x;
+    second->y = first->y;
+    second->width = first->width;
+    second->height = first->height;
+    Check(layout.HasConflictingGeometry(),
+          "independent modules with identical bounds are conflicting");
+    Check(layout.DisableDuplicateIndependentModules() && !second->visible && first->visible,
+          "duplicate independent geometry disables the later module");
+
+    auto tabbed = ModuleLayout::Defaults();
+    tabbed.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
+    Check(!tabbed.DisableDuplicateIndependentModules() &&
+              tabbed.Find(ModuleId::Rivan)->visible && tabbed.Find(ModuleId::AllMusic)->visible,
+          "tabbed modules may intentionally share identical bounds");
+
+    auto tabbedConflict = ModuleLayout::Defaults();
+    tabbedConflict.MakeTab(ModuleId::AllMusic, ModuleId::GraphicEqualizer);
+    first = tabbedConflict.Find(ModuleId::Rivan);
+    second = tabbedConflict.Find(ModuleId::AllMusic);
+    second->x = first->x;
+    second->y = first->y;
+    second->width = first->width;
+    second->height = first->height;
+    Check(tabbedConflict.DisableDuplicateIndependentModules() && !second->visible &&
+              !tabbedConflict.IsTabbed(ModuleId::AllMusic) &&
+              !tabbedConflict.IsTabbed(ModuleId::GraphicEqualizer),
+          "disabling a conflicting tab member also repairs its tab group");
 }
 
 void TestWindowSnapping() {
@@ -706,14 +750,30 @@ void TestWindowSnapping() {
     canvasModule->width = 0.50F;
     canvasModule->height = 0.40F;
     Check(resizeCanvas.PreservePixelGeometry(1000.0F, 800.0F, 700.0F, 800.0F),
-          "client resize preserves module pixels while surrounding space remains");
+          "trailing-module resize preserves module pixels while surrounding space remains");
     canvasModule = resizeCanvas.Find(ModuleId::Rivan);
     Check(std::abs(canvasModule->x - (200.0F / 700.0F)) < 0.001F &&
               std::abs(canvasModule->width - (500.0F / 700.0F)) < 0.001F &&
               std::abs(canvasModule->height - 0.40F) < 0.001F,
-          "unused window space is removed before modules are squeezed");
+          "trailing-module resize removes unused space before squeezing modules");
     Check(!resizeCanvas.PreservePixelGeometry(700.0F, 800.0F, 400.0F, 800.0F),
-          "client resize leaves normalized layout unchanged once modules no longer fit");
+          "trailing-module resize leaves layout unchanged once modules no longer fit");
+
+    auto edgeResize = rivan::ui::ModuleLayout::Defaults();
+    for (auto& item : edgeResize.items) item.visible = false;
+    auto* edgeModule = edgeResize.Find(ModuleId::Rivan);
+    edgeModule->visible = true;
+    edgeModule->x = 0.0F;
+    edgeModule->y = 0.20F;
+    edgeModule->width = 0.50F;
+    edgeModule->height = 0.40F;
+    Check(edgeResize.PreservePixelGeometry(1000.0F, 800.0F, 900.0F, 800.0F,
+                                           false, false, true, false),
+          "left-edge resize preserves an attached module's right pixel edge");
+    edgeModule = edgeResize.Find(ModuleId::Rivan);
+    Check(std::abs(edgeModule->x) < 0.001F &&
+              std::abs(edgeModule->width - (400.0F / 900.0F)) < 0.001F,
+          "left-edge resize changes module width to fit the new canvas");
 
     auto minimizedResize = ModuleLayout::Defaults();
     const auto beforeMinimize = minimizedResize;
@@ -1353,6 +1413,7 @@ int main() {
     TestFilePreviewSettingRoundTrip();
     TestIniValueCodec();
     TestUiModuleRegistry();
+    TestDuplicateModuleGeometryRepair();
     TestWindowSnapping();
     TestCollapsibleSnapping();
     TestSnappingWithExistingLayoutConflict();

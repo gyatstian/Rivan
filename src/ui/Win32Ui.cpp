@@ -4,6 +4,79 @@
 namespace rivan::ui {
 
 namespace {
+std::optional<std::wstring> ClipboardText(HWND owner) {
+    if (!OpenClipboard(owner)) return std::nullopt;
+    const HANDLE data = GetClipboardData(CF_UNICODETEXT);
+    if (!data) {
+        CloseClipboard();
+        return std::nullopt;
+    }
+    const auto* text = static_cast<const wchar_t*>(GlobalLock(data));
+    if (!text) {
+        CloseClipboard();
+        return std::nullopt;
+    }
+    std::wstring result(text);
+    GlobalUnlock(data);
+    CloseClipboard();
+    return result;
+}
+
+bool IsSupportedBrowserWindow(HWND window) {
+    DWORD processId{};
+    GetWindowThreadProcessId(window, &processId);
+    if (processId == 0) return false;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process) return false;
+    std::wstring imagePath(32768, L'\0');
+    DWORD length = static_cast<DWORD>(imagePath.size());
+    const bool read = QueryFullProcessImageNameW(process, 0, imagePath.data(), &length) != FALSE;
+    CloseHandle(process);
+    if (!read || length == 0) return false;
+    imagePath.resize(length);
+    auto executable = std::filesystem::path(imagePath).filename().wstring();
+    std::transform(executable.begin(), executable.end(), executable.begin(),
+                   [](wchar_t character) {
+                       return static_cast<wchar_t>(std::towlower(character));
+                   });
+    constexpr std::array<std::wstring_view, 9> browserExecutables{
+        L"brave.exe", L"chrome.exe", L"chromium.exe", L"firefox.exe", L"msedge.exe",
+        L"opera.exe", L"vivaldi.exe", L"waterfox.exe", L"librewolf.exe"};
+    return std::find(browserExecutables.begin(), browserExecutables.end(),
+                     std::wstring_view(executable)) !=
+           browserExecutables.end();
+}
+
+bool SendBrowserShortcut(HWND expectedWindow, WORD key) {
+    if (GetForegroundWindow() != expectedWindow) return false;
+    std::array<INPUT, 4> inputs{};
+    const auto setKey = [&inputs](std::size_t index, WORD key, DWORD flags) {
+        inputs[index].type = INPUT_KEYBOARD;
+        inputs[index].ki.wVk = key;
+        inputs[index].ki.dwFlags = flags;
+    };
+    setKey(0, VK_CONTROL, 0);
+    setKey(1, key, 0);
+    setKey(2, key, KEYEVENTF_KEYUP);
+    setKey(3, VK_CONTROL, KEYEVENTF_KEYUP);
+    return SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) ==
+           inputs.size();
+}
+
+bool YoutubeGrabberKeysReleased(std::uint32_t modifiers,
+                                std::uint32_t virtualKey) noexcept {
+    return ((modifiers & MOD_CONTROL) == 0u ||
+            (GetAsyncKeyState(VK_CONTROL) & 0x8000) == 0) &&
+           ((modifiers & MOD_SHIFT) == 0u ||
+            (GetAsyncKeyState(VK_SHIFT) & 0x8000) == 0) &&
+           ((modifiers & MOD_ALT) == 0u ||
+            (GetAsyncKeyState(VK_MENU) & 0x8000) == 0) &&
+           ((modifiers & MOD_WIN) == 0u ||
+            ((GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
+             (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0)) &&
+           (GetAsyncKeyState(static_cast<int>(virtualKey)) & 0x8000) == 0;
+}
+
 LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     auto* ui = reinterpret_cast<Win32Ui*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
@@ -103,7 +176,7 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
         youtubeOptions.minimumWidth = 520;
         youtubeOptions.minimumHeight = 420;
         youtubeOptions.acceptFileDrops = false;
-        youtubeOptions.owner = impl_->window;
+        youtubeOptions.owner = nullptr;
         youtubeOptions.initiallyVisible = false;
         impl_->youtubeWindow = std::unique_ptr<Win32Ui>(
             new Win32Ui(impl_->host, WindowKind::YoutubeChooser));
@@ -114,6 +187,44 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
 }
 
 HWND Win32Ui::WindowHandle() const noexcept { return impl_->window; }
+
+void Win32Ui::RevealYoutubeChooser() noexcept {
+    if (impl_->windowKind != WindowKind::Main || !impl_->window) return;
+    ShowWindow(impl_->window, IsIconic(impl_->window) ? SW_RESTORE : SW_SHOW);
+    impl_->RemoveTrayIcon();
+    if (impl_->youtubeWindow && impl_->youtubeWindow->WindowHandle()) {
+        const HWND chooser = impl_->youtubeWindow->WindowHandle();
+        ShowWindow(chooser, SW_SHOWNORMAL);
+        SetForegroundWindow(chooser);
+        InvalidateRect(chooser, nullptr, FALSE);
+    } else {
+        SetForegroundWindow(impl_->window);
+    }
+}
+
+bool Win32Ui::UpdateYoutubeGrabberHotkey(std::uint32_t modifiers,
+                                         std::uint32_t virtualKey) noexcept {
+    if (impl_->windowKind != WindowKind::Main || !impl_->window) return false;
+    if (virtualKey == 0) {
+        impl_->UnregisterYoutubeGrabberHotkey();
+        impl_->youtubeGrabberHotkeyModifiers = 0;
+        impl_->youtubeGrabberHotkeyVirtualKey = 0;
+        return true;
+    }
+    constexpr std::uint32_t supportedModifiers = MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN;
+    if ((modifiers & ~supportedModifiers) != 0u || virtualKey > 0xffu) {
+        return false;
+    }
+    const auto previousModifiers = impl_->youtubeGrabberHotkeyModifiers;
+    const auto previousVirtualKey = impl_->youtubeGrabberHotkeyVirtualKey;
+    const bool wasRegistered = impl_->youtubeGrabberHotkeyRegistered;
+    impl_->UnregisterYoutubeGrabberHotkey();
+    if (impl_->RegisterYoutubeGrabberHotkey(modifiers, virtualKey)) return true;
+    if (wasRegistered) {
+        (void)impl_->RegisterYoutubeGrabberHotkey(previousModifiers, previousVirtualKey);
+    }
+    return false;
+}
 
 void Win32Ui::Refresh() noexcept {
     if (impl_->window && IsWindowVisible(impl_->window)) {
@@ -152,6 +263,24 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_SIZE:
         impl_->Resize(LOWORD(lParam), HIWORD(lParam), wParam == SIZE_MINIMIZED);
         impl_->SyncRefreshTimer();
+        return 0;
+    case WM_SIZING:
+        impl_->windowResizeActive = true;
+        impl_->windowResizeRight = wParam == WMSZ_RIGHT || wParam == WMSZ_TOPRIGHT ||
+                                    wParam == WMSZ_BOTTOMRIGHT;
+        impl_->windowResizeBottom = wParam == WMSZ_BOTTOM || wParam == WMSZ_BOTTOMLEFT ||
+                                     wParam == WMSZ_BOTTOMRIGHT;
+        impl_->windowResizeLeft = wParam == WMSZ_LEFT || wParam == WMSZ_TOPLEFT ||
+                                   wParam == WMSZ_BOTTOMLEFT;
+        impl_->windowResizeTop = wParam == WMSZ_TOP || wParam == WMSZ_TOPLEFT ||
+                                  wParam == WMSZ_TOPRIGHT;
+        return TRUE;
+    case WM_EXITSIZEMOVE:
+        impl_->windowResizeRight = false;
+        impl_->windowResizeBottom = false;
+        impl_->windowResizeLeft = false;
+        impl_->windowResizeTop = false;
+        impl_->windowResizeActive = false;
         return 0;
     case WM_SHOWWINDOW:
         impl_->SyncRefreshTimer();
@@ -241,6 +370,79 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         } else if (wParam == kYoutubeSearchDebounceTimer) {
             KillTimer(impl_->window, kYoutubeSearchDebounceTimer);
             impl_->FlushYoutubeSearchDebounce();
+        } else if (wParam == kYoutubeGrabberCopyTimer) {
+            KillTimer(impl_->window, kYoutubeGrabberCopyTimer);
+            if (!YoutubeGrabberKeysReleased(impl_->youtubeGrabberHotkeyModifiers,
+                                            impl_->youtubeGrabberHotkeyVirtualKey)) {
+                if (++impl_->youtubeGrabberClipboardAttempts < 20) {
+                    SetTimer(impl_->window, kYoutubeGrabberCopyTimer, 25, nullptr);
+                }
+                return 0;
+            }
+            if (!impl_->youtubeGrabberTargetWindow ||
+                GetForegroundWindow() != impl_->youtubeGrabberTargetWindow) {
+                impl_->youtubeGrabberTargetWindow = nullptr;
+                return 0;
+            }
+            impl_->youtubeGrabberClipboardSequence = GetClipboardSequenceNumber();
+            impl_->youtubeGrabberClipboardBackup.Reset();
+            (void)OleGetClipboard(impl_->youtubeGrabberClipboardBackup.GetAddressOf());
+            impl_->youtubeGrabberClipboardAttempts = 0;
+            if (!SendBrowserShortcut(impl_->youtubeGrabberTargetWindow, L'L')) {
+                impl_->youtubeGrabberTargetWindow = nullptr;
+                impl_->youtubeGrabberClipboardBackup.Reset();
+                return 0;
+            }
+            SetTimer(impl_->window, kYoutubeGrabberAddressCopyTimer,
+                     kYoutubeGrabberAddressCopyDelayMs, nullptr);
+        } else if (wParam == kYoutubeGrabberAddressCopyTimer) {
+            KillTimer(impl_->window, kYoutubeGrabberAddressCopyTimer);
+            if (!impl_->youtubeGrabberTargetWindow ||
+                !SendBrowserShortcut(impl_->youtubeGrabberTargetWindow, L'C')) {
+                impl_->youtubeGrabberTargetWindow = nullptr;
+                impl_->youtubeGrabberClipboardBackup.Reset();
+                return 0;
+            }
+            SetTimer(impl_->window, kYoutubeGrabberClipboardTimer,
+                     kYoutubeGrabberClipboardDelayMs, nullptr);
+        } else if (wParam == kYoutubeGrabberClipboardTimer) {
+            ++impl_->youtubeGrabberClipboardAttempts;
+            const std::uint32_t copiedSequence = GetClipboardSequenceNumber();
+            const bool clipboardChanged = copiedSequence !=
+                                          impl_->youtubeGrabberClipboardSequence;
+            const auto url = clipboardChanged ? ClipboardText(impl_->window) : std::nullopt;
+            if (url && youtube::YoutubeService::LooksLikeYoutubeUrl(*url)) {
+                KillTimer(impl_->window, kYoutubeGrabberClipboardTimer);
+                try { impl_->host.GrabYoutubeLink(*url); } catch (...) {}
+                if (impl_->youtubeGrabberClipboardBackup &&
+                    GetClipboardSequenceNumber() == copiedSequence) {
+                    (void)OleSetClipboard(impl_->youtubeGrabberClipboardBackup.Get());
+                }
+                impl_->youtubeGrabberTargetWindow = nullptr;
+                impl_->youtubeGrabberClipboardBackup.Reset();
+            } else if (impl_->youtubeGrabberClipboardAttempts >= 10) {
+                KillTimer(impl_->window, kYoutubeGrabberClipboardTimer);
+                impl_->youtubeGrabberTargetWindow = nullptr;
+                impl_->youtubeGrabberClipboardBackup.Reset();
+            }
+        }
+        return 0;
+    case WM_HOTKEY:
+        if (impl_->windowKind == WindowKind::Main &&
+            wParam == static_cast<WPARAM>(kYoutubeGrabberHotkeyId) &&
+            impl_->youtubeGrabberHotkeyRegistered) {
+            KillTimer(impl_->window, kYoutubeGrabberCopyTimer);
+            KillTimer(impl_->window, kYoutubeGrabberAddressCopyTimer);
+            KillTimer(impl_->window, kYoutubeGrabberClipboardTimer);
+            impl_->youtubeGrabberTargetWindow = GetForegroundWindow();
+            if (!IsSupportedBrowserWindow(impl_->youtubeGrabberTargetWindow)) {
+                impl_->youtubeGrabberTargetWindow = nullptr;
+                return 0;
+            }
+            impl_->youtubeGrabberClipboardAttempts = 0;
+            impl_->youtubeGrabberClipboardBackup.Reset();
+            SetTimer(impl_->window, kYoutubeGrabberCopyTimer,
+                     kYoutubeGrabberCopyDelayMs, nullptr);
         }
         return 0;
     case kAudioSignalMessage:
@@ -308,6 +510,12 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_DESTROY:
         KillTimer(impl_->window, kRefreshTimer);
         KillTimer(impl_->window, kYoutubeSearchDebounceTimer);
+        KillTimer(impl_->window, kYoutubeGrabberCopyTimer);
+        KillTimer(impl_->window, kYoutubeGrabberAddressCopyTimer);
+        KillTimer(impl_->window, kYoutubeGrabberClipboardTimer);
+        impl_->youtubeGrabberTargetWindow = nullptr;
+        impl_->youtubeGrabberClipboardBackup.Reset();
+        impl_->UnregisterYoutubeGrabberHotkey();
         impl_->RemoveTrayIcon();
         impl_->ClearFilePreview();
         impl_->StopPreviewWorker();

@@ -39,6 +39,7 @@ struct Win32UiRenderState {
 
     // Persistent solid brushes; colors update in place each paint.
     std::array<Microsoft::WRL::ComPtr<ID2D1SolidColorBrush>, 14> solidBrushes;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> warningBrush;
     visualization::VisualizationRenderer visualizationRenderer;
     std::map<std::wstring, Microsoft::WRL::ComPtr<ID2D1Bitmap>> imageCache;
 

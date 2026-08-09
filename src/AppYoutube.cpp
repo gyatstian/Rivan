@@ -42,8 +42,7 @@ void EnsureYoutubeSelection(youtube::YoutubeDownloadSelection& selection,
         const auto preferred = std::find_if(
             probe.videoFormats.begin(), probe.videoFormats.end(), [&selection](const auto& format) {
                 return format.extension == selection.preferredVideoExtension &&
-                       (selection.videoHeight <= 0 || format.height == selection.videoHeight) &&
-                       (selection.videoFps <= 0.0 || format.fps == selection.videoFps);
+                       (selection.videoHeight <= 0 || format.height == selection.videoHeight);
             });
         const auto& selected = preferred != probe.videoFormats.end()
                                    ? *preferred
@@ -136,19 +135,24 @@ void App::PersistYoutubeChooserSelection() {
 void App::SetYoutubeEnabled(bool enabled) {
     auto settings = settings_.Settings();
     if (settings.youtubeEnabled == enabled) return;
+    const bool grabberHotkeyAvailable = !enabled || !window_ ||
+        window_->UpdateYoutubeGrabberHotkey(settings.youtubeGrabberHotkeyModifiers,
+                                             settings.youtubeGrabberHotkeyVirtualKey);
     settings.youtubeEnabled = enabled;
     std::string error;
     if (!settings_.SetSettings(settings, &error)) return;
     (void)settings_.SaveSettings(&error);
 
     if (!enabled) {
+        if (window_) (void)window_->UpdateYoutubeGrabberHotkey(0, 0);
+        youtubeGrabberHotkeyAvailable_ = false;
         youtube_.Reset();
         youtubeView_ = youtube_.Snapshot();
         youtubeSelectedResult_ = 0;
-        pendingPlayYoutubeId_ = 0;
         youtubeChooserVisible_ = false;
         youtubeChooserEntryId_ = 0;
         youtubeDownloadSelection_ = {};
+        pendingYoutubeGrab_ = false;
         if (selectedPlaylist_ == playlist::YoutubePlaylistId) {
             selectedPlaylist_ = playlist::AllMusicPlaylistId;
             if (playlists_.FindPlaylist(selectedPlaylist_)) {
@@ -157,12 +161,15 @@ void App::SetYoutubeEnabled(bool enabled) {
             }
         }
     } else {
+        youtubeGrabberHotkeyAvailable_ = grabberHotkeyAvailable;
         std::error_code ec;
         std::filesystem::create_directories(
             youtube::YoutubeService::DownloadDirectory(settings_.Settings().musicRoot), ec);
         youtube_.RefreshToolStatus();
         youtubeView_ = youtube_.Snapshot();
-        if (!youtubeView_.ytDlpInstalled) {
+        if (!grabberHotkeyAvailable) {
+            youtubeView_.status = L"YouTube grabber hotkey unavailable — choose another in Preferences → Online";
+        } else if (!youtubeView_.ytDlpInstalled) {
             youtubeView_.status = L"Install yt-dlp in Preferences → Online";
         } else {
             youtubeView_.status = L"Ready — search or paste a YouTube URL";
@@ -170,6 +177,38 @@ void App::SetYoutubeEnabled(bool enabled) {
     }
     ++revision_;
     if (window_) window_->Refresh();
+}
+
+void App::GrabYoutubeLink(std::wstring url) {
+    if (!YoutubeFeatureOn() || !youtube::YoutubeService::LooksLikeYoutubeUrl(url)) return;
+    pendingYoutubeGrab_ = true;
+    SubmitYoutubeQuery(std::move(url));
+    youtubeChooserVisible_ = true;
+    youtubeChooserEntryId_ = 0;
+    ++revision_;
+    if (window_) {
+        window_->RevealYoutubeChooser();
+        window_->Refresh();
+    }
+}
+
+bool App::SetYoutubeGrabberHotkey(std::uint32_t modifiers,
+                                  std::uint32_t virtualKey) {
+    auto settings = settings_.Settings();
+    settings.youtubeGrabberHotkeyModifiers = modifiers;
+    settings.youtubeGrabberHotkeyVirtualKey = virtualKey;
+    std::string error;
+    if (!config::SettingsManager::Validate(settings, &error)) return false;
+    if (YoutubeFeatureOn() && window_ &&
+        !window_->UpdateYoutubeGrabberHotkey(modifiers, virtualKey)) {
+        return false;
+    }
+    if (!settings_.SetSettings(settings, &error)) return false;
+    youtubeGrabberHotkeyAvailable_ = true;
+    (void)settings_.SaveSettings(&error);
+    ++revision_;
+    if (window_) window_->Refresh();
+    return true;
 }
 
 void App::InstallYoutubeTool(bool ytDlp) {
@@ -181,15 +220,17 @@ void App::InstallYoutubeTool(bool ytDlp) {
 
 void App::SubmitYoutubeQuery(std::wstring query) {
     if (!YoutubeFeatureOn()) return;
+    const bool keepGrabRequest = pendingYoutubeGrab_;
+    pendingYoutubeGrab_ = false;
     if (selectedPlaylist_ != playlist::YoutubePlaylistId) {
         selectedPlaylist_ = playlist::YoutubePlaylistId;
     }
     youtubeSelectedResult_ = 0;
-    pendingPlayYoutubeId_ = 0;
     youtubeChooserVisible_ = false;
     youtubeChooserEntryId_ = 0;
     youtubeDownloadSelection_ = YoutubeSelectionFromSettings(settings_.Settings());
     youtube_.SubmitQuery(query);
+    pendingYoutubeGrab_ = keepGrabRequest;
     youtubeView_ = youtube_.Snapshot();
     ++revision_;
     if (window_) window_->Refresh();
@@ -218,7 +259,6 @@ void App::ActivateYoutubeResult(std::uint64_t id) {
     if (!found->localPath.empty() && std::filesystem::is_regular_file(found->localPath, ec)) {
         youtubeChooserVisible_ = false;
         youtubeChooserEntryId_ = 0;
-        pendingPlayYoutubeId_ = 0;
         library::Track track = library::Track::FromFile(found->localPath);
         track.title = found->title.empty() ? track.title : found->title;
         queue_.SetTracks(std::vector<library::Track>{track}, 0);
@@ -228,14 +268,24 @@ void App::ActivateYoutubeResult(std::uint64_t id) {
         return;
     }
 
-    pendingPlayYoutubeId_ = id;
     youtubeChooserVisible_ = true;
     youtubeChooserEntryId_ = id;
     youtubeDownloadSelection_ = YoutubeSelectionFromSettings(settings_.Settings());
-    youtube_.Probe(id);
+    const bool probingThisEntry = snapshot.job == youtube::YoutubeJobKind::Probe &&
+                                  snapshot.probeEntryId == id;
+    const bool probeReady = snapshot.job == youtube::YoutubeJobKind::Idle &&
+                            snapshot.probe && snapshot.probeEntryId == id;
+    if (probeReady) {
+        EnsureYoutubeSelection(youtubeDownloadSelection_, *snapshot.probe);
+    } else if (!probingThisEntry) {
+        youtube_.Probe(id);
+    }
     youtubeView_ = youtube_.Snapshot();
     ++revision_;
-    if (window_) window_->Refresh();
+    if (window_) {
+        window_->RevealYoutubeChooser();
+        window_->Refresh();
+    }
 }
 
 void App::SetYoutubeChooserVisible(bool visible) {
@@ -243,11 +293,9 @@ void App::SetYoutubeChooserVisible(bool visible) {
         if (youtubeChooserEntryId_ == 0) return;
         youtubeChooserVisible_ = true;
     } else {
-        // This callback is used by the chooser's close/cancel path. Confirmation hides
-        // directly so its pending play id survives until the download completes.
         youtubeChooserVisible_ = false;
         youtubeChooserEntryId_ = 0;
-        pendingPlayYoutubeId_ = 0;
+        pendingYoutubeGrab_ = false;
     }
     ++revision_;
     if (window_) window_->Refresh();
@@ -351,8 +399,7 @@ void App::CycleYoutubeVideoFps(int direction) {
     EnsureYoutubeSelection(youtubeDownloadSelection_, *youtubeView_.probe);
     std::vector<double> fpsValues;
     for (const auto& format : youtubeView_.probe->videoFormats) {
-        if (format.height != youtubeDownloadSelection_.videoHeight ||
-            format.fps <= 0.0 ||
+        if (format.fps <= 0.0 ||
             std::find(fpsValues.begin(), fpsValues.end(), format.fps) != fpsValues.end()) {
             continue;
         }
@@ -365,11 +412,36 @@ void App::CycleYoutubeVideoFps(int direction) {
     long long next = (static_cast<long long>(index) + static_cast<long long>(direction)) % count;
     if (next < 0) next += count;
     const double fps = fpsValues[static_cast<std::size_t>(next)];
-    const auto matching = std::find_if(
+    const auto sameHeightAndExtension = std::find_if(
+        youtubeView_.probe->videoFormats.begin(), youtubeView_.probe->videoFormats.end(),
+        [this, fps](const auto& format) {
+            return format.height == youtubeDownloadSelection_.videoHeight &&
+                   format.extension == youtubeDownloadSelection_.preferredVideoExtension &&
+                   format.fps == fps;
+        });
+    const auto sameHeight = std::find_if(
         youtubeView_.probe->videoFormats.begin(), youtubeView_.probe->videoFormats.end(),
         [this, fps](const auto& format) {
             return format.height == youtubeDownloadSelection_.videoHeight && format.fps == fps;
         });
+    const auto sameExtension = std::find_if(
+        youtubeView_.probe->videoFormats.begin(), youtubeView_.probe->videoFormats.end(),
+        [this, fps](const auto& format) {
+            return format.extension == youtubeDownloadSelection_.preferredVideoExtension &&
+                   format.fps == fps;
+        });
+    const auto matching = sameHeightAndExtension != youtubeView_.probe->videoFormats.end()
+                              ? sameHeightAndExtension
+                              : (sameHeight != youtubeView_.probe->videoFormats.end()
+                                     ? sameHeight
+                                     : (sameExtension != youtubeView_.probe->videoFormats.end()
+                                            ? sameExtension
+                                            : std::find_if(
+                                                  youtubeView_.probe->videoFormats.begin(),
+                                                  youtubeView_.probe->videoFormats.end(),
+                                                  [fps](const auto& format) {
+                                                      return format.fps == fps;
+                                                  })));
     if (matching == youtubeView_.probe->videoFormats.end()) return;
     youtubeDownloadSelection_.videoFormatId = matching->formatId;
     youtubeDownloadSelection_.videoHeight = matching->height;
@@ -434,7 +506,6 @@ void App::ConfirmYoutubeDownload() {
     PersistYoutubeChooserSelection();
     youtubeChooserVisible_ = false;
     youtubeChooserEntryId_ = 0;
-    // Keep pendingPlayYoutubeId_ until the service publishes a local file.
     youtubeView_ = youtube_.Snapshot();
     ++revision_;
     if (window_) window_->Refresh();
@@ -490,10 +561,16 @@ void App::ShowYoutubeLocalLibrary() {
 
 void App::OnYoutubeServiceUpdated() {
     if (!YoutubeFeatureOn()) return;
-    ApplyYoutubeSnapshot(true, pendingPlayYoutubeId_);
+    ApplyYoutubeSnapshot();
+    if (!pendingYoutubeGrab_ || youtubeView_.busy ||
+        youtubeView_.job != youtube::YoutubeJobKind::Idle) {
+        return;
+    }
+    pendingYoutubeGrab_ = false;
+    if (!youtubeView_.entries.empty()) ActivateYoutubeResult(youtubeView_.entries.front().id);
 }
 
-void App::ApplyYoutubeSnapshot(bool playIfReady, std::uint64_t playEntryId) {
+void App::ApplyYoutubeSnapshot() {
     const auto previousGen = youtubeView_.generation;
     const bool wasBusy = youtubeView_.busy;
     const auto previousJob = youtubeView_.job;
@@ -502,7 +579,7 @@ void App::ApplyYoutubeSnapshot(bool playIfReady, std::uint64_t playEntryId) {
         youtubeView_.probeEntryId == youtubeChooserEntryId_) {
         EnsureYoutubeSelection(youtubeDownloadSelection_, *youtubeView_.probe);
     }
-    if (youtubeView_.generation == previousGen && !playIfReady) return;
+    if (youtubeView_.generation == previousGen) return;
 
     // Downloads land in musicRoot/Youtube like any other folder — rescan catalog when
     // a download job finishes with at least one file on disk.
@@ -519,25 +596,6 @@ void App::ApplyYoutubeSnapshot(bool playIfReady, std::uint64_t playEntryId) {
         if (downloaded) {
             restored_ = true;
             StartLibraryScan();
-        }
-    }
-
-    if (playIfReady && playEntryId != 0) {
-        const auto found = std::find_if(
-            youtubeView_.entries.begin(), youtubeView_.entries.end(),
-            [playEntryId](const youtube::YoutubeEntry& e) { return e.id == playEntryId; });
-        if (found != youtubeView_.entries.end() && !found->localPath.empty() &&
-            !found->downloading) {
-            std::error_code ec;
-            if (std::filesystem::is_regular_file(found->localPath, ec)) {
-                library::Track track = library::Track::FromFile(found->localPath);
-                track.title = found->title.empty() ? track.title : found->title;
-                queue_.SetTracks(std::vector<library::Track>{track}, 0);
-                PlayNavigation(queue_.Play(0));
-                pendingPlayYoutubeId_ = 0;
-            }
-        } else if (found != youtubeView_.entries.end() && found->failed) {
-            pendingPlayYoutubeId_ = 0;
         }
     }
 

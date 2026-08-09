@@ -84,8 +84,9 @@ struct ModuleLayout final {
     [[nodiscard]] std::size_t MovingMembers(ModuleId id,
                                               std::array<ModuleId, 6>& members) const noexcept;
     [[nodiscard]] bool HasGeometryConflict(ModuleId firstId,
-                                           ModuleId secondId) const noexcept;
+                                            ModuleId secondId) const noexcept;
     [[nodiscard]] bool HasConflictingGeometry() const noexcept;
+    [[nodiscard]] bool DisableDuplicateIndependentModules() noexcept;
     [[nodiscard]] bool HasNewConflictingGeometry(const ModuleLayout& before) const noexcept;
     [[nodiscard]] bool FindplusWindowRectangle(
         ModuleId source, ModuleNormalizedRect region, float pointerX, float pointerY,
@@ -98,7 +99,11 @@ struct ModuleLayout final {
                          bool resizeRight, bool resizeBottom,
                          bool resizeLeft, bool resizeTop) noexcept;
     [[nodiscard]] bool PreservePixelGeometry(float oldWidth, float oldHeight,
-                                              float newWidth, float newHeight) noexcept;
+                                              float newWidth, float newHeight,
+                                              bool resizeRight = false,
+                                              bool resizeBottom = false,
+                                              bool resizeLeft = false,
+                                              bool resizeTop = false) noexcept;
 
     [[nodiscard]] ModuleId TabRoot(ModuleId id) const noexcept;
     void ClearTabs() noexcept;

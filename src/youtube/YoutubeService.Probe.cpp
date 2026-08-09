@@ -262,6 +262,10 @@ std::string StringMember(const JsonValue& object, std::string_view name) {
     return value && value->kind == JsonValue::Kind::String ? value->string : std::string{};
 }
 
+std::wstring VideoIdMember(const JsonValue& object) {
+    return Utf8ToWide(StringMember(object, "id"));
+}
+
 double NumberMember(const JsonValue& object, std::string_view name) {
     const auto* value = Member(object, name);
     return value && value->kind == JsonValue::Kind::Number && std::isfinite(value->number)
@@ -291,6 +295,7 @@ std::optional<YoutubeProbe> ParseProbeJson(const std::string& stdoutText) {
         if (title.empty() || !formats || formats->kind != JsonValue::Kind::Array) continue;
 
         YoutubeProbe probe;
+        probe.videoId = VideoIdMember(root);
         probe.title = Utf8ToWide(title);
         probe.durationSeconds = NumberMember(root, "duration");
         for (const auto& format : formats->array) {
@@ -381,6 +386,7 @@ void YoutubeService::RunProbe(std::stop_token stop, std::uint64_t entryId) {
             state_.probeEntryId = entryId;
             for (auto& entry : state_.entries) {
                 if (entry.id != entryId) continue;
+                if (!state_.probe->videoId.empty()) entry.videoId = state_.probe->videoId;
                 entry.title = state_.probe->title;
                 entry.durationSeconds = state_.probe->durationSeconds;
             }

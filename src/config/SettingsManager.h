@@ -52,6 +52,8 @@ struct AppSettings final {
     std::string youtubeVideoExtension = "mp4";
     std::string youtubeAudioExtension = "m4a";
     int youtubeAudioBitrate = 0;
+    std::uint32_t youtubeGrabberHotkeyModifiers = 0x0002u | 0x0004u; // Ctrl + Shift
+    std::uint32_t youtubeGrabberHotkeyVirtualKey = 'Y';
     // Right-click "Duplicate": false = add a second reference to the same track within
     // the playlist (no file copied); true = copy the underlying file on disk and add it.
     bool duplicateAsFile = false;
@@ -63,6 +65,7 @@ struct AppSettings final {
     bool discordShowGithubButton = false;
     ui::ModuleExpansionBehavior moduleExpansionBehavior =
         ui::ModuleExpansionBehavior::Squash;
+    ui::WindowResizeBehavior windowResizeBehavior = ui::WindowResizeBehavior::ScaleAll;
 
     [[nodiscard]] static AppSettings Defaults();
 };

@@ -3,6 +3,30 @@
 #include "Win32UiImpl.h"
 
 namespace rivan::ui {
+namespace {
+
+std::wstring YoutubeGrabberHotkeyLabel(std::uint32_t modifiers,
+                                       std::uint32_t virtualKey) {
+    std::wstring label;
+    if ((modifiers & MOD_CONTROL) != 0u) label += L"CTRL + ";
+    if ((modifiers & MOD_SHIFT) != 0u) label += L"SHIFT + ";
+    if ((modifiers & MOD_ALT) != 0u) label += L"ALT + ";
+    if ((modifiers & MOD_WIN) != 0u) label += L"WIN + ";
+    const UINT scanCode = MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC);
+    wchar_t keyName[64]{};
+    const LONG keyNameData = static_cast<LONG>(scanCode << 16u);
+    if (scanCode != 0 && GetKeyNameTextW(keyNameData, keyName,
+                                         static_cast<int>(std::size(keyName))) > 0) {
+        label += keyName;
+    } else if (virtualKey >= L'A' && virtualKey <= L'Z') {
+        label.push_back(static_cast<wchar_t>(virtualKey));
+    } else {
+        label += L"KEY " + std::to_wstring(virtualKey);
+    }
+    return label;
+}
+
+} // namespace
 
 void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
                                  std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
@@ -168,6 +192,18 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
         DrawText(model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
                      ? L"Shrinks other modules to make room."
                      : L"Grows window, then restores size after collapse.",
+                  Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+        y += 22;
+        DrawText(L"WINDOW RESIZE BEHAVIOR", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+                 DWRITE_TEXT_ALIGNMENT_CENTER);
+        y += 29;
+        SettingsButton(Rect(left, y, right, y + 24),
+                       model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
+                           ? L"RESIZE: SCALE ALL" : L"RESIZE: GROW TRAILING MODULE", 68, b);
+        y += 26;
+        DrawText(model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
+                     ? L"All modules keep their proportions as the window changes."
+                     : L"The module touching the resized edge absorbs available space.",
                  Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
         y += 22;
         DrawText(L"TRACK COVERS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -207,6 +243,22 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
         y += 29;
         SettingsButton(Rect(left, y, right, y + 24), model.youtubeEnabled ? L"YOUTUBE DOWNLOADER: ON" : L"YOUTUBE DOWNLOADER: OFF", 4, b);
         y += 30;
+        std::wstring hotkeyLabel = youtubeGrabberHotkeyCapture
+            ? (youtubeGrabberHotkeyCaptureFailed ? L"HOTKEY UNAVAILABLE — TRY ANOTHER" : L"PRESS A SHORTCUT...")
+            : L"LINK GRABBER HOTKEY: " +
+                  YoutubeGrabberHotkeyLabel(model.youtubeGrabberHotkeyModifiers,
+                                            model.youtubeGrabberHotkeyVirtualKey);
+        if (!youtubeGrabberHotkeyCapture && model.youtubeEnabled &&
+            !model.youtubeGrabberHotkeyAvailable) {
+            hotkeyLabel += L" (UNAVAILABLE)";
+        }
+        SettingsButton(Rect(left, y, right, y + 24), hotkeyLabel, 24, b);
+        y += 26;
+        DrawText(model.youtubeGrabberHotkeyAvailable || !model.youtubeEnabled
+                     ? L"Uses the active browser address. Works while Rivan is minimized or in tray."
+                     : L"Click to choose an available global shortcut.",
+                 Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+        y += 22;
         const bool showYtInstall = !model.youtubeYtDlpInstalled || model.youtubeInstallingYtDlp;
         const bool showFfInstall = !model.youtubeFfmpegInstalled || model.youtubeInstallingFfmpeg;
         if (showYtInstall || showFfInstall) {
@@ -338,6 +390,10 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 21: host.SetDiscordShowImageText(!model.discordShowImageText); break;
         case 22: host.SetTrackCoverArtEnabled(!model.trackCoverArtEnabled); break;
         case 23: host.SetDiscordShowGithubButton(!model.discordShowGithubButton); break;
+        case 24:
+            youtubeGrabberHotkeyCapture = true;
+            youtubeGrabberHotkeyCaptureFailed = false;
+            break;
         case 60: case 61: case 62: case 63: case 64: case 65: {
             auto layout = model.moduleLayout;
             const auto id = static_cast<ModuleId>(action - 60);
@@ -353,7 +409,10 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         }
         case 66: host.SetModuleLayout(ModuleLayout::Defaults()); break;
         case 67: host.SetModuleExpansionBehavior(model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
-                                                      ? ModuleExpansionBehavior::Resize : ModuleExpansionBehavior::Squash); break;
+                                                       ? ModuleExpansionBehavior::Resize : ModuleExpansionBehavior::Squash); break;
+        case 68: host.SetWindowResizeBehavior(model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
+                                                   ? WindowResizeBehavior::GrowTrailingModule
+                                                   : WindowResizeBehavior::ScaleAll); break;
         case 50: if (window) KillTimer(window, kYoutubeSearchDebounceTimer); host.SubmitYoutubeQuery(playlistQuery); break;
         case 51: if (model.youtubeCanPagePrev && model.youtubePage > 0) host.SetYoutubeSearchPage(model.youtubePage - 1); break;
         case 52: if (model.youtubeCanPageNext) host.SetYoutubeSearchPage(model.youtubePage + 1); break;

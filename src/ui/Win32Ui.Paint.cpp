@@ -155,8 +155,13 @@ void Win32Ui::Impl::Resize(UINT width, UINT height, bool minimized) {
             FAILED(target->Resize(D2D1::SizeU(width, height)))) DiscardTarget();
         if (windowKind == WindowKind::Main && !model.miniPlayer && !internalModuleResize &&
             moduleGesture == ModuleGesture::None &&
+            model.windowResizeBehavior == WindowResizeBehavior::GrowTrailingModule &&
             model.moduleLayout.PreservePixelGeometry(previousSize.width, previousSize.height,
-                                                      newSize.width, newSize.height)) {
+                                                      newSize.width, newSize.height,
+                                                      windowResizeActive && windowResizeRight,
+                                                      windowResizeActive && windowResizeBottom,
+                                                      windowResizeActive && windowResizeLeft,
+                                                      windowResizeActive && windowResizeTop)) {
             try { host.SetModuleLayout(model.moduleLayout); } catch (...) {}
         }
         if (internalModuleResize) internalModuleResize = false;
@@ -167,7 +172,25 @@ void Win32Ui::Impl::Resize(UINT width, UINT height, bool minimized) {
 void Win32Ui::Impl::InvokeSafely(Command command) {
         try { host.Invoke(command); } catch (...) {}
         InvalidateRect(window, nullptr, FALSE);
-    }
+}
+
+bool Win32Ui::Impl::RegisterYoutubeGrabberHotkey(std::uint32_t modifiers,
+                                                 std::uint32_t virtualKey) noexcept {
+        if (!window || !RegisterHotKey(window, kYoutubeGrabberHotkeyId,
+                                       modifiers | MOD_NOREPEAT, virtualKey)) {
+            return false;
+        }
+        youtubeGrabberHotkeyRegistered = true;
+        youtubeGrabberHotkeyModifiers = modifiers;
+        youtubeGrabberHotkeyVirtualKey = virtualKey;
+        return true;
+}
+
+void Win32Ui::Impl::UnregisterYoutubeGrabberHotkey() noexcept {
+        if (!youtubeGrabberHotkeyRegistered || !window) return;
+        UnregisterHotKey(window, kYoutubeGrabberHotkeyId);
+        youtubeGrabberHotkeyRegistered = false;
+}
 
 // ---- Notification-area (system tray) support ----------------------------
 

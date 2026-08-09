@@ -39,6 +39,9 @@ public:
     [[nodiscard]] bool Create(HINSTANCE instance, const WindowOptions& options = {});
     [[nodiscard]] HWND WindowHandle() const noexcept;
     void Refresh() noexcept;
+    void RevealYoutubeChooser() noexcept;
+    [[nodiscard]] bool UpdateYoutubeGrabberHotkey(std::uint32_t modifiers,
+                                                  std::uint32_t virtualKey) noexcept;
 
     // May be used by App when it owns/forwards a pre-existing window procedure.
     [[nodiscard]] LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);

@@ -4,6 +4,73 @@
 
 namespace rivan::ui {
 
+namespace {
+
+[[nodiscard]] D2D1_RECT_F FullPreviewSourceRect(UINT width, UINT height) noexcept {
+    return Rect(0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height));
+}
+
+[[nodiscard]] std::optional<D2D1_RECT_F> ReadPreviewAperture(IMFAttributes* mediaType, REFGUID key,
+                                                             UINT frameWidth, UINT frameHeight) noexcept {
+    if (!mediaType) return std::nullopt;
+
+    UINT32 size = 0;
+    if (FAILED(mediaType->GetBlobSize(key, &size)) || size != sizeof(MFVideoArea)) {
+        return std::nullopt;
+    }
+
+    MFVideoArea area{};
+    UINT32 copied = 0;
+    if (FAILED(mediaType->GetBlob(key, reinterpret_cast<UINT8*>(&area), sizeof(area), &copied)) ||
+        copied != sizeof(area) || area.Area.cx <= 0 || area.Area.cy <= 0) {
+        return std::nullopt;
+    }
+
+    const auto offset = [](const MFOffset& value) noexcept {
+        return static_cast<double>(value.value) + static_cast<double>(value.fract) / 65536.0;
+    };
+    const double left = offset(area.OffsetX);
+    const double top = offset(area.OffsetY);
+    const double right = left + static_cast<double>(area.Area.cx);
+    const double bottom = top + static_cast<double>(area.Area.cy);
+    if (!std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) ||
+        !std::isfinite(bottom)) {
+        return std::nullopt;
+    }
+
+    const auto clampCoordinate = [](double value, UINT limit) noexcept {
+        return static_cast<float>(std::clamp(value, 0.0, static_cast<double>(limit)));
+    };
+    const D2D1_RECT_F aperture{
+        clampCoordinate(left, frameWidth),
+        clampCoordinate(top, frameHeight),
+        clampCoordinate(right, frameWidth),
+        clampCoordinate(bottom, frameHeight)};
+    if (aperture.left >= aperture.right || aperture.top >= aperture.bottom) return std::nullopt;
+    return aperture;
+}
+
+[[nodiscard]] std::optional<D2D1_RECT_F> ReadPreviewSourceRect(IMFAttributes* mediaType, UINT frameWidth,
+                                                               UINT frameHeight) noexcept {
+    if (const auto aperture = ReadPreviewAperture(mediaType, MF_MT_MINIMUM_DISPLAY_APERTURE,
+                                                  frameWidth, frameHeight)) {
+        return aperture;
+    }
+    return ReadPreviewAperture(mediaType, MF_MT_GEOMETRIC_APERTURE, frameWidth, frameHeight);
+}
+
+[[nodiscard]] std::optional<D2D1_RECT_F> ClipPreviewSourceRect(D2D1_RECT_F source, UINT frameWidth,
+                                                               UINT frameHeight) noexcept {
+    source.left = std::clamp(source.left, 0.0F, static_cast<float>(frameWidth));
+    source.top = std::clamp(source.top, 0.0F, static_cast<float>(frameHeight));
+    source.right = std::clamp(source.right, 0.0F, static_cast<float>(frameWidth));
+    source.bottom = std::clamp(source.bottom, 0.0F, static_cast<float>(frameHeight));
+    if (source.left >= source.right || source.top >= source.bottom) return std::nullopt;
+    return source;
+}
+
+} // namespace
+
 void Win32Ui::Impl::ClearFilePreview() noexcept {
         StopPreviewWorker();
         {
@@ -13,6 +80,7 @@ void Win32Ui::Impl::ClearFilePreview() noexcept {
         }
         previewWake.notify_all();
         previewBitmap.Reset();
+        previewBitmapSourceRect = {};
         previewPath.clear();
         previewIsVideo = false;
         previewHasPresentedFrame = false;
@@ -22,9 +90,15 @@ void Win32Ui::Impl::ClearFilePreview() noexcept {
         {
             std::lock_guard lock(previewFrameMutex);
             pendingPreviewPixels.clear();
+            latestPreviewPixels.clear();
             pendingPreviewWidth = 0;
             pendingPreviewHeight = 0;
             pendingPreviewStride = 0;
+            pendingPreviewSourceRect = {};
+            latestPreviewWidth = 0;
+            latestPreviewHeight = 0;
+            latestPreviewStride = 0;
+            latestPreviewSourceRect = {};
         }
         previewFullscreen = false;
         previewFullscreenCloseBounds = {};
@@ -51,12 +125,15 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
     }
 
 [[nodiscard]] bool Win32Ui::Impl::CreatePreviewBitmapFromBgra(UINT width, UINT height, const BYTE* data,
-                                                    UINT stride) {
+                                                     UINT stride) {
         if (!target || !data || width == 0 || height == 0) return false;
+        const auto sourceRect = Rect(0.0F, 0.0F, static_cast<float>(width),
+                                     static_cast<float>(height));
         if (previewBitmap) {
             const auto size = previewBitmap->GetPixelSize();
             if (size.width == width && size.height == height &&
                 SUCCEEDED(previewBitmap->CopyFromMemory(nullptr, data, stride))) {
+                previewBitmapSourceRect = sourceRect;
                 return true;
             }
         }
@@ -68,6 +145,7 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
             return false;
         }
         previewBitmap = std::move(bitmap);
+        previewBitmapSourceRect = sourceRect;
         return true;
     }
 
@@ -85,8 +163,13 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
             return false;
         }
         previewBitmap.Reset();
-        return SUCCEEDED(target->CreateBitmapFromWicBitmap(
-            converter.Get(), nullptr, previewBitmap.ReleaseAndGetAddressOf()));
+        if (FAILED(target->CreateBitmapFromWicBitmap(
+                converter.Get(), nullptr, previewBitmap.ReleaseAndGetAddressOf()))) {
+            return false;
+        }
+        const auto bitmapSize = previewBitmap->GetSize();
+        previewBitmapSourceRect = Rect(0.0F, 0.0F, bitmapSize.width, bitmapSize.height);
+        return true;
     }
 
 [[nodiscard]] bool Win32Ui::Impl::CreatePreviewBitmapFromEncoded(const BYTE* data, std::size_t size) {
@@ -109,8 +192,13 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
             return false;
         }
         previewBitmap.Reset();
-        return SUCCEEDED(target->CreateBitmapFromWicBitmap(
-            converter.Get(), nullptr, previewBitmap.ReleaseAndGetAddressOf()));
+        if (FAILED(target->CreateBitmapFromWicBitmap(
+                converter.Get(), nullptr, previewBitmap.ReleaseAndGetAddressOf()))) {
+            return false;
+        }
+        const auto bitmapSize = previewBitmap->GetSize();
+        previewBitmapSourceRect = Rect(0.0F, 0.0F, bitmapSize.width, bitmapSize.height);
+        return true;
     }
 
 [[nodiscard]] bool Win32Ui::Impl::LoadEmbeddedId3Cover(const std::wstring& path) {
@@ -257,6 +345,48 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                 UINT height = 0;
                 UINT packedStride = 0;
                 LONG defaultStride = 0;
+                D2D1_RECT_F sourceRect{};
+                std::optional<D2D1_RECT_F> nativeSourceRect;
+                UINT nativeWidth = 0;
+                UINT nativeHeight = 0;
+                const auto refreshOutputFormat = [&reader, &width, &height,
+                                                   &packedStride, &defaultStride,
+                                                   &sourceRect, &nativeSourceRect,
+                                                   &nativeWidth, &nativeHeight]() {
+                    ComPtr<IMFMediaType> outputType;
+                    if (FAILED(reader->GetCurrentMediaType(
+                            static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM),
+                            outputType.ReleaseAndGetAddressOf())) ||
+                        FAILED(MFGetAttributeSize(outputType.Get(), MF_MT_FRAME_SIZE,
+                                                   &width, &height)) ||
+                        width == 0 || height == 0 ||
+                        width > static_cast<UINT>(std::numeric_limits<LONG>::max() / 4) ||
+                        height > static_cast<UINT>(std::numeric_limits<LONG>::max())) {
+                        return false;
+                    }
+                    packedStride = width * 4;
+                    defaultStride = static_cast<LONG>(packedStride);
+                    UINT32 defaultStrideAttribute = 0;
+                    if (SUCCEEDED(outputType->GetUINT32(MF_MT_DEFAULT_STRIDE,
+                                                        &defaultStrideAttribute))) {
+                        defaultStride = static_cast<LONG>(defaultStrideAttribute);
+                    }
+                    const auto defaultStrideMagnitude = static_cast<std::uint64_t>(
+                        defaultStride < 0 ? -static_cast<std::int64_t>(defaultStride)
+                                          : static_cast<std::int64_t>(defaultStride));
+                    if (defaultStrideMagnitude < packedStride) {
+                        return false;
+                    }
+                    if (const auto aperture = ReadPreviewSourceRect(outputType.Get(), width, height)) {
+                        sourceRect = *aperture;
+                    } else if (nativeSourceRect && width == nativeWidth && height == nativeHeight) {
+                        sourceRect = ClipPreviewSourceRect(*nativeSourceRect, width, height)
+                                         .value_or(FullPreviewSourceRect(width, height));
+                    } else {
+                        sourceRect = FullPreviewSourceRect(width, height);
+                    }
+                    return true;
+                };
                 while (!stop.stop_requested()) {
                 std::wstring path;
                 std::uint64_t generation = 0;
@@ -293,10 +423,15 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                             static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0,
                             nativeType.ReleaseAndGetAddressOf())) ||
                         FAILED(MFGetAttributeSize(nativeType.Get(), MF_MT_FRAME_SIZE, &width, &height)) ||
-                        width == 0 || height == 0) {
+                        width == 0 || height == 0 ||
+                        width > static_cast<UINT>(std::numeric_limits<LONG>::max() / 4) ||
+                        height > static_cast<UINT>(std::numeric_limits<LONG>::max())) {
                         reader.Reset();
                         continue;
                     }
+                    nativeSourceRect = ReadPreviewSourceRect(nativeType.Get(), width, height);
+                    nativeWidth = width;
+                    nativeHeight = height;
                     // Do not ask Source Reader to resize decoded frames. Several decoder
                     // paths report scaled RGB32 stride/layout inconsistently, producing
                     // duplicated image fields or horizontal corruption. D2D scales safely.
@@ -304,26 +439,15 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                     if (FAILED(MFCreateMediaType(type.ReleaseAndGetAddressOf())) ||
                         FAILED(type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video)) ||
                         FAILED(type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32)) ||
+                        FAILED(MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, width, height)) ||
                         FAILED(reader->SetCurrentMediaType(
                             static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type.Get()))) {
                         reader.Reset();
                         continue;
                     }
-                    ComPtr<IMFMediaType> outputType;
-                    if (FAILED(reader->GetCurrentMediaType(
-                            static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM),
-                            outputType.ReleaseAndGetAddressOf())) ||
-                        FAILED(MFGetAttributeSize(outputType.Get(), MF_MT_FRAME_SIZE, &width, &height)) ||
-                        width == 0 || height == 0) {
+                    if (!refreshOutputFormat()) {
                         reader.Reset();
                         continue;
-                    }
-                    packedStride = width * 4;
-                    defaultStride = static_cast<LONG>(packedStride);
-                    UINT32 defaultStrideAttribute = 0;
-                    if (outputType && SUCCEEDED(outputType->GetUINT32(MF_MT_DEFAULT_STRIDE,
-                                                                       &defaultStrideAttribute))) {
-                        defaultStride = static_cast<LONG>(defaultStrideAttribute);
                     }
                     continue;
                 }
@@ -351,7 +475,17 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                 ComPtr<IMFSample> sample;
                 if (FAILED(reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0,
                                                nullptr, &flags, &timestamp, sample.ReleaseAndGetAddressOf())) ||
-                    (flags & (MF_SOURCE_READERF_ERROR | MF_SOURCE_READERF_ENDOFSTREAM)) != 0) {
+                    (flags & MF_SOURCE_READERF_ERROR) != 0) {
+                    reader.Reset();
+                    continue;
+                }
+                if ((flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) != 0) {
+                    if (!refreshOutputFormat()) {
+                        reader.Reset();
+                        continue;
+                    }
+                }
+                if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
                     reader.Reset();
                     continue;
                 }
@@ -359,35 +493,101 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                 synced = static_cast<double>(timestamp) / 10'000'000.0;
                 if (synced + kPreviewFrameLeadSeconds < want) continue;
                 ComPtr<IMFMediaBuffer> buffer;
-                BYTE* data = nullptr;
-                LONG stride = defaultStride;
-                DWORD maxLength = 0;
-                DWORD length = 0;
                 if (FAILED(sample->ConvertToContiguousBuffer(buffer.ReleaseAndGetAddressOf()))) continue;
-                if (FAILED(buffer->Lock(&data, &maxLength, &length)) || !data) {
-                    continue;
-                }
-                struct BufferUnlock final {
-                    IMFMediaBuffer* buffer{};
-                    ~BufferUnlock() {
-                        if (buffer != nullptr) buffer->Unlock();
+                const auto publishFrame = [&](const BYTE* scanline0, LONG pitch,
+                                              const BYTE* bufferStart, DWORD bufferLength,
+                                              bool hasBounds) {
+                    if (!scanline0 || pitch == 0) return false;
+                    const auto pitchMagnitude = static_cast<std::uint64_t>(
+                        pitch < 0 ? -static_cast<std::int64_t>(pitch)
+                                  : static_cast<std::int64_t>(pitch));
+                    if (pitchMagnitude < packedStride) return false;
+                    if (height > std::numeric_limits<std::size_t>::max() / packedStride) {
+                        return false;
                     }
-                } unlock{buffer.Get()};
-                const UINT sourceStride = static_cast<UINT>(std::abs(stride));
-                const std::size_t requiredBytes = static_cast<std::size_t>(sourceStride) * height;
-                if (stride != 0 && sourceStride >= packedStride && length >= requiredBytes) {
-                    std::lock_guard lock(previewFrameMutex);
-                    pendingPreviewPixels.resize(static_cast<std::size_t>(packedStride) * height);
+                    const auto outputSize = static_cast<std::size_t>(packedStride) * height;
+                    std::vector<BYTE> pixels(outputSize);
+                    const auto bufferBegin = reinterpret_cast<std::uintptr_t>(bufferStart);
+                    const auto bufferEnd = bufferBegin + bufferLength;
+                    if (hasBounds && (bufferBegin == 0 || bufferEnd < bufferBegin)) return false;
                     for (UINT row = 0; row < height; ++row) {
-                        const UINT sourceRow = stride < 0 ? height - 1 - row : row;
-                        std::memcpy(pendingPreviewPixels.data() + static_cast<std::size_t>(row) * packedStride,
-                                    data + static_cast<std::size_t>(sourceRow) * sourceStride,
-                                    packedStride);
+                        const auto rowOffset = static_cast<std::int64_t>(row) * pitch;
+                        const auto scanlineAddress = reinterpret_cast<std::uintptr_t>(scanline0) + rowOffset;
+                        if (hasBounds && (scanlineAddress < bufferBegin ||
+                                          scanlineAddress > bufferEnd ||
+                                          packedStride > bufferEnd - scanlineAddress)) {
+                            return false;
+                        }
+                        std::memcpy(pixels.data() + static_cast<std::size_t>(row) * packedStride,
+                                    reinterpret_cast<const BYTE*>(scanlineAddress), packedStride);
                     }
+                    std::lock_guard lock(previewFrameMutex);
+                    pendingPreviewPixels = std::move(pixels);
                     pendingPreviewWidth = width;
                     pendingPreviewHeight = height;
                     pendingPreviewStride = packedStride;
+                    pendingPreviewSourceRect = sourceRect;
                     pendingPreviewFrameVersion.fetch_add(1, std::memory_order_release);
+                    return true;
+                };
+
+                bool frameCopied = false;
+                ComPtr<IMF2DBuffer2> buffer2D;
+                    if (SUCCEEDED(buffer.As(&buffer2D))) {
+                    BYTE* scanline0 = nullptr;
+                    BYTE* bufferStart = nullptr;
+                    LONG pitch = 0;
+                    DWORD bufferLength = 0;
+                    if (SUCCEEDED(buffer2D->Lock2DSize(MF2DBuffer_LockFlags_Read, &scanline0, &pitch,
+                                                       &bufferStart, &bufferLength))) {
+                        struct BufferUnlock2D final {
+                            IMF2DBuffer2* buffer{};
+                            ~BufferUnlock2D() {
+                                if (buffer != nullptr) buffer->Unlock2D();
+                            }
+                        } unlock{buffer2D.Get()};
+                        frameCopied = publishFrame(scanline0, pitch, bufferStart, bufferLength, true);
+                    }
+                }
+                if (!frameCopied) {
+                    ComPtr<IMF2DBuffer> buffer2DLegacy;
+                    if (SUCCEEDED(buffer.As(&buffer2DLegacy))) {
+                        BYTE* scanline0 = nullptr;
+                        LONG pitch = 0;
+                        if (SUCCEEDED(buffer2DLegacy->Lock2D(&scanline0, &pitch))) {
+                            struct BufferUnlock2D final {
+                                IMF2DBuffer* buffer{};
+                                ~BufferUnlock2D() {
+                                    if (buffer != nullptr) buffer->Unlock2D();
+                                }
+                            } unlock{buffer2DLegacy.Get()};
+                            frameCopied = publishFrame(scanline0, pitch, nullptr, 0, false);
+                        }
+                    }
+                }
+                if (!frameCopied) {
+                    BYTE* data = nullptr;
+                    DWORD maxLength = 0;
+                    DWORD length = 0;
+                    if (SUCCEEDED(buffer->Lock(&data, &maxLength, &length)) && data) {
+                        struct BufferUnlock final {
+                            IMFMediaBuffer* buffer{};
+                            ~BufferUnlock() {
+                                if (buffer != nullptr) buffer->Unlock();
+                            }
+                        } unlock{buffer.Get()};
+                        const auto sourceStride = static_cast<std::uint64_t>(
+                            defaultStride < 0 ? -static_cast<std::int64_t>(defaultStride)
+                                              : static_cast<std::int64_t>(defaultStride));
+                        const auto requiredBytes = sourceStride * height;
+                        if (sourceStride <= UINT_MAX && sourceStride >= packedStride &&
+                            requiredBytes <= length) {
+                            const auto* scanline0 = defaultStride < 0
+                                ? data + static_cast<std::size_t>(height - 1) * sourceStride
+                                : data;
+                            frameCopied = publishFrame(scanline0, defaultStride, data, length, true);
+                        }
+                    }
                 }
                 if (window) InvalidateRect(window, nullptr, FALSE);
             }
@@ -411,17 +611,46 @@ void Win32Ui::Impl::UpdateVideoPreviewFrame() {
         UINT width = 0;
         UINT height = 0;
         UINT stride = 0;
+        D2D1_RECT_F sourceRect{};
         std::uint64_t version = 0;
         {
             std::lock_guard lock(previewFrameMutex);
             version = pendingPreviewFrameVersion.load(std::memory_order_relaxed);
             if (version == uploadedPreviewFrameVersion) return;
-            pixels.swap(pendingPreviewPixels);
-            width = pendingPreviewWidth;
-            height = pendingPreviewHeight;
-            stride = pendingPreviewStride;
+            if (!pendingPreviewPixels.empty()) {
+                pixels = std::move(pendingPreviewPixels);
+                width = pendingPreviewWidth;
+                height = pendingPreviewHeight;
+                stride = pendingPreviewStride;
+                sourceRect = pendingPreviewSourceRect;
+            } else {
+                pixels = latestPreviewPixels;
+                width = latestPreviewWidth;
+                height = latestPreviewHeight;
+                stride = latestPreviewStride;
+                sourceRect = latestPreviewSourceRect;
+            }
         }
-        if (pixels.empty() || !CreatePreviewBitmapFromBgra(width, height, pixels.data(), stride)) return;
+        if (pixels.empty() || !CreatePreviewBitmapFromBgra(width, height, pixels.data(), stride)) {
+            std::lock_guard lock(previewFrameMutex);
+            if (pendingPreviewPixels.empty()) {
+                pendingPreviewPixels = std::move(pixels);
+                pendingPreviewWidth = width;
+                pendingPreviewHeight = height;
+                pendingPreviewStride = stride;
+                pendingPreviewSourceRect = sourceRect;
+            }
+            return;
+        }
+        previewBitmapSourceRect = sourceRect;
+        {
+            std::lock_guard lock(previewFrameMutex);
+            latestPreviewPixels = std::move(pixels);
+            latestPreviewWidth = width;
+            latestPreviewHeight = height;
+            latestPreviewStride = stride;
+            latestPreviewSourceRect = sourceRect;
+        }
         uploadedPreviewFrameVersion = version;
         previewHasPresentedFrame = true;
     }
@@ -430,17 +659,21 @@ void Win32Ui::Impl::DrawPreviewBitmap(const D2D1_RECT_F& bounds) {
         if (!previewBitmap || Width(bounds) <= 1.0F || Height(bounds) <= 1.0F) return;
         const auto bitmapSize = previewBitmap->GetSize();
         if (bitmapSize.width <= 0.0F || bitmapSize.height <= 0.0F) return;
-        const float scale = std::min(Width(bounds) / bitmapSize.width,
-                                     Height(bounds) / bitmapSize.height);
-        const float width = bitmapSize.width * scale;
-        const float height = bitmapSize.height * scale;
+        auto sourceRect = previewBitmapSourceRect;
+        if (Width(sourceRect) <= 0.0F || Height(sourceRect) <= 0.0F) {
+            sourceRect = Rect(0.0F, 0.0F, bitmapSize.width, bitmapSize.height);
+        }
+        const float scale = std::min(Width(bounds) / Width(sourceRect),
+                                     Height(bounds) / Height(sourceRect));
+        const float width = Width(sourceRect) * scale;
+        const float height = Height(sourceRect) * scale;
         const auto destination = Rect(
             bounds.left + (Width(bounds) - width) * 0.5F,
             bounds.top + (Height(bounds) - height) * 0.5F,
             bounds.left + (Width(bounds) + width) * 0.5F,
             bounds.top + (Height(bounds) + height) * 0.5F);
         target->DrawBitmap(previewBitmap.Get(), destination, 1.0F,
-                           D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+                           D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &sourceRect);
     }
 
 void Win32Ui::Impl::DrawPreviewFullscreenOverlay(const D2D1_SIZE_F size,
@@ -529,6 +762,7 @@ void Win32Ui::Impl::SyncFilePreview(bool advanceVideo) {
             previewIsVideo = false;
             previewFullscreen = false;
             previewBitmap.Reset();
+            previewBitmapSourceRect = {};
             (void)LoadCoverArt(active);
         }
         else if (advanceVideo && previewIsVideo) UpdateVideoPreviewFrame();

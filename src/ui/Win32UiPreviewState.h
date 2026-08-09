@@ -24,6 +24,7 @@ struct Win32UiPreviewState {
     std::wstring previewPath;
     D2D1_RECT_F previewVideoBounds{};
     D2D1_RECT_F previewFullscreenCloseBounds{};
+    D2D1_RECT_F previewBitmapSourceRect{};
     Microsoft::WRL::ComPtr<ID2D1Bitmap> previewBitmap;
     std::jthread previewWorker;
     std::mutex previewFrameMutex;
@@ -32,9 +33,15 @@ struct Win32UiPreviewState {
     std::wstring requestedPreviewPath;
     std::uint64_t requestedPreviewGeneration{};
     std::vector<BYTE> pendingPreviewPixels;
+    std::vector<BYTE> latestPreviewPixels;
     UINT pendingPreviewWidth{};
     UINT pendingPreviewHeight{};
     UINT pendingPreviewStride{};
+    D2D1_RECT_F pendingPreviewSourceRect{};
+    UINT latestPreviewWidth{};
+    UINT latestPreviewHeight{};
+    UINT latestPreviewStride{};
+    D2D1_RECT_F latestPreviewSourceRect{};
     std::atomic<double> previewWantedSeconds{0.0};
     std::atomic<std::uint64_t> pendingPreviewFrameVersion{};
     std::atomic_bool previewWorkerFailed{false};

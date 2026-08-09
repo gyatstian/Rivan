@@ -54,6 +54,11 @@ struct Win32UiModuleState {
     std::optional<ModuleId> moduleExpansionResizeModule;
     ModuleLayout moduleExpansionRestoreLayout{ModuleLayout::Defaults()};
     bool internalModuleResize{};
+    bool windowResizeRight{};
+    bool windowResizeBottom{};
+    bool windowResizeLeft{};
+    bool windowResizeTop{};
+    bool windowResizeActive{};
     int moduleExpansionRestoreWidth{};
     int moduleExpansionRestoreHeight{};
 };

@@ -196,12 +196,17 @@ void Win32Ui::Impl::DrawYoutubeChooser(
         const auto fpsValue = Rect(left, y, right - arrows * 2.0F - gap * 2.0F, y + buttonHeight);
         const auto fpsPrev = Rect(fpsValue.right + gap, y, fpsValue.right + gap + arrows, y + buttonHeight);
         const auto fpsNext = Rect(fpsPrev.right + gap, y, right, y + buttonHeight);
+        const bool canCycleFps = selection.videoFps > 0.0 && std::any_of(
+            probe->videoFormats.begin(), probe->videoFormats.end(), [&selection](const auto& format) {
+                return format.fps > 0.0 && format.fps != selection.videoFps;
+            });
         const auto fpsText = selection.videoFps > 0.0
-            ? std::to_wstring(static_cast<int>(std::lround(selection.videoFps))) + L" FPS"
+            ? std::to_wstring(static_cast<int>(std::lround(selection.videoFps))) +
+                  (canCycleFps ? L" FPS" : L" FPS (source limit)")
             : L"unknown";
-        cycleButton(fpsValue, fpsText.c_str(), kVideoFpsNext, !probe->videoFormats.empty());
-        cycleButton(fpsPrev, L"<", kVideoFpsPrevious, !probe->videoFormats.empty());
-        cycleButton(fpsNext, L">", kVideoFpsNext, !probe->videoFormats.empty());
+        cycleButton(fpsValue, fpsText.c_str(), kVideoFpsNext, canCycleFps);
+        cycleButton(fpsPrev, L"<", kVideoFpsPrevious, canCycleFps);
+        cycleButton(fpsNext, L">", kVideoFpsNext, canCycleFps);
         y += buttonHeight + 13.0F;
 
         rowLabel(L"AUDIO SOURCE", y);

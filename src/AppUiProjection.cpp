@@ -284,11 +284,15 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.startAtStartup = settings_.Settings().startAtStartup;
     out.exitToTray = settings_.Settings().exitToTray;
     out.youtubeEnabled = settings_.Settings().youtubeEnabled;
+    out.youtubeGrabberHotkeyAvailable = youtubeGrabberHotkeyAvailable_;
+    out.youtubeGrabberHotkeyModifiers = settings_.Settings().youtubeGrabberHotkeyModifiers;
+    out.youtubeGrabberHotkeyVirtualKey = settings_.Settings().youtubeGrabberHotkeyVirtualKey;
     out.discordEnabled = settings_.Settings().discordEnabled;
     out.discordShowArtist = settings_.Settings().discordShowArtist;
     out.discordShowImageText = settings_.Settings().discordShowImageText;
     out.discordShowGithubButton = settings_.Settings().discordShowGithubButton;
     out.moduleExpansionBehavior = settings_.Settings().moduleExpansionBehavior;
+    out.windowResizeBehavior = settings_.Settings().windowResizeBehavior;
     out.youtubeBrowsing =
         YoutubeFeatureOn() && selectedPlaylist_ == playlist::YoutubePlaylistId;
     out.youtubeBusy = youtubeView_.busy;
@@ -310,6 +314,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     }
     out.activeSkin = activeSkin_;
     out.moduleLayout = moduleLayout_;
+    out.moduleLayoutWarning = moduleLayoutWarning_;
     out.focusedSkinColor = focusedSkinColor_;
     out.skinColorFocusRevision = skinColorFocusRevision_;
     out.focusedSkinElement = focusedSkinElement_;

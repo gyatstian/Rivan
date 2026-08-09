@@ -62,6 +62,11 @@ enum class ModuleExpansionBehavior : std::uint8_t {
     Resize,
 };
 
+enum class WindowResizeBehavior : std::uint8_t {
+    ScaleAll,
+    GrowTrailingModule,
+};
+
 struct ModuleNormalizedRect final {
     float left{};
     float top{};

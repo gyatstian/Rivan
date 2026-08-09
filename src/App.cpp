@@ -112,6 +112,13 @@ bool App::Initialize() {
             moduleLayout_.snapGroup[i] = item.id;
         }
     }
+    moduleLayoutWarning_ = moduleLayout_.DisableDuplicateIndependentModules();
+    if (moduleLayoutWarning_) {
+        auto session = settings_.Session();
+        session.moduleLayout = moduleLayout_;
+        (void)settings_.SetSession(std::move(session), &error);
+        (void)settings_.SaveSession(&error);
+    }
     queue_.SetShuffle(settings_.Session().shuffle);
     queue_.SetRepeat(ToQueueRepeat(settings_.Session().repeat));
     audio_.SetVolume(static_cast<float>(applicationSettings.volumePercent) / 100.0F);
@@ -133,6 +140,11 @@ bool App::Initialize() {
     options.initialWidth = miniPlayer_ ? 520 : settings_.Session().window.width;
     options.initialHeight = miniPlayer_ ? 210 : settings_.Session().window.height;
     if (!window_->Create(instance_, options)) return false;
+    if (applicationSettings.youtubeEnabled) {
+        youtubeGrabberHotkeyAvailable_ = window_->UpdateYoutubeGrabberHotkey(
+            applicationSettings.youtubeGrabberHotkeyModifiers,
+            applicationSettings.youtubeGrabberHotkeyVirtualKey);
+    }
     audioNotificationWindow_.store(window_->WindowHandle(), std::memory_order_release);
 
     if (!miniPlayer_) {
@@ -188,6 +200,7 @@ void App::SetModuleLayout(ui::ModuleLayout layout) {
             layout.snapGroup[i] = layout.items[i].id;
         }
     }
+    moduleLayoutWarning_ = moduleLayoutWarning_ || layout.DisableDuplicateIndependentModules();
     moduleLayout_ = layout;
     auto session = settings_.Session();
     session.moduleLayout = moduleLayout_;
@@ -465,6 +478,17 @@ void App::SetModuleExpansionBehavior(ui::ModuleExpansionBehavior behavior) {
     auto settings = settings_.Settings();
     if (settings.moduleExpansionBehavior == behavior) return;
     settings.moduleExpansionBehavior = behavior;
+    std::string error;
+    if (!settings_.SetSettings(settings, &error)) return;
+    (void)settings_.SaveSettings(&error);
+    ++revision_;
+    if (window_) window_->Refresh();
+}
+
+void App::SetWindowResizeBehavior(ui::WindowResizeBehavior behavior) {
+    auto settings = settings_.Settings();
+    if (settings.windowResizeBehavior == behavior) return;
+    settings.windowResizeBehavior = behavior;
     std::string error;
     if (!settings_.SetSettings(settings, &error)) return;
     (void)settings_.SaveSettings(&error);
