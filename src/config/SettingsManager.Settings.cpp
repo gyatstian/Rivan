@@ -30,6 +30,9 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     document.Set("appearance", "window_resize_behavior",
                  settings.windowResizeBehavior == ui::WindowResizeBehavior::GrowTrailingModule
                      ? "grow_trailing_module" : "scale_all");
+    document.Set("appearance", "module_resize_behavior",
+                 settings.moduleResizeBehavior == ui::ModuleResizeBehavior::Overlap
+                     ? "overlap" : "squash");
     document.Set("library", "file_preview_enabled", BoolText(settings.filePreviewEnabled));
     document.Set("application", "start_at_startup", BoolText(settings.startAtStartup));
     document.Set("application", "exit_to_tray", BoolText(settings.exitToTray));
@@ -150,6 +153,11 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
         } else {
             AddWarning(warnings, "Ignoring invalid appearance.window_resize_behavior");
         }
+    }
+    if (const auto behavior = document->Get("appearance", "module_resize_behavior")) {
+        if (*behavior == "squash") settings_.moduleResizeBehavior = ui::ModuleResizeBehavior::Squash;
+        else if (*behavior == "overlap") settings_.moduleResizeBehavior = ui::ModuleResizeBehavior::Overlap;
+        else AddWarning(warnings, "Ignoring invalid appearance.module_resize_behavior");
     }
     ReadBoolField(*document, "youtube", "enabled", settings_.youtubeEnabled, warnings);
     ReadBoolField(*document, "online", "lyrics_cache_enabled", settings_.lyricsCacheEnabled, warnings);

@@ -67,6 +67,11 @@ enum class WindowResizeBehavior : std::uint8_t {
     GrowTrailingModule,
 };
 
+enum class ModuleResizeBehavior : std::uint8_t {
+    Squash,
+    Overlap,
+};
+
 struct ModuleNormalizedRect final {
     float left{};
     float top{};

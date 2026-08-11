@@ -6,6 +6,70 @@
 
 namespace rivan::ui {
 
+namespace {
+
+ModuleNormalizedRect AttachOutsideExpanded(ModuleNormalizedRect expanded,
+                                           ModuleNormalizedRect targetBounds,
+                                           ModuleCollapseSide side) noexcept {
+    switch (side) {
+    case ModuleCollapseSide::Left:
+        {
+        const float width = expanded.right - expanded.left;
+        expanded.right = targetBounds.left;
+        expanded.left = expanded.right - width;
+        }
+        break;
+    case ModuleCollapseSide::Right:
+        {
+        const float width = expanded.right - expanded.left;
+        expanded.left = targetBounds.right;
+        expanded.right = expanded.left + width;
+        }
+        break;
+    case ModuleCollapseSide::Top:
+        {
+        const float height = expanded.bottom - expanded.top;
+        expanded.bottom = targetBounds.top;
+        expanded.top = expanded.bottom - height;
+        }
+        break;
+    case ModuleCollapseSide::Bottom:
+        {
+        const float height = expanded.bottom - expanded.top;
+        expanded.top = targetBounds.bottom;
+        expanded.bottom = expanded.top + height;
+        }
+        break;
+    case ModuleCollapseSide::None:
+        break;
+    }
+    return expanded;
+}
+
+ModuleNormalizedRect MakeOutsideCollapseHandle(ModuleNormalizedRect expanded,
+                                                ModuleCollapseSide side,
+                                                float thickness) noexcept {
+    switch (side) {
+    case ModuleCollapseSide::Left:
+        expanded.left = expanded.right - thickness;
+        break;
+    case ModuleCollapseSide::Right:
+        expanded.right = expanded.left + thickness;
+        break;
+    case ModuleCollapseSide::Top:
+        expanded.top = expanded.bottom - thickness;
+        break;
+    case ModuleCollapseSide::Bottom:
+        expanded.bottom = expanded.top + thickness;
+        break;
+    case ModuleCollapseSide::None:
+        break;
+    }
+    return expanded;
+}
+
+} // namespace
+
 bool ModuleLayout::SquashForExpansion(ModuleId source, ModuleNormalizedRect expanded) noexcept {
     const ModuleLayout before = *this;
     for (auto& obstacle : items) {
@@ -53,6 +117,10 @@ bool ModuleLayout::SquashForExpansion(ModuleId source, ModuleNormalizedRect expa
         obstacle.width = best.bounds.right - best.bounds.left;
         obstacle.height = best.bounds.bottom - best.bounds.top;
         SyncExpandedGeometry(obstacle);
+    }
+    if (!ReattachOutsideCollapseHandles(before)) {
+        *this = before;
+        return false;
     }
     if (HasNewConflictingGeometry(before)) {
         *this = before;
@@ -163,7 +231,11 @@ bool ModuleLayout::ResizeForExpansion(ModuleId source, ModuleNormalizedRect expa
         normalize(*expandedSource, {x, y, sourceRight - sourceLeft, sourceBottom - sourceTop});
     }
     for (auto& item : items) {
-        if (item.visible) SyncExpandedGeometry(item);
+        if (item.visible && !item.collapsed) SyncExpandedGeometry(item);
+    }
+    if (!ReattachOutsideCollapseHandles(before)) {
+        *this = before;
+        return false;
     }
     if (HasNewConflictingGeometry(before)) {
         *this = before;
@@ -399,6 +471,10 @@ bool ModuleLayout::CollapseToModule(ModuleId source, ModuleId target, ModuleColl
     if (!sourceWasSnapGrouped) snapGroup[static_cast<std::size_t>(item - items.data())] = source;
     SetCollapsedGeometry(*item, handle, expanded, mode, side, targetRoot, false);
     if (mode == ModuleCollapseMode::Inside) SetTabGroupGeometry(targetRoot, collapsedTargetBounds);
+    if (!ReattachOutsideCollapseHandles(before)) {
+        *this = before;
+        return false;
+    }
     if (HasNewConflictingGeometry(before)) {
         *this = before;
         return false;
@@ -445,6 +521,31 @@ bool ModuleLayout::ToggleCollapsedModule(ModuleId id, ModuleExpansionBehavior be
             SetCollapsedGeometry(*item, handle, expanded, item->collapseMode,
                                  item->collapseSide, targetRoot, false);
             SetTabGroupGeometry(targetRoot, collapsedTargetBounds);
+            if (!ReattachOutsideCollapseHandles(before)) {
+                *this = before;
+                return false;
+            }
+        } else if (item->collapseMode == ModuleCollapseMode::Outside &&
+                   !item->collapseTargetIsWindow) {
+            const ModuleId targetRoot = TabRoot(item->collapseTarget);
+            const auto* target = Find(targetRoot);
+            if (!target || !target->visible || target->collapsed) return false;
+            const auto targetBounds = Bounds(*target);
+            auto expanded = AttachOutsideExpanded(Bounds(*item), targetBounds,
+                                                   item->collapseSide);
+            const bool horizontal = IsHorizontalCollapseSide(item->collapseSide);
+            const float thickness = horizontal ? item->handleWidth : item->handleHeight;
+            if (!(thickness > 0.001F)) return false;
+            const auto handle = MakeOutsideCollapseHandle(expanded, item->collapseSide,
+                                                          thickness);
+            if (expanded.right - expanded.left < 0.10F ||
+                expanded.bottom - expanded.top < 0.10F ||
+                handle.left < 0.0F || handle.top < 0.0F ||
+                handle.right > 1.0F || handle.bottom > 1.0F) {
+                return false;
+            }
+            SetCollapsedGeometry(*item, handle, expanded, item->collapseMode,
+                                 item->collapseSide, targetRoot, false);
         } else {
             item->x = item->handleX;
             item->y = item->handleY;
@@ -455,9 +556,19 @@ bool ModuleLayout::ToggleCollapsedModule(ModuleId id, ModuleExpansionBehavior be
         return true;
     }
     if (item->expandedWidth < 0.10F || item->expandedHeight < 0.10F) return false;
-    const ModuleNormalizedRect expanded{item->expandedX, item->expandedY,
-                                        item->expandedX + item->expandedWidth,
-                                        item->expandedY + item->expandedHeight};
+    ModuleNormalizedRect expanded{item->expandedX, item->expandedY,
+                                  item->expandedX + item->expandedWidth,
+                                  item->expandedY + item->expandedHeight};
+    if (item->collapseMode == ModuleCollapseMode::Outside && !item->collapseTargetIsWindow) {
+        const ModuleId targetRoot = TabRoot(item->collapseTarget);
+        const auto* target = Find(targetRoot);
+        if (!target || !target->visible || target->collapsed) return false;
+        expanded = AttachOutsideExpanded(expanded, Bounds(*target), item->collapseSide);
+        item->expandedX = expanded.left;
+        item->expandedY = expanded.top;
+        item->expandedWidth = expanded.right - expanded.left;
+        item->expandedHeight = expanded.bottom - expanded.top;
+    }
     if (item->collapseMode == ModuleCollapseMode::Inside && !item->collapseTargetIsWindow) {
         const ModuleId targetRoot = TabRoot(item->collapseTarget);
         const auto* target = Find(targetRoot);
@@ -496,12 +607,20 @@ bool ModuleLayout::ToggleCollapsedModule(ModuleId id, ModuleExpansionBehavior be
         item->height = expanded.bottom - expanded.top;
         item->collapsed = false;
         SetTabGroupGeometry(targetRoot, expandedTargetBounds);
+        if (!ReattachOutsideCollapseHandles(before)) {
+            *this = before;
+            return false;
+        }
     } else {
         item->x = expanded.left;
         item->y = expanded.top;
         item->width = expanded.right - expanded.left;
         item->height = expanded.bottom - expanded.top;
         item->collapsed = false;
+    }
+    if (!ReattachOutsideCollapseHandles(before)) {
+        *this = before;
+        return false;
     }
     const bool introducesConflict = HasNewConflictingGeometry(before);
     const bool outsideCanvas = expanded.left < 0.0F || expanded.top < 0.0F ||

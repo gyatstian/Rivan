@@ -159,6 +159,7 @@ struct UiModel {
     bool discordShowGithubButton{};
     ModuleExpansionBehavior moduleExpansionBehavior{ModuleExpansionBehavior::Squash};
     WindowResizeBehavior windowResizeBehavior{WindowResizeBehavior::ScaleAll};
+    ModuleResizeBehavior moduleResizeBehavior{ModuleResizeBehavior::Squash};
     bool youtubeBrowsing{};  // selected playlist is the virtual Youtube browser
     bool youtubeBusy{};
     bool youtubeYtDlpInstalled{};
@@ -235,6 +236,7 @@ public:
     virtual void SetExitToTray(bool enabled) = 0;
     virtual void SetModuleExpansionBehavior(ModuleExpansionBehavior behavior) = 0;
     virtual void SetWindowResizeBehavior(WindowResizeBehavior behavior) = 0;
+    virtual void SetModuleResizeBehavior(ModuleResizeBehavior behavior) = 0;
     // Enables/disables the optional YouTube library section. Off = no YT workers or UI.
     virtual void SetYoutubeEnabled(bool enabled) = 0;
     virtual void GrabYoutubeLink(std::wstring url) = 0;

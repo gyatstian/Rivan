@@ -115,7 +115,7 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
             !collapsedBeforeDrag->collapseTargetIsWindow;
         const ModuleId insideTarget = wasInsideCollapsed
             ? collapsedBeforeDrag->collapseTarget : draggedId;
-        moduleLayoutDraft.ClearCollapseReferences(draggedId);
+        moduleLayoutDraft.ClearInsideCollapseReferences(draggedId);
         moduleLayoutDraft.ClearModuleCollapse(draggedId);
         if (wasInsideCollapsed) {
             // Restore target's full rectangle before detached source starts moving.
@@ -150,36 +150,12 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
     auto* item = moduleLayoutDraft.Find(draggedId);
     if (!item) return;
     if (moduleGesture == ModuleGesture::Resize) {
-        if (moduleLayoutDraft.IsSnapGrouped(draggedId)) {
-            moduleLayoutDraft.ResizeSnapGroup(draggedId,
-                                               x / lastCanvas.width, y / lastCanvas.height,
-                                               moduleResizeRight, moduleResizeBottom,
-                                               moduleResizeLeft, moduleResizeTop);
-        } else {
-            const auto previousBounds = ModuleLayout::Bounds(*item);
-            if (moduleResizeLeft) {
-                const float right = item->x + item->width;
-                item->x = std::clamp(x / lastCanvas.width, 0.0F, right - 0.10F);
-                item->width = right - item->x;
-            }
-            if (moduleResizeTop) {
-                const float bottom = item->y + item->height;
-                item->y = std::clamp(y / lastCanvas.height, 0.0F, bottom - 0.10F);
-                item->height = bottom - item->y;
-            }
-            if (moduleResizeRight) {
-                item->width = std::clamp((x - item->x * lastCanvas.width) / lastCanvas.width,
-                                         0.10F, 1.0F - item->x);
-            }
-            if (moduleResizeBottom) {
-                item->height = std::clamp((y - item->y * lastCanvas.height) / lastCanvas.height,
-                                           0.10F, 1.0F - item->y);
-            }
-            moduleLayoutDraft.ScaleCollapsedInsideModules(
-                draggedId, previousBounds, ModuleLayout::Bounds(*item));
-        }
-        ModuleLayout::SyncExpandedGeometry(*item);
+        (void)moduleLayoutDraft.ResizeModule(
+            draggedId, x / lastCanvas.width, y / lastCanvas.height,
+            moduleResizeRight, moduleResizeBottom, moduleResizeLeft, moduleResizeTop,
+            model.moduleResizeBehavior == ModuleResizeBehavior::Squash);
     } else {
+        const ModuleLayout beforeMove = moduleLayoutDraft;
         if (item->collapsed) {
             item->x = item->expandedX;
             item->y = item->expandedY;
@@ -224,6 +200,9 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
             item->dockState = ModuleDockState::Floating;
             item->x = nextX;
             item->y = nextY;
+        }
+        if (!moduleLayoutDraft.ReattachOutsideCollapseHandles(beforeMove)) {
+            moduleLayoutDraft = beforeMove;
         }
         ResolveModuleDropPreview(x, y);
     }

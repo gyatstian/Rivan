@@ -344,6 +344,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
         case HitKind::Refresh: host.RefreshLibrary(); break;
         case HitKind::SettingsAction: HandleSettingsAction(hit.id); return;
         case HitKind::LyricsAction: HandleLyricsAction(hit.id); return;
+        case HitKind::LyricsVerse: HandleLyricsVerse(static_cast<std::size_t>(hit.id)); return;
         case HitKind::Track:
             // Selection now; activation (play) deferred to release when no drag happened.
             BeginTrackPress(hit, x, y);
@@ -527,25 +528,26 @@ void Win32Ui::Impl::PointerUp() noexcept {
             float resizedWidth = 0.0F;
             float resizedHeight = 0.0F;
             const bool wasCollapsed = layout.IsCollapsed(*id);
-            const bool wasResizeExpansion = wasCollapsed &&
-                model.moduleExpansionBehavior == ModuleExpansionBehavior::Resize;
-            if (wasCollapsed && wasResizeExpansion) {
-                moduleExpansionRestoreLayout = layout;
-            }
+            const ModuleLayout layoutBeforeToggle = layout;
+            const bool restoringExpansion = !wasCollapsed && moduleExpansionResizePending &&
+                moduleExpansionResizeModule && *moduleExpansionResizeModule == *id;
             if (layout.ToggleCollapsedModule(*id, model.moduleExpansionBehavior,
                                              lastCanvas.width, lastCanvas.height,
                                              &resizedWidth, &resizedHeight)) {
-                const bool restoringExpansion = !wasCollapsed && moduleExpansionResizePending &&
-                    moduleExpansionResizeModule && *moduleExpansionResizeModule == *id;
                 if (restoringExpansion) {
                     layout = moduleExpansionRestoreLayout;
+                } else if (moduleExpansionResizePending) {
+                    moduleExpansionResizePending = false;
+                    moduleExpansionResizeModule.reset();
                 }
                 try { host.SetModuleLayout(layout); } catch (...) {}
-                if (wasResizeExpansion &&
+                const bool resizedForExpansion = wasCollapsed &&
                     (resizedWidth > lastCanvas.width + 0.5F ||
-                     resizedHeight > lastCanvas.height + 0.5F)) {
+                     resizedHeight > lastCanvas.height + 0.5F);
+                if (resizedForExpansion) {
                     moduleExpansionResizePending = true;
                     moduleExpansionResizeModule = *id;
+                    moduleExpansionRestoreLayout = layoutBeforeToggle;
                     moduleExpansionRestoreWidth = static_cast<int>(lastCanvas.width);
                     moduleExpansionRestoreHeight = static_cast<int>(lastCanvas.height);
                     internalModuleResize = true;

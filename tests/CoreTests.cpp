@@ -451,6 +451,7 @@ void TestFilePreviewSettingRoundTrip() {
     settings.youtubeGrabberHotkeyModifiers = 0x0001u | 0x0002u;
     settings.youtubeGrabberHotkeyVirtualKey = VK_F8;
     settings.windowResizeBehavior = rivan::ui::WindowResizeBehavior::GrowTrailingModule;
+    settings.moduleResizeBehavior = rivan::ui::ModuleResizeBehavior::Overlap;
     std::string error;
     Check(writer.SetSettings(settings, &error), "file preview setting accepts false");
     Check(writer.SaveSettings(&error), "file preview setting saves");
@@ -471,7 +472,9 @@ void TestFilePreviewSettingRoundTrip() {
               reader.Settings().youtubeGrabberHotkeyVirtualKey == VK_F8,
           "YouTube link grabber hotkey survives settings round-trip");
     Check(reader.Settings().windowResizeBehavior == rivan::ui::WindowResizeBehavior::GrowTrailingModule,
-          "window resize behavior survives settings round-trip");
+           "window resize behavior survives settings round-trip");
+    Check(reader.Settings().moduleResizeBehavior == rivan::ui::ModuleResizeBehavior::Overlap,
+           "module resize collision behavior survives settings round-trip");
     settings.lyricsCacheEnabled = true;
     Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error) &&
               reader.LoadSettings(&error) && reader.Settings().lyricsCacheEnabled,
@@ -597,7 +600,7 @@ void TestUiModuleRegistry() {
           "snap group can be resized");
     const float oldRivanWidth = resized.Find(ModuleId::Rivan)->width;
     const float oldMusicWidth = resized.Find(ModuleId::AllMusic)->width;
-    resized.ResizeSnapGroup(ModuleId::Rivan, 0.60F, 0.15F, true, false, false, false);
+    (void)resized.ResizeSnapGroup(ModuleId::Rivan, 0.60F, 0.15F, true, false, false, false);
     Check(resized.Find(ModuleId::Rivan)->width > oldRivanWidth &&
               resized.Find(ModuleId::AllMusic)->width > oldMusicWidth &&
               std::abs(resized.Find(ModuleId::Rivan)->width -
@@ -626,8 +629,8 @@ void TestUiModuleRegistry() {
                                    ModuleDropZone::Left),
           "an expanded collapsible module can join a snap group");
     const auto oldExpandedWidth = collapsibleResize.Find(ModuleId::Rivan)->expandedWidth;
-    collapsibleResize.ResizeSnapGroup(ModuleId::AllMusic, 0.40F, 0.5F,
-                                      false, false, true, false);
+    (void)collapsibleResize.ResizeSnapGroup(ModuleId::AllMusic, 0.40F, 0.5F,
+                                             false, false, true, false);
     const auto* resizedCollapsible = collapsibleResize.Find(ModuleId::Rivan);
     Check(resizedCollapsible != nullptr &&
               std::abs(resizedCollapsible->width - oldExpandedWidth) > 0.001F,
@@ -775,6 +778,169 @@ void TestWindowSnapping() {
               std::abs(edgeModule->width - (400.0F / 900.0F)) < 0.001F,
           "left-edge resize changes module width to fit the new canvas");
 
+    auto scaleAllCollapsed = ModuleLayout::Defaults();
+    for (auto& item : scaleAllCollapsed.items) item.visible = false;
+    auto* scaleAllTarget = scaleAllCollapsed.Find(ModuleId::Rivan);
+    auto* scaleAllSource = scaleAllCollapsed.Find(ModuleId::AllMusic);
+    scaleAllTarget->visible = true;
+    scaleAllTarget->x = 0.0F;
+    scaleAllTarget->y = 0.0F;
+    scaleAllTarget->width = 0.10F;
+    scaleAllTarget->height = 1.0F;
+    scaleAllSource->visible = true;
+    scaleAllSource->x = 0.10F;
+    scaleAllSource->y = 0.20F;
+    scaleAllSource->width = 0.80F;
+    scaleAllSource->height = 0.40F;
+    Check(scaleAllCollapsed.CollapseToModule(
+              ModuleId::AllMusic, ModuleId::Rivan,
+              rivan::ui::ModuleCollapseSide::Right,
+              rivan::ui::ModuleCollapseMode::Outside),
+          "right-edge collapse prepares ScaleAll geometry preservation");
+    const auto scaleAllBefore = *scaleAllSource;
+    const auto scaleAllTargetBefore = *scaleAllTarget;
+    const float scaleAllExpandedWidthPixels = scaleAllBefore.expandedWidth * 1000.0F;
+    const float scaleAllExpandedXPixels = scaleAllBefore.expandedX * 1000.0F;
+    Check(scaleAllCollapsed.PreserveCollapsedExpandedGeometry(
+              1000.0F, 800.0F, 700.0F, 800.0F, true),
+          "ScaleAll resize preserves collapsed expanded geometry");
+    scaleAllSource = scaleAllCollapsed.Find(ModuleId::AllMusic);
+    scaleAllTarget = scaleAllCollapsed.Find(ModuleId::Rivan);
+    Check(scaleAllSource != nullptr && scaleAllTarget != nullptr &&
+              std::abs(scaleAllSource->expandedWidth * 700.0F -
+                       scaleAllExpandedWidthPixels) < 0.01F &&
+              std::abs(scaleAllSource->expandedX * 700.0F - scaleAllExpandedXPixels) < 0.01F &&
+              scaleAllSource->x == scaleAllBefore.x &&
+              scaleAllSource->width == scaleAllBefore.width &&
+              scaleAllSource->handleX == scaleAllBefore.handleX &&
+              scaleAllSource->handleWidth == scaleAllBefore.handleWidth &&
+              scaleAllTarget->x == scaleAllTargetBefore.x &&
+              scaleAllTarget->width == scaleAllTargetBefore.width &&
+              std::abs(scaleAllSource->handleX -
+                       (scaleAllTarget->x + scaleAllTarget->width)) < 0.001F,
+          "ScaleAll resize leaves collapsed handle and non-collapsed layout unchanged");
+    float scaleAllExpandedCanvasWidth = 0.0F;
+    float scaleAllExpandedCanvasHeight = 0.0F;
+    Check(scaleAllCollapsed.ToggleCollapsedModule(
+              ModuleId::AllMusic, rivan::ui::ModuleExpansionBehavior::Squash,
+              700.0F, 800.0F, &scaleAllExpandedCanvasWidth, &scaleAllExpandedCanvasHeight) &&
+              scaleAllExpandedCanvasWidth > 700.0F &&
+              std::abs(scaleAllCollapsed.Find(ModuleId::AllMusic)->width *
+                       scaleAllExpandedCanvasWidth - scaleAllExpandedWidthPixels) < 0.01F,
+          "later right-edge expansion requests larger canvas after ScaleAll shrink");
+
+    auto leadingCollapsed = ModuleLayout::Defaults();
+    for (auto& item : leadingCollapsed.items) item.visible = false;
+    auto* leadingTarget = leadingCollapsed.Find(ModuleId::Rivan);
+    auto* leadingSource = leadingCollapsed.Find(ModuleId::AllMusic);
+    leadingTarget->visible = true;
+    leadingTarget->x = 0.65F;
+    leadingTarget->y = 0.0F;
+    leadingTarget->width = 0.10F;
+    leadingTarget->height = 1.0F;
+    leadingSource->visible = true;
+    leadingSource->x = 0.0F;
+    leadingSource->y = 0.20F;
+    leadingSource->width = 0.50F;
+    leadingSource->height = 0.40F;
+    Check(leadingCollapsed.CollapseToModule(
+              ModuleId::AllMusic, ModuleId::Rivan,
+              rivan::ui::ModuleCollapseSide::Left,
+              rivan::ui::ModuleCollapseMode::Outside),
+          "leading-edge collapse prepares edge-shift validation");
+    leadingSource = leadingCollapsed.Find(ModuleId::AllMusic);
+    const auto leadingBefore = *leadingSource;
+    Check(leadingCollapsed.PreserveCollapsedExpandedGeometry(
+              1000.0F, 800.0F, 900.0F, 800.0F, false, false, true, false),
+          "leading-edge resize shifts collapsed expanded geometry");
+    leadingSource = leadingCollapsed.Find(ModuleId::AllMusic);
+    Check(std::abs(leadingSource->expandedX * 900.0F -
+                       (leadingBefore.expandedX * 1000.0F - 100.0F)) < 0.01F &&
+              std::abs(leadingSource->expandedWidth * 900.0F -
+                       leadingBefore.expandedWidth * 1000.0F) < 0.01F,
+          "leading-edge resize preserves collapsed expanded screen position and size");
+
+    auto collapsedTrailing = ModuleLayout::Defaults();
+    for (auto& item : collapsedTrailing.items) item.visible = false;
+    auto* collapsedTrailingItem = collapsedTrailing.Find(ModuleId::Rivan);
+    collapsedTrailingItem->visible = true;
+    collapsedTrailingItem->x = 0.60F;
+    collapsedTrailingItem->y = 0.20F;
+    collapsedTrailingItem->width = 0.40F;
+    collapsedTrailingItem->height = 0.40F;
+    Check(collapsedTrailing.CollapseToWindow(ModuleId::Rivan,
+                                             rivan::ui::ModuleCollapseSide::Right),
+          "a right-window collapse can be prepared for trailing resize");
+    const float expandedTrailingWidthPixels =
+        collapsedTrailing.Find(ModuleId::Rivan)->expandedWidth * 1000.0F;
+    Check(collapsedTrailing.PreservePixelGeometry(1000.0F, 800.0F, 700.0F, 800.0F,
+                                                   true),
+          "trailing resize preserves a collapsed right-window handle");
+    collapsedTrailingItem = collapsedTrailing.Find(ModuleId::Rivan);
+    Check(collapsedTrailingItem != nullptr && collapsedTrailingItem->collapsed &&
+              collapsedTrailingItem->width > 0.0F &&
+              collapsedTrailingItem->x + collapsedTrailingItem->width <= 1.0F + 0.001F &&
+              std::abs(collapsedTrailingItem->expandedWidth * 700.0F -
+                       expandedTrailingWidthPixels) < 0.01F,
+          "trailing resize keeps collapsed expanded physical width unchanged");
+    float expandedTrailingCanvasWidth = 0.0F;
+    float expandedTrailingCanvasHeight = 0.0F;
+    Check(collapsedTrailing.ToggleCollapsedModule(
+              ModuleId::Rivan, rivan::ui::ModuleExpansionBehavior::Squash,
+              700.0F, 800.0F, &expandedTrailingCanvasWidth, &expandedTrailingCanvasHeight) &&
+              expandedTrailingCanvasWidth > 700.0F,
+          "overflow collapsed expansion grows the canvas with squash behavior");
+
+    auto outsideHandleShrink = ModuleLayout::Defaults();
+    for (auto& item : outsideHandleShrink.items) item.visible = false;
+    auto* outsideHandleTarget = outsideHandleShrink.Find(ModuleId::Rivan);
+    auto* outsideHandleSource = outsideHandleShrink.Find(ModuleId::AllMusic);
+    outsideHandleTarget->visible = true;
+    outsideHandleTarget->x = 0.30F;
+    outsideHandleTarget->y = 0.20F;
+    outsideHandleTarget->width = 0.30F;
+    outsideHandleTarget->height = 0.40F;
+    outsideHandleSource->visible = true;
+    outsideHandleSource->x = 0.05F;
+    outsideHandleSource->y = 0.20F;
+    outsideHandleSource->width = 0.15F;
+    outsideHandleSource->height = 0.40F;
+    Check(outsideHandleShrink.CollapseToModule(
+              ModuleId::AllMusic, ModuleId::Rivan,
+              rivan::ui::ModuleCollapseSide::Right,
+              rivan::ui::ModuleCollapseMode::Outside) &&
+              outsideHandleShrink.PreservePixelGeometry(
+                  1000.0F, 800.0F, 650.0F, 800.0F, true),
+          "shrinking canvas preserves an outside module-collapse handle");
+    outsideHandleTarget = outsideHandleShrink.Find(ModuleId::Rivan);
+    outsideHandleSource = outsideHandleShrink.Find(ModuleId::AllMusic);
+    Check(outsideHandleTarget != nullptr && outsideHandleSource != nullptr &&
+              outsideHandleSource->collapsed &&
+              std::abs(outsideHandleSource->handleX -
+                       (outsideHandleTarget->x + outsideHandleTarget->width)) < 0.001F &&
+              std::abs(outsideHandleSource->handleX + outsideHandleSource->handleWidth -
+                       1.0F) < 0.001F &&
+              outsideHandleTarget->x + outsideHandleTarget->width < 1.0F - 0.001F,
+          "outside handle reserves canvas space instead of being clamped into its target");
+
+    auto windowHandleShrink = ModuleLayout::Defaults();
+    for (auto& item : windowHandleShrink.items) item.visible = false;
+    auto* windowHandleSource = windowHandleShrink.Find(ModuleId::Rivan);
+    windowHandleSource->visible = true;
+    windowHandleSource->x = 0.30F;
+    windowHandleSource->y = 0.20F;
+    windowHandleSource->width = 0.30F;
+    windowHandleSource->height = 0.40F;
+    Check(windowHandleShrink.CollapseToWindow(ModuleId::Rivan,
+                                              rivan::ui::ModuleCollapseSide::Right) &&
+              windowHandleShrink.PreservePixelGeometry(
+                  1000.0F, 800.0F, 650.0F, 800.0F, true),
+          "shrinking canvas preserves a window-edge collapse handle");
+    windowHandleSource = windowHandleShrink.Find(ModuleId::Rivan);
+    Check(windowHandleSource != nullptr && windowHandleSource->collapseTargetIsWindow &&
+              std::abs(windowHandleSource->x + windowHandleSource->width - 1.0F) < 0.001F,
+          "window-edge collapse remains attached to the application edge");
+
     auto minimizedResize = ModuleLayout::Defaults();
     const auto beforeMinimize = minimizedResize;
     Check(!minimizedResize.PreservePixelGeometry(1000.0F, 800.0F, 1.0F, 1.0F),
@@ -841,6 +1007,55 @@ void TestWindowSnapping() {
               std::abs(resizeExpansion.Find(ModuleId::AllMusic)->width * expandedWidth - 500.0F) < 0.01F &&
               !resizeExpansion.HasConflictingGeometry(),
           "resize expansion grows the canvas while preserving module pixel widths");
+
+    const auto prepareShrunkCollapsed = [] {
+        auto layout = ModuleLayout::Defaults();
+        for (auto& item : layout.items) item.visible = false;
+        auto* target = layout.Find(ModuleId::Rivan);
+        auto* source = layout.Find(ModuleId::AllMusic);
+        target->visible = true;
+        target->x = 0.0F;
+        target->y = 0.0F;
+        target->width = 0.10F;
+        target->height = 1.0F;
+        source->visible = true;
+        source->x = 0.10F;
+        source->y = 0.20F;
+        source->width = 0.80F;
+        source->height = 0.40F;
+        Check(layout.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                      rivan::ui::ModuleCollapseSide::Right,
+                                      rivan::ui::ModuleCollapseMode::Outside),
+              "an outside collapse can retain geometry beyond a smaller canvas");
+        Check(layout.PreservePixelGeometry(1000.0F, 800.0F, 700.0F, 800.0F),
+              "shrinking canvas preserves collapsed expansion geometry");
+        const auto* collapsed = layout.Find(ModuleId::AllMusic);
+        Check(collapsed != nullptr && collapsed->expandedWidth > 1.0F &&
+                  std::abs(collapsed->expandedWidth * 700.0F - 800.0F) < 0.01F,
+              "collapsed expansion retains its pixel width outside normalized canvas");
+        return layout;
+    };
+
+    auto squashExpansion = prepareShrunkCollapsed();
+    float squashWidth = 0.0F;
+    float squashHeight = 0.0F;
+    Check(squashExpansion.ToggleCollapsedModule(
+              ModuleId::AllMusic, rivan::ui::ModuleExpansionBehavior::Squash,
+              700.0F, 800.0F, &squashWidth, &squashHeight) &&
+              squashWidth > 700.0F &&
+              std::abs(squashExpansion.Find(ModuleId::AllMusic)->width * squashWidth - 800.0F) < 0.01F,
+          "overflow expansion grows canvas despite squash behavior");
+
+    auto resizeExpansionAfterShrink = prepareShrunkCollapsed();
+    float resizeWidthAfterShrink = 0.0F;
+    float resizeHeightAfterShrink = 0.0F;
+    Check(resizeExpansionAfterShrink.ToggleCollapsedModule(
+              ModuleId::AllMusic, rivan::ui::ModuleExpansionBehavior::Resize,
+              700.0F, 800.0F, &resizeWidthAfterShrink, &resizeHeightAfterShrink) &&
+              resizeWidthAfterShrink > 700.0F &&
+              std::abs(resizeExpansionAfterShrink.Find(ModuleId::AllMusic)->width *
+                       resizeWidthAfterShrink - 800.0F) < 0.01F,
+          "overflow expansion grows canvas despite resize behavior");
 }
 
 void TestIniValueCodec() {
@@ -864,6 +1079,7 @@ void TestCollapsibleSnapping() {
     using rivan::ui::ModuleDropZone;
     using rivan::ui::ModuleId;
     using rivan::ui::ModuleLayout;
+    using rivan::ui::ModuleWindowDropZone;
 
     auto window = ModuleLayout::Defaults();
     for (auto& item : window.items) item.visible = false;
@@ -986,11 +1202,275 @@ void TestCollapsibleSnapping() {
                                    ModuleCollapseSide::Right, ModuleCollapseMode::Outside),
           "an outside collapse can reserve adjacent space");
     Check(outside.Find(ModuleId::AllMusic)->x > outside.Find(ModuleId::Rivan)->x +
-               outside.Find(ModuleId::Rivan)->width - 0.001F &&
+                outside.Find(ModuleId::Rivan)->width - 0.001F &&
                std::abs(outside.Find(ModuleId::AllMusic)->handleX -
                         (outside.Find(ModuleId::Rivan)->x + outside.Find(ModuleId::Rivan)->width)) < 0.001F &&
                !outside.HasConflictingGeometry(),
           "outside collapse places its handle beside the target without overlap");
+
+    const auto prepareOutsideResize = [](ModuleCollapseSide side) {
+        auto layout = ModuleLayout::Defaults();
+        for (auto& item : layout.items) item.visible = false;
+        auto* target = layout.Find(ModuleId::Rivan);
+        auto* source = layout.Find(ModuleId::AllMusic);
+        target->visible = true;
+        target->x = 0.30F;
+        target->y = 0.30F;
+        target->width = 0.30F;
+        target->height = 0.30F;
+        source->visible = true;
+        source->x = 0.05F;
+        source->y = 0.05F;
+        source->width = 0.15F;
+        source->height = 0.15F;
+        Check(layout.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan, side,
+                                      ModuleCollapseMode::Outside),
+              "outside collapse prepares target resize attachment test");
+        return layout;
+    };
+    const auto checkOutsideAttachment = [](const ModuleLayout& layout,
+                                           ModuleCollapseSide side,
+                                           const char* message) {
+        const auto* target = layout.Find(ModuleId::Rivan);
+        const auto* source = layout.Find(ModuleId::AllMusic);
+        if (!target || !source) {
+            Check(false, message);
+            return;
+        }
+        const float targetRight = target->x + target->width;
+        const float targetBottom = target->y + target->height;
+        const float handleRight = source->handleX + source->handleWidth;
+        const float handleBottom = source->handleY + source->handleHeight;
+        const bool attached = side == ModuleCollapseSide::Left
+            ? std::abs(handleRight - target->x) < 0.001F && handleRight <= target->x + 0.001F
+            : side == ModuleCollapseSide::Right
+                ? std::abs(source->handleX - targetRight) < 0.001F &&
+                      source->handleX >= targetRight - 0.001F
+                : side == ModuleCollapseSide::Top
+                    ? std::abs(handleBottom - target->y) < 0.001F &&
+                          handleBottom <= target->y + 0.001F
+                    : std::abs(source->handleY - targetBottom) < 0.001F &&
+                          source->handleY >= targetBottom - 0.001F;
+        Check(source->collapsed && attached, message);
+    };
+
+    auto outsideSnapTo = prepareOutsideResize(ModuleCollapseSide::Right);
+    auto* snapToSource = outsideSnapTo.Find(ModuleId::GraphicEqualizer);
+    snapToSource->visible = true;
+    snapToSource->x = 0.05F;
+    snapToSource->y = 0.05F;
+    snapToSource->width = 0.15F;
+    snapToSource->height = 0.15F;
+    const float snapToTargetRight = outsideSnapTo.Find(ModuleId::Rivan)->x +
+        outsideSnapTo.Find(ModuleId::Rivan)->width;
+    Check(outsideSnapTo.SnapTo(ModuleId::GraphicEqualizer, ModuleId::Rivan,
+                               ModuleDropZone::Right),
+          "side snapping can split an outside-collapse target");
+    Check(outsideSnapTo.Find(ModuleId::Rivan)->x + outsideSnapTo.Find(ModuleId::Rivan)->width <
+              snapToTargetRight - 0.001F,
+          "side snapping changes the outside-collapse target edge");
+    checkOutsideAttachment(outsideSnapTo, ModuleCollapseSide::Right,
+                           "outside handle follows target after side snapping changes its edge");
+
+    auto outsideWindowSplit = ModuleLayout::Defaults();
+    for (auto& item : outsideWindowSplit.items) item.visible = false;
+    auto* windowTarget = outsideWindowSplit.Find(ModuleId::Rivan);
+    auto* windowCollapseSource = outsideWindowSplit.Find(ModuleId::AllMusic);
+    auto* windowSnapSource = outsideWindowSplit.Find(ModuleId::GraphicEqualizer);
+    windowTarget->visible = true;
+    windowTarget->x = 0.40F;
+    windowTarget->y = 0.20F;
+    windowTarget->width = 0.40F;
+    windowTarget->height = 0.60F;
+    windowCollapseSource->visible = true;
+    windowCollapseSource->x = 0.05F;
+    windowCollapseSource->y = 0.05F;
+    windowCollapseSource->width = 0.15F;
+    windowCollapseSource->height = 0.15F;
+    windowSnapSource->visible = true;
+    windowSnapSource->x = 0.05F;
+    windowSnapSource->y = 0.70F;
+    windowSnapSource->width = 0.15F;
+    windowSnapSource->height = 0.15F;
+    Check(outsideWindowSplit.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                              ModuleCollapseSide::Right,
+                                              ModuleCollapseMode::Outside),
+          "outside collapse prepares window-split attachment test");
+    const auto addWindowBlocker = [&outsideWindowSplit](ModuleId id, float x, float y,
+                                                        float width, float height) {
+        auto* item = outsideWindowSplit.Find(id);
+        item->visible = true;
+        item->x = x;
+        item->y = y;
+        item->width = width;
+        item->height = height;
+    };
+    // Fill the right-middle drop region after collapse so SnapToWindow must split Rivan.
+    addWindowBlocker(ModuleId::RivanLibrary, 0.50F, 0.00F, 0.50F, 0.20F);
+    addWindowBlocker(ModuleId::VideoPreview, 0.50F, 0.80F, 0.50F, 0.20F);
+    addWindowBlocker(ModuleId::Lyrics, 0.86F, 0.20F, 0.14F, 0.60F);
+    const float windowSplitTargetRight = windowTarget->x + windowTarget->width;
+    Check(outsideWindowSplit.SnapToWindow(ModuleId::GraphicEqualizer,
+                                          ModuleWindowDropZone::RightMiddle,
+                                          0.60F, 0.50F),
+          "window snapping splits an outside-collapse target when no free rectangle exists");
+    Check(outsideWindowSplit.Find(ModuleId::Rivan)->x +
+              outsideWindowSplit.Find(ModuleId::Rivan)->width <
+              windowSplitTargetRight - 0.001F,
+          "window split changes the outside-collapse target edge");
+    checkOutsideAttachment(outsideWindowSplit, ModuleCollapseSide::Right,
+                           "outside handle follows target after window snapping splits its edge");
+
+    auto outsideCrossAxis = ModuleLayout::Defaults();
+    for (auto& item : outsideCrossAxis.items) item.visible = false;
+    auto* crossAxisTarget = outsideCrossAxis.Find(ModuleId::Rivan);
+    auto* crossAxisSource = outsideCrossAxis.Find(ModuleId::AllMusic);
+    crossAxisTarget->visible = true;
+    crossAxisTarget->x = 0.30F;
+    crossAxisTarget->y = 0.30F;
+    crossAxisTarget->width = 0.30F;
+    crossAxisTarget->height = 0.30F;
+    crossAxisSource->visible = true;
+    crossAxisSource->x = 0.05F;
+    crossAxisSource->y = 0.05F;
+    crossAxisSource->width = 0.15F;
+    crossAxisSource->height = 0.15F;
+    Check(outsideCrossAxis.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                             ModuleCollapseSide::Right,
+                                             ModuleCollapseMode::Outside,
+                                             0.12F, 0.95F) &&
+              outsideCrossAxis.ResizeModule(ModuleId::Rivan, 0.45F, 0.95F,
+                                             false, true, false, false, false),
+          "cross-axis target resize applies to an outside collapse near canvas edge");
+    checkOutsideAttachment(outsideCrossAxis, ModuleCollapseSide::Right,
+                           "cross-axis resize keeps outside handle on target edge");
+    crossAxisSource = outsideCrossAxis.Find(ModuleId::AllMusic);
+    Check(crossAxisSource->expandedY >= -0.001F &&
+              crossAxisSource->expandedY + crossAxisSource->expandedHeight <= 1.001F &&
+              outsideCrossAxis.ToggleCollapsedModule(ModuleId::AllMusic),
+          "cross-axis resize clamps outside expansion and still opens collapse");
+
+    auto outsideRightResize = prepareOutsideResize(ModuleCollapseSide::Right);
+    Check(outsideRightResize.ResizeModule(ModuleId::Rivan, 0.75F, 0.45F,
+                                           true, false, false, false, false),
+          "outside right target resize applies with overlap mode");
+    checkOutsideAttachment(outsideRightResize, ModuleCollapseSide::Right,
+                           "outside right handle follows target right edge during overlap resize");
+
+    auto outsideLeftResize = prepareOutsideResize(ModuleCollapseSide::Left);
+    Check(outsideLeftResize.ResizeModule(ModuleId::Rivan, 0.15F, 0.45F,
+                                          false, false, true, false, false),
+          "outside left target resize applies");
+    checkOutsideAttachment(outsideLeftResize, ModuleCollapseSide::Left,
+                           "outside left handle follows target left edge during resize");
+
+    auto outsideTopResize = prepareOutsideResize(ModuleCollapseSide::Top);
+    Check(outsideTopResize.ResizeModule(ModuleId::Rivan, 0.45F, 0.15F,
+                                         false, false, false, true, false),
+          "outside top target resize applies");
+    checkOutsideAttachment(outsideTopResize, ModuleCollapseSide::Top,
+                           "outside top handle follows target top edge during resize");
+
+    auto outsideBottomResize = prepareOutsideResize(ModuleCollapseSide::Bottom);
+    Check(outsideBottomResize.ResizeModule(ModuleId::Rivan, 0.45F, 0.75F,
+                                            false, true, false, false, false),
+          "outside bottom target resize applies");
+    checkOutsideAttachment(outsideBottomResize, ModuleCollapseSide::Bottom,
+                           "outside bottom handle follows target bottom edge during resize");
+
+    auto outsideMove = prepareOutsideResize(ModuleCollapseSide::Right);
+    outsideMove.ClearInsideCollapseReferences(ModuleId::Rivan);
+    const auto outsideMoveBefore = outsideMove;
+    auto* movedTarget = outsideMove.Find(ModuleId::Rivan);
+    movedTarget->x += 0.12F;
+    movedTarget->y += 0.10F;
+    ModuleLayout::SyncExpandedGeometry(*movedTarget);
+    Check(outsideMove.ReattachOutsideCollapseHandles(outsideMoveBefore),
+          "outside handle reattachment applies after target movement");
+    checkOutsideAttachment(outsideMove, ModuleCollapseSide::Right,
+                           "outside handle remains attached when target moves");
+    Check(outsideMove.Find(ModuleId::AllMusic)->collapsed &&
+              outsideMove.Find(ModuleId::AllMusic)->collapseMode == ModuleCollapseMode::Outside,
+          "moving a target preserves its outside collapse reference");
+
+    auto outsideSnapGroupMove = ModuleLayout::Defaults();
+    for (auto& item : outsideSnapGroupMove.items) item.visible = false;
+    auto* movingSnapTarget = outsideSnapGroupMove.Find(ModuleId::Rivan);
+    auto* movingSnapPeer = outsideSnapGroupMove.Find(ModuleId::GraphicEqualizer);
+    auto* movingSnapSource = outsideSnapGroupMove.Find(ModuleId::AllMusic);
+    movingSnapTarget->visible = true;
+    movingSnapTarget->x = 0.30F;
+    movingSnapTarget->y = 0.30F;
+    movingSnapTarget->width = 0.30F;
+    movingSnapTarget->height = 0.30F;
+    movingSnapPeer->visible = true;
+    movingSnapPeer->x = 0.05F;
+    movingSnapPeer->y = 0.05F;
+    movingSnapPeer->width = 0.15F;
+    movingSnapPeer->height = 0.15F;
+    movingSnapSource->visible = true;
+    movingSnapSource->x = 0.05F;
+    movingSnapSource->y = 0.05F;
+    movingSnapSource->width = 0.15F;
+    movingSnapSource->height = 0.15F;
+    Check(outsideSnapGroupMove.SnapTo(ModuleId::GraphicEqualizer, ModuleId::Rivan,
+                                      ModuleDropZone::Left) &&
+              outsideSnapGroupMove.CollapseToModule(
+                  ModuleId::AllMusic, ModuleId::Rivan, ModuleCollapseSide::Right,
+                  ModuleCollapseMode::Outside),
+          "outside collapse prepares snap-group movement attachment test");
+    const auto outsideSnapGroupMoveBefore = outsideSnapGroupMove;
+    for (auto& item : outsideSnapGroupMove.items) {
+        if (outsideSnapGroupMove.SnapRoot(item.id) == ModuleId::Rivan) {
+            item.x += 0.10F;
+            item.y += 0.08F;
+            ModuleLayout::SyncExpandedGeometry(item);
+        }
+    }
+    Check(outsideSnapGroupMove.ReattachOutsideCollapseHandles(outsideSnapGroupMoveBefore),
+          "outside handle reattachment applies after snap-group movement");
+    checkOutsideAttachment(outsideSnapGroupMove, ModuleCollapseSide::Right,
+                           "outside handle remains attached when target snap group moves");
+
+    Check(outsideRightResize.ToggleCollapsedModule(ModuleId::AllMusic),
+          "resized outside module can open");
+    Check(outsideRightResize.ResizeModule(ModuleId::Rivan, 0.80F, 0.45F,
+                                           true, false, false, false, false) &&
+              outsideRightResize.ToggleCollapsedModule(ModuleId::AllMusic),
+          "opened outside module can re-collapse after its target moves");
+    checkOutsideAttachment(outsideRightResize, ModuleCollapseSide::Right,
+                           "re-collapsing uses current target edge instead of stale handle position");
+
+    auto outsideSnapGroupResize = ModuleLayout::Defaults();
+    for (auto& item : outsideSnapGroupResize.items) item.visible = false;
+    auto* snapTarget = outsideSnapGroupResize.Find(ModuleId::Rivan);
+    auto* snapPeer = outsideSnapGroupResize.Find(ModuleId::GraphicEqualizer);
+    auto* snapSource = outsideSnapGroupResize.Find(ModuleId::AllMusic);
+    snapTarget->visible = true;
+    snapTarget->x = 0.30F;
+    snapTarget->y = 0.30F;
+    snapTarget->width = 0.30F;
+    snapTarget->height = 0.30F;
+    snapPeer->visible = true;
+    snapPeer->x = 0.05F;
+    snapPeer->y = 0.05F;
+    snapPeer->width = 0.15F;
+    snapPeer->height = 0.15F;
+    snapSource->visible = true;
+    snapSource->x = 0.05F;
+    snapSource->y = 0.05F;
+    snapSource->width = 0.15F;
+    snapSource->height = 0.15F;
+    Check(outsideSnapGroupResize.SnapTo(ModuleId::GraphicEqualizer, ModuleId::Rivan,
+                                        ModuleDropZone::Left) &&
+              outsideSnapGroupResize.CollapseToModule(
+                  ModuleId::AllMusic, ModuleId::Rivan, ModuleCollapseSide::Right,
+                  ModuleCollapseMode::Outside) &&
+              outsideSnapGroupResize.ResizeSnapGroup(
+                  ModuleId::Rivan, 0.75F, 0.45F, true, false, false, false, false),
+          "outside collapse target can resize with its snap group in overlap mode");
+    checkOutsideAttachment(outsideSnapGroupResize, ModuleCollapseSide::Right,
+                           "outside handle follows its target edge when target snap group resizes");
 
     auto outsidePositioned = ModuleLayout::Defaults();
     for (auto& item : outsidePositioned.items) item.visible = false;
@@ -1316,11 +1796,57 @@ void TestModuleLayoutSessionRoundTrip() {
     const auto* loadedCollapsible =
         reader.Session().moduleLayout.Find(rivan::ui::ModuleId::RivanLibrary);
     Check(loadedCollapsible != nullptr &&
-              std::abs(loadedCollapsible->expandedX - 0.50F) < 0.001F &&
-              std::abs(loadedCollapsible->expandedY - 0.08F) < 0.001F &&
-              std::abs(loadedCollapsible->expandedWidth - 0.34F) < 0.001F &&
-              std::abs(loadedCollapsible->expandedHeight - 0.40F) < 0.001F,
+               std::abs(loadedCollapsible->expandedX - 0.50F) < 0.001F &&
+               std::abs(loadedCollapsible->expandedY - 0.08F) < 0.001F &&
+               std::abs(loadedCollapsible->expandedWidth - 0.34F) < 0.001F &&
+               std::abs(loadedCollapsible->expandedHeight - 0.40F) < 0.001F,
            "resized collapsible geometry survives a session round-trip");
+
+    auto retainedExpansion = writer.Session();
+    retainedExpansion.moduleLayout = rivan::ui::ModuleLayout::Defaults();
+    for (auto& item : retainedExpansion.moduleLayout.items) item.visible = false;
+    auto* retainedTarget = retainedExpansion.moduleLayout.Find(rivan::ui::ModuleId::Rivan);
+    auto* retainedSource = retainedExpansion.moduleLayout.Find(rivan::ui::ModuleId::AllMusic);
+    retainedTarget->visible = true;
+    retainedTarget->width = 0.10F;
+    retainedTarget->height = 1.0F;
+    retainedSource->visible = true;
+    retainedSource->x = 0.10F;
+    retainedSource->y = 0.20F;
+    retainedSource->width = 0.80F;
+    retainedSource->height = 0.40F;
+    Check(retainedExpansion.moduleLayout.CollapseToModule(
+              rivan::ui::ModuleId::AllMusic, rivan::ui::ModuleId::Rivan,
+              rivan::ui::ModuleCollapseSide::Right,
+              rivan::ui::ModuleCollapseMode::Outside) &&
+              retainedExpansion.moduleLayout.PreservePixelGeometry(
+                  1000.0F, 800.0F, 700.0F, 800.0F),
+          "collapsed expansion outside current canvas survives session round-trip");
+    const auto* retainedBeforeSave =
+        retainedExpansion.moduleLayout.Find(rivan::ui::ModuleId::AllMusic);
+    const float retainedExpandedX = retainedBeforeSave->expandedX;
+    const float retainedExpandedY = retainedBeforeSave->expandedY;
+    const float retainedExpandedWidth = retainedBeforeSave->expandedWidth;
+    const float retainedExpandedHeight = retainedBeforeSave->expandedHeight;
+    Check(writer.SetSession(retainedExpansion, &error) && writer.SaveSession(&error) &&
+              reader.LoadSession(&error),
+          "collapsed expansion outside current canvas saves and reloads");
+    const auto* loadedRetainedSource =
+        reader.Session().moduleLayout.Find(rivan::ui::ModuleId::AllMusic);
+    Check(loadedRetainedSource != nullptr && loadedRetainedSource->collapsed,
+          "session reload retains collapsed state outside canvas");
+    Check(loadedRetainedSource != nullptr &&
+              std::abs(loadedRetainedSource->expandedX - retainedExpandedX) < 0.001F,
+          "session reload retains collapsed expanded x outside canvas");
+    Check(loadedRetainedSource != nullptr &&
+              std::abs(loadedRetainedSource->expandedY - retainedExpandedY) < 0.001F,
+          "session reload retains collapsed expanded y outside canvas");
+    Check(loadedRetainedSource != nullptr && loadedRetainedSource->expandedWidth > 1.0F &&
+              std::abs(loadedRetainedSource->expandedWidth - retainedExpandedWidth) < 0.001F,
+          "session reload retains collapsed expanded width outside canvas");
+    Check(loadedRetainedSource != nullptr &&
+              std::abs(loadedRetainedSource->expandedHeight - retainedExpandedHeight) < 0.001F,
+          "session reload retains collapsed expanded height outside canvas");
 
     auto cyclicSession = writer.Session();
     cyclicSession.moduleLayout = rivan::ui::ModuleLayout::Defaults();
@@ -1344,6 +1870,49 @@ void TestModuleLayoutSessionRoundTrip() {
           "cycle cleanup leaves valid expanded module geometry");
 
     std::filesystem::remove_all(root, ec);
+}
+
+void TestModuleResizeCollisionBehavior() {
+    using rivan::ui::ModuleId;
+    using rivan::ui::ModuleLayout;
+
+    auto squash = ModuleLayout::Defaults();
+    for (auto& item : squash.items) item.visible = false;
+    auto* resized = squash.Find(ModuleId::Rivan);
+    auto* obstacle = squash.Find(ModuleId::AllMusic);
+    resized->visible = true;
+    resized->x = 0.0F;
+    resized->y = 0.0F;
+    resized->width = 0.40F;
+    resized->height = 0.50F;
+    obstacle->visible = true;
+    obstacle->x = 0.50F;
+    obstacle->y = 0.0F;
+    obstacle->width = 0.50F;
+    obstacle->height = 0.50F;
+    Check(squash.ResizeModule(ModuleId::Rivan, 0.90F, 0.25F, true, false, false, false),
+          "module resize with collision applies");
+    Check(std::abs(squash.Find(ModuleId::Rivan)->width - 0.90F) < 0.001F &&
+              std::abs(squash.Find(ModuleId::AllMusic)->x - 0.90F) < 0.001F &&
+              !squash.HasConflictingGeometry(),
+          "squash resize gives resized module priority and preserves obstacle minimum size");
+
+    auto overlap = ModuleLayout::Defaults();
+    for (auto& item : overlap.items) item.visible = false;
+    overlap.Find(ModuleId::Rivan)->visible = true;
+    overlap.Find(ModuleId::Rivan)->x = 0.0F;
+    overlap.Find(ModuleId::Rivan)->y = 0.0F;
+    overlap.Find(ModuleId::Rivan)->width = 0.40F;
+    overlap.Find(ModuleId::Rivan)->height = 0.50F;
+    overlap.Find(ModuleId::AllMusic)->visible = true;
+    overlap.Find(ModuleId::AllMusic)->x = 0.50F;
+    overlap.Find(ModuleId::AllMusic)->y = 0.0F;
+    overlap.Find(ModuleId::AllMusic)->width = 0.50F;
+    overlap.Find(ModuleId::AllMusic)->height = 0.50F;
+    Check(overlap.ResizeModule(ModuleId::Rivan, 0.90F, 0.25F,
+                               true, false, false, false, false) &&
+              overlap.HasConflictingGeometry(),
+          "overlap resize toggle preserves legacy overlapping behavior");
 }
 
 void TestLyricsParsing() {
@@ -1411,6 +1980,7 @@ int main() {
     TestSkinCustomizationRoundTrip();
     TestSkinRejectsUnsafeAssets();
     TestFilePreviewSettingRoundTrip();
+    TestModuleResizeCollisionBehavior();
     TestIniValueCodec();
     TestUiModuleRegistry();
     TestDuplicateModuleGeometryRepair();

@@ -20,7 +20,9 @@ void ModuleLayout::MakeTab(ModuleId first, ModuleId second) noexcept {
     tabOrder[tabCount++] = first;
     if (first != second) tabOrder[tabCount++] = second;
     for (std::size_t index = 0; index < tabCount; ++index) {
-        if (auto* item = Find(tabOrder[index])) SyncExpandedGeometry(*item);
+        if (auto* item = Find(tabOrder[index]); item != nullptr && !item->collapsed) {
+            SyncExpandedGeometry(*item);
+        }
     }
     activeTab = 0;
 }
@@ -95,7 +97,7 @@ void ModuleLayout::TabWith(ModuleId source, ModuleId target) noexcept {
             item->y = groupGeometry.y;
             item->width = groupGeometry.width;
             item->height = groupGeometry.height;
-            SyncExpandedGeometry(*item);
+            if (!item->collapsed) SyncExpandedGeometry(*item);
             item->dockState = Find(geometryId)
                 ? Find(geometryId)->dockState : ModuleDockState::Floating;
         }

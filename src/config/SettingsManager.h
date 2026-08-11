@@ -66,6 +66,7 @@ struct AppSettings final {
     ui::ModuleExpansionBehavior moduleExpansionBehavior =
         ui::ModuleExpansionBehavior::Squash;
     ui::WindowResizeBehavior windowResizeBehavior = ui::WindowResizeBehavior::ScaleAll;
+    ui::ModuleResizeBehavior moduleResizeBehavior = ui::ModuleResizeBehavior::Squash;
 
     [[nodiscard]] static AppSettings Defaults();
 };

@@ -100,6 +100,12 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
     const float firstTop = lyricsContentBounds.top + 2.0F - lyricsScrollY;
     for (std::size_t i = 0; i < lines.size(); ++i) {
         const float top = firstTop + lineTops[i];
+        if (synced && lines[i].timestampSeconds >= 0.0 &&
+            top + lineHeights[i] >= lyricsContentBounds.top && top <= lyricsContentBounds.bottom) {
+            AddIdHit(Rect(lyricsContentBounds.left, top, lyricsContentBounds.right,
+                          top + lineHeights[i]),
+                     HitKind::LyricsVerse, static_cast<std::uint64_t>(i));
+        }
         if (!layouts[i] || top + lineHeights[i] < lyricsContentBounds.top || top > lyricsContentBounds.bottom) continue;
         const bool active = synced && i == activeLine;
         const auto origin = D2D1::Point2F(lyricsContentBounds.left + 6.0F, top);
@@ -151,6 +157,20 @@ void Win32Ui::Impl::HandleLyricsAction(std::uint64_t action) {
     default:
         break;
     }
+    InvalidateRect(window, nullptr, FALSE);
+}
+
+void Win32Ui::Impl::HandleLyricsVerse(std::size_t index) {
+    const auto& lines = model.lyrics.document.lines;
+    if (!lyricsSyncedMode_ || !model.lyrics.document.synced || index >= lines.size()) return;
+    const double timestamp = lines[index].timestampSeconds;
+    if (!std::isfinite(timestamp) || timestamp < 0.0 ||
+        !std::isfinite(model.durationSeconds) || model.durationSeconds <= 0.0) {
+        return;
+    }
+    try {
+        host.Seek(std::clamp(timestamp / model.durationSeconds, 0.0, 1.0));
+    } catch (...) {}
     InvalidateRect(window, nullptr, FALSE);
 }
 

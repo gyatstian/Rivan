@@ -154,15 +154,24 @@ void Win32Ui::Impl::Resize(UINT width, UINT height, bool minimized) {
         if (target && width != 0 && height != 0 &&
             FAILED(target->Resize(D2D1::SizeU(width, height)))) DiscardTarget();
         if (windowKind == WindowKind::Main && !model.miniPlayer && !internalModuleResize &&
-            moduleGesture == ModuleGesture::None &&
-            model.windowResizeBehavior == WindowResizeBehavior::GrowTrailingModule &&
-            model.moduleLayout.PreservePixelGeometry(previousSize.width, previousSize.height,
-                                                      newSize.width, newSize.height,
-                                                      windowResizeActive && windowResizeRight,
-                                                      windowResizeActive && windowResizeBottom,
-                                                      windowResizeActive && windowResizeLeft,
-                                                      windowResizeActive && windowResizeTop)) {
-            try { host.SetModuleLayout(model.moduleLayout); } catch (...) {}
+            moduleGesture == ModuleGesture::None) {
+            const bool resizeRight = windowResizeActive && windowResizeRight;
+            const bool resizeBottom = windowResizeActive && windowResizeBottom;
+            const bool resizeLeft = windowResizeActive && windowResizeLeft;
+            const bool resizeTop = windowResizeActive && windowResizeTop;
+            const bool layoutChanged = model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
+                ? model.moduleLayout.PreserveCollapsedExpandedGeometry(
+                    previousSize.width, previousSize.height, newSize.width, newSize.height,
+                    resizeRight, resizeBottom, resizeLeft, resizeTop)
+                : (model.moduleLayout.PreservePixelGeometry(
+                       previousSize.width, previousSize.height, newSize.width, newSize.height,
+                       resizeRight, resizeBottom, resizeLeft, resizeTop) ||
+                   model.moduleLayout.PreserveCollapsedExpandedGeometry(
+                       previousSize.width, previousSize.height, newSize.width, newSize.height,
+                       resizeRight, resizeBottom, resizeLeft, resizeTop));
+            if (layoutChanged) {
+                try { host.SetModuleLayout(model.moduleLayout); } catch (...) {}
+            }
         }
         if (internalModuleResize) internalModuleResize = false;
         lastCanvas = newSize;

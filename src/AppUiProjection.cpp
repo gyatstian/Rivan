@@ -293,6 +293,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.discordShowGithubButton = settings_.Settings().discordShowGithubButton;
     out.moduleExpansionBehavior = settings_.Settings().moduleExpansionBehavior;
     out.windowResizeBehavior = settings_.Settings().windowResizeBehavior;
+    out.moduleResizeBehavior = settings_.Settings().moduleResizeBehavior;
     out.youtubeBrowsing =
         YoutubeFeatureOn() && selectedPlaylist_ == playlist::YoutubePlaylistId;
     out.youtubeBusy = youtubeView_.busy;

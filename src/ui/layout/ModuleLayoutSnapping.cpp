@@ -97,18 +97,18 @@ bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone)
                     sourceDestination.left + (item->x + item->width - sourceBounds.left) * scaleX,
                     sourceDestination.top + (item->y + item->height - sourceBounds.top) * scaleY};
             setGeometry(*item, transformed, ModuleDockState::Snapped);
-            SyncExpandedGeometry(*item);
+            if (!item->collapsed) SyncExpandedGeometry(*item);
         }
     }
     if (auto* item = Find(targetRoot)) {
         setGeometry(*item, targetDestination, ModuleDockState::Snapped);
-        SyncExpandedGeometry(*item);
+        if (!item->collapsed) SyncExpandedGeometry(*item);
     }
     if (targetWasTabbed) {
         for (std::size_t index = 0; index < TabCount(); ++index) {
             if (auto* item = Find(tabOrder[index])) {
                 setGeometry(*item, targetDestination, ModuleDockState::Snapped);
-                SyncExpandedGeometry(*item);
+                if (!item->collapsed) SyncExpandedGeometry(*item);
             }
         }
     }
@@ -117,8 +117,12 @@ bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone)
             const auto itemIndex = static_cast<std::size_t>(item - items.data());
             snapGroup[itemIndex] = targetSnapRoot;
             item->dockState = ModuleDockState::Snapped;
-            SyncExpandedGeometry(*item);
+            if (!item->collapsed) SyncExpandedGeometry(*item);
         }
+    }
+    if (!ReattachOutsideCollapseHandles(before)) {
+        *this = before;
+        return false;
     }
     if (HasNewConflictingGeometry(before)) {
         *this = before;
@@ -220,7 +224,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
                 item->height *= scaleY;
             }
             item->dockState = ModuleDockState::Snapped;
-            SyncExpandedGeometry(*item);
+            if (!item->collapsed) SyncExpandedGeometry(*item);
         }
     }
     if (!freeDestination && splitTargetFound) {
@@ -246,7 +250,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
             target->width = remainder.right - remainder.left;
             target->height = remainder.bottom - remainder.top;
             target->dockState = ModuleDockState::Snapped;
-            SyncExpandedGeometry(*target);
+            if (!target->collapsed) SyncExpandedGeometry(*target);
             for (std::size_t tab = 0; tab < TabCount(); ++tab) {
                 if (auto* tabItem = Find(tabOrder[tab]);
                     tabItem != nullptr && TabRoot(tabItem->id) == targetRoot) {
@@ -254,7 +258,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
                     tabItem->y = target->y;
                     tabItem->width = target->width;
                     tabItem->height = target->height;
-                    SyncExpandedGeometry(*tabItem);
+                    if (!tabItem->collapsed) SyncExpandedGeometry(*tabItem);
                 }
             }
             for (std::size_t index = 0; index < movingCount; ++index) {
@@ -263,6 +267,10 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
                 }
             }
         }
+    }
+    if (!ReattachOutsideCollapseHandles(before)) {
+        *this = before;
+        return false;
     }
     if (HasNewConflictingGeometry(before)) {
         *this = before;

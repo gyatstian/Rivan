@@ -30,6 +30,7 @@ struct ModuleLayout final {
     [[nodiscard]] bool IsCollapseHandleVisible(ModuleId id) const noexcept;
     void ClearModuleCollapse(ModuleId id) noexcept;
     void ClearCollapseReferences(ModuleId target) noexcept;
+    void ClearInsideCollapseReferences(ModuleId target) noexcept;
 
     [[nodiscard]] static bool IsCollapseSide(ModuleCollapseSide side) noexcept;
     [[nodiscard]] static bool IsHorizontalCollapseSide(ModuleCollapseSide side) noexcept;
@@ -88,6 +89,12 @@ struct ModuleLayout final {
     [[nodiscard]] bool HasConflictingGeometry() const noexcept;
     [[nodiscard]] bool DisableDuplicateIndependentModules() noexcept;
     [[nodiscard]] bool HasNewConflictingGeometry(const ModuleLayout& before) const noexcept;
+    [[nodiscard]] bool ReattachOutsideCollapseHandles(
+        const ModuleLayout& before) noexcept;
+    [[nodiscard]] bool ResizeModule(ModuleId id, float pointerX, float pointerY,
+                                    bool resizeRight, bool resizeBottom,
+                                    bool resizeLeft, bool resizeTop,
+                                    bool squashOverlapping = true) noexcept;
     [[nodiscard]] bool FindplusWindowRectangle(
         ModuleId source, ModuleNormalizedRect region, float pointerX, float pointerY,
         float minimumWidth, float minimumHeight, ModuleNormalizedRect& result,
@@ -95,15 +102,20 @@ struct ModuleLayout final {
         bool attachWindowEdge = false) const noexcept;
     [[nodiscard]] bool IsSnapGrouped(ModuleId id) const noexcept;
     void DetachSnapModule(ModuleId id) noexcept;
-    void ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
-                         bool resizeRight, bool resizeBottom,
-                         bool resizeLeft, bool resizeTop) noexcept;
+    [[nodiscard]] bool ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
+                                       bool resizeRight, bool resizeBottom,
+                                       bool resizeLeft, bool resizeTop,
+                                       bool squashOverlapping = true) noexcept;
     [[nodiscard]] bool PreservePixelGeometry(float oldWidth, float oldHeight,
                                               float newWidth, float newHeight,
                                               bool resizeRight = false,
                                               bool resizeBottom = false,
                                               bool resizeLeft = false,
                                               bool resizeTop = false) noexcept;
+    [[nodiscard]] bool PreserveCollapsedExpandedGeometry(
+        float oldWidth, float oldHeight, float newWidth, float newHeight,
+        bool resizeRight = false, bool resizeBottom = false,
+        bool resizeLeft = false, bool resizeTop = false) noexcept;
 
     [[nodiscard]] ModuleId TabRoot(ModuleId id) const noexcept;
     void ClearTabs() noexcept;

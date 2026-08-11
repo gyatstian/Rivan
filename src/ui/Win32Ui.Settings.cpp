@@ -204,6 +204,18 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
         DrawText(model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
                      ? L"All modules keep their proportions as the window changes."
                      : L"The module touching the resized edge absorbs available space.",
+                  Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+        y += 22;
+        DrawText(L"MODULE RESIZE COLLISIONS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+                 DWRITE_TEXT_ALIGNMENT_CENTER);
+        y += 29;
+        SettingsButton(Rect(left, y, right, y + 24),
+                       model.moduleResizeBehavior == ModuleResizeBehavior::Squash
+                           ? L"RESIZE: SQUASH OCCUPIED" : L"RESIZE: ALLOW OVERLAP", 69, b);
+        y += 26;
+        DrawText(model.moduleResizeBehavior == ModuleResizeBehavior::Squash
+                     ? L"The resized module takes space from modules in its path."
+                     : L"The resized module may overlap other modules.",
                  Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
         y += 22;
         DrawText(L"TRACK COVERS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -413,6 +425,9 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 68: host.SetWindowResizeBehavior(model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
                                                    ? WindowResizeBehavior::GrowTrailingModule
                                                    : WindowResizeBehavior::ScaleAll); break;
+        case 69: host.SetModuleResizeBehavior(model.moduleResizeBehavior == ModuleResizeBehavior::Squash
+                                                   ? ModuleResizeBehavior::Overlap
+                                                   : ModuleResizeBehavior::Squash); break;
         case 50: if (window) KillTimer(window, kYoutubeSearchDebounceTimer); host.SubmitYoutubeQuery(playlistQuery); break;
         case 51: if (model.youtubeCanPagePrev && model.youtubePage > 0) host.SetYoutubeSearchPage(model.youtubePage - 1); break;
         case 52: if (model.youtubeCanPageNext) host.SetYoutubeSearchPage(model.youtubePage + 1); break;

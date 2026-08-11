@@ -275,6 +275,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
         ModuleTab,
         ModuleCollapseToggle,
         LyricsAction,
+        LyricsVerse,
         // Playlist Editor bottom-row buttons and the tree "new playlist" (+) button.
         EditorAdd, EditorRemove, NewPlaylist
     };
@@ -541,6 +542,8 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
                     std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
 
     void HandleLyricsAction(std::uint64_t action);
+
+    void HandleLyricsVerse(std::size_t index);
 
     void DrawMini(const D2D1_SIZE_F size,
                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);

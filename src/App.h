@@ -55,6 +55,7 @@ public:
     void SetExitToTray(bool enabled) override;
     void SetModuleExpansionBehavior(ui::ModuleExpansionBehavior behavior) override;
     void SetWindowResizeBehavior(ui::WindowResizeBehavior behavior) override;
+    void SetModuleResizeBehavior(ui::ModuleResizeBehavior behavior) override;
     void SetYoutubeEnabled(bool enabled) override;
     void GrabYoutubeLink(std::wstring url) override;
     [[nodiscard]] bool SetYoutubeGrabberHotkey(std::uint32_t modifiers,

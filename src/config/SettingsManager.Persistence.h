@@ -22,6 +22,9 @@ inline constexpr std::size_t kMaximumIdentifierBytes = 64;
 inline constexpr std::size_t kMaximumSelectionBytes = 4096;
 inline constexpr std::uint64_t kMaximumPositionMilliseconds =
     30ULL * 24ULL * 60ULL * 60ULL * 1000ULL;
+// Collapsed modules can retain expanded pixel geometry beyond current normalized
+// canvas bounds after a window shrink. Keep persisted values finite and bounded.
+inline constexpr float kMaximumStoredModuleCoordinate = 256.0F;
 
 inline void SetError(std::string* error, std::string message) {
     if (error != nullptr) {

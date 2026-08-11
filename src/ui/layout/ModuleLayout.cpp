@@ -7,6 +7,333 @@
 
 namespace rivan::ui {
 
+namespace {
+
+constexpr float kMinimumModuleExtent = 0.10F;
+
+bool HasUsableExpandedGeometry(const ModuleLayoutItem& item) noexcept {
+    if (!std::isfinite(item.expandedX) || !std::isfinite(item.expandedY) ||
+        !std::isfinite(item.expandedWidth) || !std::isfinite(item.expandedHeight) ||
+        item.expandedWidth < kMinimumModuleExtent ||
+        item.expandedHeight < kMinimumModuleExtent) {
+        return false;
+    }
+    return std::isfinite(item.expandedX + item.expandedWidth) &&
+           std::isfinite(item.expandedY + item.expandedHeight);
+}
+
+bool IsMember(const std::array<ModuleId, 6>& members, std::size_t count,
+              ModuleId id) noexcept {
+    for (std::size_t index = 0; index < count; ++index) {
+        if (members[index] == id) return true;
+    }
+    return false;
+}
+
+void SquashResizeObstacles(ModuleLayout& layout, ModuleId resizedId,
+                           const ModuleNormalizedRect& oldBounds,
+                           ModuleNormalizedRect& newBounds,
+                           bool resizeRight, bool resizeBottom,
+                           bool resizeLeft, bool resizeTop) noexcept {
+    std::array<ModuleId, 6> moving{};
+    const auto movingCount = layout.MovingMembers(resizedId, moving);
+    for (const auto& item : layout.items) {
+        if (!item.visible || IsMember(moving, movingCount, item.id) ||
+            (layout.IsTabbed(item.id) && layout.TabRoot(item.id) != item.id) ||
+            (item.collapsed && item.collapseMode == ModuleCollapseMode::Outside &&
+             !item.collapseTargetIsWindow &&
+             layout.SnapRoot(layout.TabRoot(item.collapseTarget)) ==
+                 layout.SnapRoot(layout.TabRoot(resizedId)))) {
+            continue;
+        }
+
+        const auto obstacle = ModuleLayout::Bounds(item);
+        if (resizeRight && obstacle.left >= oldBounds.right &&
+            newBounds.top < obstacle.bottom && newBounds.bottom > obstacle.top) {
+            newBounds.right = std::min(newBounds.right, obstacle.right - kMinimumModuleExtent);
+        }
+        if (resizeLeft && obstacle.right <= oldBounds.left &&
+            newBounds.top < obstacle.bottom && newBounds.bottom > obstacle.top) {
+            newBounds.left = std::max(newBounds.left, obstacle.left + kMinimumModuleExtent);
+        }
+        if (resizeBottom && obstacle.top >= oldBounds.bottom &&
+            newBounds.left < obstacle.right && newBounds.right > obstacle.left) {
+            newBounds.bottom = std::min(newBounds.bottom, obstacle.bottom - kMinimumModuleExtent);
+        }
+        if (resizeTop && obstacle.bottom <= oldBounds.top &&
+            newBounds.left < obstacle.right && newBounds.right > obstacle.left) {
+            newBounds.top = std::max(newBounds.top, obstacle.top + kMinimumModuleExtent);
+        }
+    }
+
+    for (const auto& item : layout.items) {
+        if (!item.visible || IsMember(moving, movingCount, item.id) ||
+            (layout.IsTabbed(item.id) && layout.TabRoot(item.id) != item.id) ||
+            (item.collapsed && item.collapseMode == ModuleCollapseMode::Outside &&
+             !item.collapseTargetIsWindow &&
+             layout.SnapRoot(layout.TabRoot(item.collapseTarget)) ==
+                 layout.SnapRoot(layout.TabRoot(resizedId)))) {
+            continue;
+        }
+        const auto obstacle = ModuleLayout::Bounds(item);
+        ModuleNormalizedRect adjusted = obstacle;
+        bool changed = false;
+        if (resizeRight && obstacle.left >= oldBounds.right && obstacle.left < newBounds.right &&
+            newBounds.top < obstacle.bottom && newBounds.bottom > obstacle.top) {
+            adjusted.left = newBounds.right;
+            changed = true;
+        } else if (resizeLeft && obstacle.right <= oldBounds.left && obstacle.right > newBounds.left &&
+                   newBounds.top < obstacle.bottom && newBounds.bottom > obstacle.top) {
+            adjusted.right = newBounds.left;
+            changed = true;
+        } else if (resizeBottom && obstacle.top >= oldBounds.bottom && obstacle.top < newBounds.bottom &&
+                   newBounds.left < obstacle.right && newBounds.right > obstacle.left) {
+            adjusted.top = newBounds.bottom;
+            changed = true;
+        } else if (resizeTop && obstacle.bottom <= oldBounds.top && obstacle.bottom > newBounds.top &&
+                   newBounds.left < obstacle.right && newBounds.right > obstacle.left) {
+            adjusted.bottom = newBounds.top;
+            changed = true;
+        }
+        if (!changed || adjusted.right - adjusted.left < kMinimumModuleExtent ||
+            adjusted.bottom - adjusted.top < kMinimumModuleExtent) continue;
+        layout.SetTabGroupGeometry(layout.TabRoot(item.id), adjusted);
+    }
+}
+
+} // namespace
+
+bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) noexcept {
+    const auto mapCenter = [](float center, float oldStart, float oldEnd,
+                              float newStart, float newEnd) noexcept {
+        const float oldLength = oldEnd - oldStart;
+        if (!(oldLength > 0.0F)) return (newStart + newEnd) * 0.5F;
+        return newStart + (center - oldStart) / oldLength * (newEnd - newStart);
+    };
+    const auto setAttachedAxis = [](ModuleNormalizedRect& expanded,
+                                    ModuleNormalizedRect& handle,
+                                    ModuleCollapseSide side,
+                                    const ModuleNormalizedRect& targetBounds) noexcept {
+        switch (side) {
+        case ModuleCollapseSide::Left:
+            {
+            const float length = expanded.right - expanded.left;
+            expanded.right = targetBounds.left;
+            expanded.left = expanded.right - length;
+            }
+            {
+            const float length = handle.right - handle.left;
+            handle.right = targetBounds.left;
+            handle.left = handle.right - length;
+            }
+            return true;
+        case ModuleCollapseSide::Right:
+            {
+            const float length = expanded.right - expanded.left;
+            expanded.left = targetBounds.right;
+            expanded.right = expanded.left + length;
+            }
+            {
+            const float length = handle.right - handle.left;
+            handle.left = targetBounds.right;
+            handle.right = handle.left + length;
+            }
+            return true;
+        case ModuleCollapseSide::Top:
+            {
+            const float length = expanded.bottom - expanded.top;
+            expanded.bottom = targetBounds.top;
+            expanded.top = expanded.bottom - length;
+            }
+            {
+            const float length = handle.bottom - handle.top;
+            handle.bottom = targetBounds.top;
+            handle.top = handle.bottom - length;
+            }
+            return true;
+        case ModuleCollapseSide::Bottom:
+            {
+            const float length = expanded.bottom - expanded.top;
+            expanded.top = targetBounds.bottom;
+            expanded.bottom = expanded.top + length;
+            }
+            {
+            const float length = handle.bottom - handle.top;
+            handle.top = targetBounds.bottom;
+            handle.bottom = handle.top + length;
+            }
+            return true;
+        case ModuleCollapseSide::None:
+            return false;
+        }
+        return false;
+    };
+    const auto reserveHandleStrip = [this](ModuleId targetRoot,
+                                           ModuleCollapseSide side,
+                                           const ModuleNormalizedRect& handle) noexcept {
+        auto* target = Find(targetRoot);
+        if (!target) return false;
+
+        auto bounds = Bounds(*target);
+        const float strip = IsHorizontalCollapseSide(side)
+            ? handle.right - handle.left : handle.bottom - handle.top;
+        if (!(strip > 0.001F) || !std::isfinite(strip)) return false;
+
+        const auto apply = [this, targetRoot](ModuleNormalizedRect adjusted) noexcept {
+            SetTabGroupGeometry(targetRoot, adjusted);
+        };
+        switch (side) {
+        case ModuleCollapseSide::Left:
+            if (bounds.left >= strip) return true;
+            if (bounds.right - strip >= kMinimumModuleExtent) {
+                bounds.left = strip;
+                apply(bounds);
+                return true;
+            }
+            return false;
+        case ModuleCollapseSide::Right:
+            if (bounds.right <= 1.0F - strip) return true;
+            if (1.0F - strip - bounds.left >= kMinimumModuleExtent) {
+                bounds.right = 1.0F - strip;
+                apply(bounds);
+                return true;
+            }
+            return false;
+        case ModuleCollapseSide::Top:
+            if (bounds.top >= strip) return true;
+            if (bounds.bottom - strip >= kMinimumModuleExtent) {
+                bounds.top = strip;
+                apply(bounds);
+                return true;
+            }
+            return false;
+        case ModuleCollapseSide::Bottom:
+            if (bounds.bottom <= 1.0F - strip) return true;
+            if (1.0F - strip - bounds.top >= kMinimumModuleExtent) {
+                bounds.bottom = 1.0F - strip;
+                apply(bounds);
+                return true;
+            }
+            return false;
+        case ModuleCollapseSide::None:
+            return false;
+        }
+        return false;
+    };
+
+    for (auto& item : items) {
+        if (!item.visible || item.collapseMode != ModuleCollapseMode::Outside ||
+            item.collapseTargetIsWindow || !item.collapsed) {
+            continue;
+        }
+        const ModuleId targetRoot = TabRoot(item.collapseTarget);
+        const auto* oldTarget = before.Find(targetRoot);
+        const auto* target = Find(targetRoot);
+        if (!oldTarget || !target || !target->visible || target->collapsed) return false;
+
+        ModuleNormalizedRect expanded{item.expandedX, item.expandedY,
+                                      item.expandedX + item.expandedWidth,
+                                      item.expandedY + item.expandedHeight};
+        ModuleNormalizedRect handle{item.handleX, item.handleY,
+                                    item.handleX + item.handleWidth,
+                                    item.handleY + item.handleHeight};
+        if (!(expanded.right > expanded.left) || !(expanded.bottom > expanded.top) ||
+            !(handle.right > handle.left) || !(handle.bottom > handle.top)) {
+            return false;
+        }
+
+        // The handle belongs outside this target, not to the client edge.
+        // Reserve its full strip before reattaching so edge clamping cannot cover the target.
+        if (!reserveHandleStrip(targetRoot, item.collapseSide, handle)) return false;
+
+        const auto oldTargetBounds = Bounds(*oldTarget);
+        const auto* attachedTarget = Find(targetRoot);
+        if (!attachedTarget) return false;
+        const auto targetBounds = Bounds(*attachedTarget);
+        if (IsHorizontalCollapseSide(item.collapseSide)) {
+            const float expandedCenter = (expanded.top + expanded.bottom) * 0.5F;
+            const float expandedLength = expanded.bottom - expanded.top;
+            const float handleLength = handle.bottom - handle.top;
+            const float expandedMappedCenter = mapCenter(
+                expandedCenter, oldTargetBounds.top, oldTargetBounds.bottom,
+                targetBounds.top, targetBounds.bottom);
+            const float clampedCenter = expandedLength <= 1.0F
+                ? std::clamp(expandedMappedCenter, expandedLength * 0.5F,
+                             1.0F - expandedLength * 0.5F)
+                : expandedMappedCenter;
+            expanded.top = clampedCenter - expandedLength * 0.5F;
+            expanded.bottom = expanded.top + expandedLength;
+            handle.top = clampedCenter - handleLength * 0.5F;
+            handle.bottom = handle.top + handleLength;
+        } else {
+            const float expandedCenter = (expanded.left + expanded.right) * 0.5F;
+            const float expandedLength = expanded.right - expanded.left;
+            const float handleLength = handle.right - handle.left;
+            const float expandedMappedCenter = mapCenter(
+                expandedCenter, oldTargetBounds.left, oldTargetBounds.right,
+                targetBounds.left, targetBounds.right);
+            const float clampedCenter = expandedLength <= 1.0F
+                ? std::clamp(expandedMappedCenter, expandedLength * 0.5F,
+                             1.0F - expandedLength * 0.5F)
+                : expandedMappedCenter;
+            expanded.left = clampedCenter - expandedLength * 0.5F;
+            expanded.right = expanded.left + expandedLength;
+            handle.left = clampedCenter - handleLength * 0.5F;
+            handle.right = handle.left + handleLength;
+        }
+        if (!setAttachedAxis(expanded, handle, item.collapseSide, targetBounds)) return false;
+
+        const float attachedSpace = item.collapseSide == ModuleCollapseSide::Left
+            ? targetBounds.left
+            : item.collapseSide == ModuleCollapseSide::Right
+                ? 1.0F - targetBounds.right
+                : item.collapseSide == ModuleCollapseSide::Top
+                    ? targetBounds.top : 1.0F - targetBounds.bottom;
+        const float attachedLength = IsHorizontalCollapseSide(item.collapseSide)
+            ? handle.right - handle.left : handle.bottom - handle.top;
+        if (!(attachedSpace > 0.001F) || !(attachedLength > 0.001F)) return false;
+        if (item.collapseSide == ModuleCollapseSide::Left && handle.left < 0.0F) {
+            handle.left = 0.0F;
+            handle.right = std::min(handle.right, attachedSpace);
+        } else if (item.collapseSide == ModuleCollapseSide::Right && handle.right > 1.0F) {
+            handle.right = 1.0F;
+            handle.left = std::max(handle.left, targetBounds.right);
+        } else if (item.collapseSide == ModuleCollapseSide::Top && handle.top < 0.0F) {
+            handle.top = 0.0F;
+            handle.bottom = std::min(handle.bottom, attachedSpace);
+        } else if (item.collapseSide == ModuleCollapseSide::Bottom && handle.bottom > 1.0F) {
+            handle.bottom = 1.0F;
+            handle.top = std::max(handle.top, targetBounds.bottom);
+        }
+        if (IsHorizontalCollapseSide(item.collapseSide)) {
+            const float length = handle.bottom - handle.top;
+            handle.top = std::clamp(handle.top, 0.0F, 1.0F - length);
+            handle.bottom = handle.top + length;
+        } else {
+            const float length = handle.right - handle.left;
+            handle.left = std::clamp(handle.left, 0.0F, 1.0F - length);
+            handle.right = handle.left + length;
+        }
+        if (handle.right - handle.left < 0.001F || handle.bottom - handle.top < 0.001F) {
+            return false;
+        }
+
+        item.expandedX = expanded.left;
+        item.expandedY = expanded.top;
+        item.expandedWidth = expanded.right - expanded.left;
+        item.expandedHeight = expanded.bottom - expanded.top;
+        item.handleX = handle.left;
+        item.handleY = handle.top;
+        item.handleWidth = handle.right - handle.left;
+        item.handleHeight = handle.bottom - handle.top;
+        item.x = handle.left;
+        item.y = handle.top;
+        item.width = item.handleWidth;
+        item.height = item.handleHeight;
+    }
+    return true;
+}
+
 ModuleLayout ModuleLayout::Defaults() noexcept {
     return ModuleLayout{
         {{{ModuleId::Rivan, 0.0F, 0.0F, 0.44F, 0.24F, true, ModuleDockState::Floating},
@@ -110,10 +437,7 @@ bool ModuleLayout::IsCollapseHandleVisible(ModuleId id) const noexcept {
 void ModuleLayout::ClearModuleCollapse(ModuleId id) noexcept {
     if (auto* item = Find(id)) {
         if (item->collapsed) {
-            const bool hasExpandedGeometry = item->expandedWidth >= 0.10F &&
-                item->expandedHeight >= 0.10F && item->expandedX >= 0.0F &&
-                item->expandedY >= 0.0F && item->expandedX + item->expandedWidth <= 1.0F &&
-                item->expandedY + item->expandedHeight <= 1.0F;
+            const bool hasExpandedGeometry = HasUsableExpandedGeometry(*item);
             if (hasExpandedGeometry) {
                 item->x = item->expandedX;
                 item->y = item->expandedY;
@@ -138,6 +462,15 @@ void ModuleLayout::ClearCollapseReferences(ModuleId target) noexcept {
     for (const auto& candidate : items) {
         if (candidate.id != target && candidate.collapseTarget == target &&
             candidate.collapseMode != ModuleCollapseMode::None) {
+            ClearModuleCollapse(candidate.id);
+        }
+    }
+}
+
+void ModuleLayout::ClearInsideCollapseReferences(ModuleId target) noexcept {
+    for (const auto& candidate : items) {
+        if (candidate.id != target && candidate.collapseTarget == target &&
+            candidate.collapseMode == ModuleCollapseMode::Inside) {
             ClearModuleCollapse(candidate.id);
         }
     }
@@ -216,7 +549,7 @@ void ModuleLayout::SetTabGroupGeometry(ModuleId root, ModuleNormalizedRect bound
         candidate.y = bounds.top;
         candidate.width = bounds.right - bounds.left;
         candidate.height = bounds.bottom - bounds.top;
-        SyncExpandedGeometry(candidate);
+        if (!candidate.collapsed) SyncExpandedGeometry(candidate);
     }
 }
 
@@ -313,14 +646,7 @@ bool ModuleLayout::HasValidGeometry() const noexcept {
             return false;
         }
         if (!item.collapsed && (item.width < 0.10F || item.height < 0.10F)) return false;
-        if (item.collapsed && (!std::isfinite(item.expandedX) ||
-                               !std::isfinite(item.expandedY) ||
-                               !std::isfinite(item.expandedWidth) ||
-                               !std::isfinite(item.expandedHeight) ||
-                               item.expandedWidth < 0.10F || item.expandedHeight < 0.10F ||
-                               item.expandedX < 0.0F || item.expandedY < 0.0F ||
-                               item.expandedX + item.expandedWidth > 1.0F ||
-                               item.expandedY + item.expandedHeight > 1.0F)) {
+        if (item.collapsed && !HasUsableExpandedGeometry(item)) {
             return false;
         }
     }
@@ -434,6 +760,65 @@ bool ModuleLayout::HasNewConflictingGeometry(const ModuleLayout& before) const n
         }
     }
     return false;
+}
+
+bool ModuleLayout::ResizeModule(ModuleId id, float pointerX, float pointerY,
+                                bool resizeRight, bool resizeBottom,
+                                bool resizeLeft, bool resizeTop,
+                                bool squashOverlapping) noexcept {
+    const ModuleId geometryId = TabRoot(id);
+    if (IsSnapGrouped(geometryId)) {
+        return ResizeSnapGroup(geometryId, pointerX, pointerY, resizeRight,
+                               resizeBottom, resizeLeft, resizeTop,
+                               squashOverlapping);
+    }
+
+    auto* item = Find(geometryId);
+    if (!item) return false;
+    const ModuleLayout before = *this;
+    const auto oldBounds = Bounds(*item);
+    ModuleNormalizedRect newBounds = oldBounds;
+    if (resizeLeft) {
+        newBounds.left = std::clamp(pointerX, 0.0F,
+                                    oldBounds.right - kMinimumModuleExtent);
+    }
+    if (resizeTop) {
+        newBounds.top = std::clamp(pointerY, 0.0F,
+                                   oldBounds.bottom - kMinimumModuleExtent);
+    }
+    if (resizeRight) {
+        newBounds.right = std::clamp(pointerX,
+                                     oldBounds.left + kMinimumModuleExtent, 1.0F);
+    }
+    if (resizeBottom) {
+        newBounds.bottom = std::clamp(pointerY,
+                                      oldBounds.top + kMinimumModuleExtent, 1.0F);
+    }
+    if (squashOverlapping) {
+        SquashResizeObstacles(*this, geometryId, oldBounds, newBounds,
+                              resizeRight, resizeBottom, resizeLeft, resizeTop);
+    }
+    if (newBounds.right - newBounds.left < kMinimumModuleExtent ||
+        newBounds.bottom - newBounds.top < kMinimumModuleExtent) return false;
+
+    if (IsTabbed(geometryId)) SetTabGroupGeometry(geometryId, newBounds);
+    else {
+        item->x = newBounds.left;
+        item->y = newBounds.top;
+        item->width = newBounds.right - newBounds.left;
+        item->height = newBounds.bottom - newBounds.top;
+        if (!item->collapsed) SyncExpandedGeometry(*item);
+    }
+    ScaleCollapsedInsideModules(geometryId, oldBounds, newBounds);
+    if (!ReattachOutsideCollapseHandles(before)) {
+        *this = before;
+        return false;
+    }
+    if (squashOverlapping && HasNewConflictingGeometry(before)) {
+        *this = before;
+        return false;
+    }
+    return true;
 }
 
 bool ModuleLayout::FindplusWindowRectangle(
@@ -595,13 +980,15 @@ void ModuleLayout::DetachSnapModule(ModuleId id) noexcept {
     }
 }
 
-void ModuleLayout::ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
+bool ModuleLayout::ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
                                    bool resizeRight, bool resizeBottom,
-                                   bool resizeLeft, bool resizeTop) noexcept {
-    if (!IsSnapGrouped(id)) return;
+                                   bool resizeLeft, bool resizeTop,
+                                   bool squashOverlapping) noexcept {
+    if (!IsSnapGrouped(id)) return false;
+    const ModuleLayout before = *this;
     const auto root = SnapRoot(id);
     const auto* selected = Find(id);
-    if (!selected) return;
+    if (!selected) return false;
 
     float groupLeft = 1.0F;
     float groupTop = 1.0F;
@@ -631,7 +1018,7 @@ void ModuleLayout::ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
     }
     const float groupWidth = groupRight - groupLeft;
     const float groupHeight = groupBottom - groupTop;
-    if (!(groupWidth > 0.0F) || !(groupHeight > 0.0F)) return;
+    if (!(groupWidth > 0.0F) || !(groupHeight > 0.0F)) return false;
 
     float newLeft = groupLeft;
     float newTop = groupTop;
@@ -671,26 +1058,31 @@ void ModuleLayout::ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
     }
 
     for (const auto& item : items) {
-        if (!item.visible || SnapRoot(item.id) == root) continue;
+        if (!item.visible || SnapRoot(item.id) == root ||
+            (item.collapsed && item.collapseMode == ModuleCollapseMode::Outside &&
+             !item.collapseTargetIsWindow &&
+             SnapRoot(TabRoot(item.collapseTarget)) == root)) {
+            continue;
+        }
         const auto obstacle = Bounds(item);
-        if (resizeRight && obstacle.left >= groupRight &&
+        if (squashOverlapping && resizeRight && obstacle.left >= groupRight &&
             newTop < obstacle.bottom && newBottom > obstacle.top) {
-            newRight = std::min(newRight, obstacle.left);
+            newRight = std::min(newRight, obstacle.right - kMinimumModuleExtent);
         }
-        if (resizeLeft && obstacle.right <= groupLeft &&
+        if (squashOverlapping && resizeLeft && obstacle.right <= groupLeft &&
             newTop < obstacle.bottom && newBottom > obstacle.top) {
-            newLeft = std::max(newLeft, obstacle.right);
+            newLeft = std::max(newLeft, obstacle.left + kMinimumModuleExtent);
         }
-        if (resizeBottom && obstacle.top >= groupBottom &&
+        if (squashOverlapping && resizeBottom && obstacle.top >= groupBottom &&
             newLeft < obstacle.right && newRight > obstacle.left) {
-            newBottom = std::min(newBottom, obstacle.top);
+            newBottom = std::min(newBottom, obstacle.bottom - kMinimumModuleExtent);
         }
-        if (resizeTop && obstacle.bottom <= groupTop &&
+        if (squashOverlapping && resizeTop && obstacle.bottom <= groupTop &&
             newLeft < obstacle.right && newRight > obstacle.left) {
-            newTop = std::max(newTop, obstacle.bottom);
+            newTop = std::max(newTop, obstacle.top + kMinimumModuleExtent);
         }
     }
-    if (newRight - newLeft < minimumWidth || newBottom - newTop < minimumHeight) return;
+    if (newRight - newLeft < minimumWidth || newBottom - newTop < minimumHeight) return false;
 
     const float scaleX = (newRight - newLeft) / groupWidth;
     const float scaleY = (newBottom - newTop) / groupHeight;
@@ -700,10 +1092,24 @@ void ModuleLayout::ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
         item.y = newTop + (item.y - groupTop) * scaleY;
         item.width *= scaleX;
         item.height *= scaleY;
-        SyncExpandedGeometry(item);
+        if (!item.collapsed) SyncExpandedGeometry(item);
     }
     ScaleCollapsedInsideModules(root, {groupLeft, groupTop, groupRight, groupBottom},
                                 {newLeft, newTop, newRight, newBottom});
+    if (squashOverlapping) {
+        ModuleNormalizedRect newBounds{newLeft, newTop, newRight, newBottom};
+        SquashResizeObstacles(*this, root, {groupLeft, groupTop, groupRight, groupBottom},
+                              newBounds, resizeRight, resizeBottom, resizeLeft, resizeTop);
+        if (HasNewConflictingGeometry(before)) {
+            *this = before;
+            return false;
+        }
+    }
+    if (!ReattachOutsideCollapseHandles(before)) {
+        *this = before;
+        return false;
+    }
+    return true;
 }
 
 bool ModuleLayout::PreservePixelGeometry(float oldWidth, float oldHeight,
@@ -771,39 +1177,116 @@ bool ModuleLayout::PreservePixelGeometry(float oldWidth, float oldHeight,
             position = leading / newExtent;
             length = (trailing - leading) / newExtent;
         };
+        const auto transformCollapsedHandle = [oldExtent, newExtent, resizeLeading,
+                                               resizeTrailing, edgeResize, delta,
+                                               shift](float& position, float& length) {
+            constexpr float edgeTolerance = 0.01F;
+            float leading = position * oldExtent;
+            const float originalLength = std::max(0.0F, length * oldExtent);
+            float trailing = leading + originalLength;
+            const bool touchesLeading = leading <= edgeTolerance;
+            const bool touchesTrailing = trailing >= oldExtent - edgeTolerance;
+            if (edgeResize) {
+                if (resizeLeading) {
+                    leading += delta;
+                    trailing = leading + originalLength;
+                    if (touchesLeading) {
+                        leading = 0.0F;
+                        trailing = originalLength;
+                    }
+                }
+                if (resizeTrailing && touchesTrailing) {
+                    trailing = newExtent;
+                    leading = trailing - originalLength;
+                }
+            } else {
+                leading += shift;
+                trailing += shift;
+            }
+            const float clampedLength = std::min(originalLength, newExtent);
+            leading = std::clamp(leading, 0.0F, newExtent - clampedLength);
+            trailing = leading + clampedLength;
+            position = leading / newExtent;
+            length = clampedLength / newExtent;
+        };
+        const auto transformCollapsedExpanded = [oldExtent, newExtent, resizeLeading,
+                                                 edgeResize, delta, shift](float& position,
+                                                                            float& length) {
+            constexpr float edgeTolerance = 0.01F;
+            float leading = position * oldExtent;
+            const float physicalLength = length * oldExtent;
+            if (edgeResize) {
+                if (resizeLeading) {
+                    leading += delta;
+                    if (leading <= edgeTolerance) leading = 0.0F;
+                }
+            } else {
+                leading += shift;
+            }
+            position = leading / newExtent;
+            length = physicalLength / newExtent;
+        };
 
         ModuleLayout candidate = *this;
         for (auto& item : candidate.items) {
             if (!item.visible) continue;
             if (horizontal) {
-                transform(item.x, item.width);
-                if (item.collapseMode != ModuleCollapseMode::None) {
-                    transform(item.handleX, item.handleWidth);
+                if (item.collapsed) {
+                    transformCollapsedHandle(item.x, item.width);
+                    item.handleX = item.x;
+                    item.handleWidth = item.width;
+                } else {
+                    transform(item.x, item.width);
+                    if (item.collapseMode != ModuleCollapseMode::None) {
+                        transform(item.handleX, item.handleWidth);
+                    }
                 }
-                if (item.collapsed) transform(item.expandedX, item.expandedWidth);
+                if (item.collapsed) {
+                    transformCollapsedExpanded(item.expandedX, item.expandedWidth);
+                }
             } else {
-                transform(item.y, item.height);
-                if (item.collapseMode != ModuleCollapseMode::None) {
-                    transform(item.handleY, item.handleHeight);
+                if (item.collapsed) {
+                    transformCollapsedHandle(item.y, item.height);
+                    item.handleY = item.y;
+                    item.handleHeight = item.height;
+                } else {
+                    transform(item.y, item.height);
+                    if (item.collapseMode != ModuleCollapseMode::None) {
+                        transform(item.handleY, item.handleHeight);
+                    }
                 }
-                if (item.collapsed) transform(item.expandedY, item.expandedHeight);
+                if (item.collapsed) {
+                    transformCollapsedExpanded(item.expandedY, item.expandedHeight);
+                }
             }
             const float position = horizontal ? item.x : item.y;
             const float length = horizontal ? item.width : item.height;
+            const bool outsideModuleCollapse = item.collapsed &&
+                item.collapseMode == ModuleCollapseMode::Outside &&
+                !item.collapseTargetIsWindow;
             if (!std::isfinite(position) || !std::isfinite(length) || !(length > 0.0F) ||
-                position < -edgeTolerance || position + length > 1.0F + edgeTolerance) {
+                (!outsideModuleCollapse &&
+                 (position < -edgeTolerance || position + length > 1.0F + edgeTolerance))) {
                 return false;
             }
             if (item.collapsed) {
-                const float expandedPosition = horizontal ? item.expandedX : item.expandedY;
-                const float expandedLength = horizontal ? item.expandedWidth : item.expandedHeight;
-                if (!std::isfinite(expandedPosition) || !std::isfinite(expandedLength) ||
-                    !(expandedLength >= 0.10F) || expandedPosition < -edgeTolerance ||
-                    expandedPosition + expandedLength > 1.0F + edgeTolerance) {
+                if (!HasUsableExpandedGeometry(item)) {
                     return false;
                 }
             }
-            ModuleLayout::SyncExpandedGeometry(item);
+            if (!item.collapsed) ModuleLayout::SyncExpandedGeometry(item);
+        }
+        bool hasOutsideModuleCollapse = false;
+        for (const auto& item : candidate.items) {
+            if (item.visible && item.collapsed &&
+                item.collapseMode == ModuleCollapseMode::Outside &&
+                !item.collapseTargetIsWindow) {
+                hasOutsideModuleCollapse = true;
+                break;
+            }
+        }
+        if (hasOutsideModuleCollapse && !candidate.ReattachOutsideCollapseHandles(*this)) {
+            return false;
         }
         *this = candidate;
         return true;
@@ -812,6 +1295,58 @@ bool ModuleLayout::PreservePixelGeometry(float oldWidth, float oldHeight,
     const bool changedX = preserveAxis(oldWidth, newWidth, true, resizeLeft, resizeRight);
     const bool changedY = preserveAxis(oldHeight, newHeight, false, resizeTop, resizeBottom);
     return changedX || changedY;
+}
+
+bool ModuleLayout::PreserveCollapsedExpandedGeometry(
+    float oldWidth, float oldHeight, float newWidth, float newHeight,
+    bool /*resizeRight*/, bool /*resizeBottom*/, bool resizeLeft, bool resizeTop) noexcept {
+    if (!std::isfinite(oldWidth) || !std::isfinite(oldHeight) ||
+        !std::isfinite(newWidth) || !std::isfinite(newHeight) ||
+        !(oldWidth > 0.0F) || !(oldHeight > 0.0F) ||
+        !(newWidth > 0.0F) || !(newHeight > 0.0F)) {
+        return false;
+    }
+
+    const auto preserveAxis = [](float oldExtent, float newExtent,
+                                  bool resizeLeading, float& position,
+                                  float& length) noexcept {
+        const float physicalPosition = position * oldExtent;
+        const float physicalLength = length * oldExtent;
+        if (!std::isfinite(physicalPosition) || !std::isfinite(physicalLength)) {
+            return false;
+        }
+
+        const float leading = physicalPosition +
+            (resizeLeading ? newExtent - oldExtent : 0.0F);
+        position = leading / newExtent;
+        length = physicalLength / newExtent;
+        return std::isfinite(position) && std::isfinite(length);
+    };
+
+    ModuleLayout candidate = *this;
+    bool changed = false;
+    for (auto& item : candidate.items) {
+        if (!item.collapsed) continue;
+        if (!HasUsableExpandedGeometry(item)) return false;
+
+        const float oldX = item.expandedX;
+        const float oldY = item.expandedY;
+        const float itemOldWidth = item.expandedWidth;
+        const float itemOldHeight = item.expandedHeight;
+        if (!preserveAxis(oldWidth, newWidth, resizeLeft,
+                          item.expandedX, item.expandedWidth) ||
+            !preserveAxis(oldHeight, newHeight, resizeTop,
+                          item.expandedY, item.expandedHeight) ||
+            !HasUsableExpandedGeometry(item)) {
+            return false;
+        }
+        changed = changed || item.expandedX != oldX || item.expandedY != oldY ||
+            item.expandedWidth != itemOldWidth || item.expandedHeight != itemOldHeight;
+    }
+
+    if (!changed) return false;
+    *this = candidate;
+    return true;
 }
 
 } // namespace rivan::ui

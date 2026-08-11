@@ -142,13 +142,17 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
         ReadBoolField(*document, "modules", key + "collapse_window",
                       item.collapseTargetIsWindow, warnings);
         ReadBoolField(*document, "modules", key + "collapsed", item.collapsed, warnings);
-        ReadFloatField(*document, "modules", key + "expanded_x", 0.0F, 1.0F,
+        ReadFloatField(*document, "modules", key + "expanded_x",
+                       -kMaximumStoredModuleCoordinate, kMaximumStoredModuleCoordinate,
                        item.expandedX, warnings);
-        ReadFloatField(*document, "modules", key + "expanded_y", 0.0F, 1.0F,
+        ReadFloatField(*document, "modules", key + "expanded_y",
+                       -kMaximumStoredModuleCoordinate, kMaximumStoredModuleCoordinate,
                        item.expandedY, warnings);
-        ReadFloatField(*document, "modules", key + "expanded_width", 0.0F, 1.0F,
+        ReadFloatField(*document, "modules", key + "expanded_width", 0.0F,
+                       kMaximumStoredModuleCoordinate,
                        item.expandedWidth, warnings);
-        ReadFloatField(*document, "modules", key + "expanded_height", 0.0F, 1.0F,
+        ReadFloatField(*document, "modules", key + "expanded_height", 0.0F,
+                       kMaximumStoredModuleCoordinate,
                        item.expandedHeight, warnings);
         ReadFloatField(*document, "modules", key + "handle_x", 0.0F, 1.0F,
                        item.handleX, warnings);
@@ -160,7 +164,7 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
                        item.handleHeight, warnings);
         item.x = std::min(item.x, 1.0F - item.width);
         item.y = std::min(item.y, 1.0F - item.height);
-        ui::ModuleLayout::SyncExpandedGeometry(item);
+        if (!item.collapsed) ui::ModuleLayout::SyncExpandedGeometry(item);
     }
 
     // Sessions written before the standalone video-preview module used the full

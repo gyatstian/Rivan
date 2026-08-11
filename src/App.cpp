@@ -181,7 +181,7 @@ void App::SetModuleLayout(ui::ModuleLayout layout) {
         item.height = std::clamp(item.height, item.collapsed ? 0.001F : 0.10F, 1.0F);
         item.x = std::min(item.x, 1.0F - item.width);
         item.y = std::min(item.y, 1.0F - item.height);
-        ui::ModuleLayout::SyncExpandedGeometry(item);
+        if (!item.collapsed) ui::ModuleLayout::SyncExpandedGeometry(item);
     }
     if (layout.tabCount > layout.tabOrder.size()) layout.tabCount = layout.tabOrder.size();
     layout.activeTab = std::min(layout.activeTab, layout.tabCount == 0 ? 0U : layout.tabCount - 1U);
@@ -489,6 +489,17 @@ void App::SetWindowResizeBehavior(ui::WindowResizeBehavior behavior) {
     auto settings = settings_.Settings();
     if (settings.windowResizeBehavior == behavior) return;
     settings.windowResizeBehavior = behavior;
+    std::string error;
+    if (!settings_.SetSettings(settings, &error)) return;
+    (void)settings_.SaveSettings(&error);
+    ++revision_;
+    if (window_) window_->Refresh();
+}
+
+void App::SetModuleResizeBehavior(ui::ModuleResizeBehavior behavior) {
+    auto settings = settings_.Settings();
+    if (settings.moduleResizeBehavior == behavior) return;
+    settings.moduleResizeBehavior = behavior;
     std::string error;
     if (!settings_.SetSettings(settings, &error)) return;
     (void)settings_.SaveSettings(&error);
