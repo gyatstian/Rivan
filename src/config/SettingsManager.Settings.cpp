@@ -95,6 +95,12 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
         if (ec != std::errc{} || ptr != countText->data() + countText->size() || count < 0) {
             AddWarning(warnings, "Ignoring invalid library.additional_root_count");
         } else {
+            constexpr int kMaximumAdditionalRoots = 100;
+            if (count > kMaximumAdditionalRoots) {
+                AddWarning(warnings, "Limiting library.additional_root_count to " +
+                                         std::to_string(kMaximumAdditionalRoots));
+                count = kMaximumAdditionalRoots;
+            }
             settings_.additionalMusicRoots.reserve(static_cast<std::size_t>(count));
             for (int i = 0; i < count; ++i) {
                 const auto key = "additional_root" + std::to_string(i);

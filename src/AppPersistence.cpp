@@ -18,9 +18,11 @@ void App::PersistState() {
         std::clamp(status.volume, 0.0F, 1.0F) * 100.0F));
 
     auto session = settings_.Session();
-    if (window_ && window_->WindowHandle()) {
+    if (window_) {
         RECT rectangle{};
-        if (GetWindowRect(window_->WindowHandle(), &rectangle)) {
+        // Prefer the live rect; fall back to the UI-cached one because the window is
+        // already destroyed by the time App's shutdown persistence runs.
+        if (window_->LastWindowRect(rectangle)) {
             const RECT source = miniPlayer_ && normalWindowRect_.right > normalWindowRect_.left
                                     ? normalWindowRect_ : rectangle;
             session.window = {source.left, source.top, source.right - source.left,

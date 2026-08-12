@@ -20,16 +20,11 @@ public:
     void ResetCapacity(const std::size_t capacity, const std::size_t alignment = 1) {
         alignment_ = alignment == 0 ? 1 : alignment;
         // Prefer power-of-two capacity for mask indexing; keep alignment so PCM frames stay whole.
-        auto rounded = RoundUpPowerOfTwo(capacity);
-        if (rounded != 0) {
-            // Grow until capacity is a multiple of alignment (always true when alignment is pot).
-            while (rounded % alignment_ != 0) {
-                if (rounded > (std::size_t{1} << (sizeof(std::size_t) * 8 - 2))) {
-                    rounded -= rounded % alignment_;
-                    break;
-                }
-                rounded <<= 1U;
-            }
+        auto rounded = capacity;
+        if (IsPowerOfTwo(alignment_)) {
+            rounded = RoundUpPowerOfTwo(capacity);
+        } else if (rounded % alignment_ != 0) {
+            rounded += alignment_ - (rounded % alignment_);
         }
         data_.assign(rounded, std::byte{});
         mask_ = IsPowerOfTwo(rounded) && rounded != 0 ? rounded - 1 : 0;

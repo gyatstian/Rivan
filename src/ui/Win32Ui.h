@@ -38,6 +38,10 @@ public:
     // Creates a top-level window. The owner remains responsible for the message loop.
     [[nodiscard]] bool Create(HINSTANCE instance, const WindowOptions& options = {});
     [[nodiscard]] HWND WindowHandle() const noexcept;
+    // Returns the current window rectangle, or the most recently observed one once the
+    // window is destroyed (e.g. from App shutdown persistence). Falls back to false
+    // when neither is available.
+    [[nodiscard]] bool LastWindowRect(RECT& out) const noexcept;
     void Refresh() noexcept;
     void RevealYoutubeChooser() noexcept;
     [[nodiscard]] bool UpdateYoutubeGrabberHotkey(std::uint32_t modifiers,

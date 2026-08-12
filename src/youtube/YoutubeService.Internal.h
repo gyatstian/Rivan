@@ -43,8 +43,6 @@ using ProcessLineCallback = std::function<void(std::string_view line)>;
 
 [[nodiscard]] std::optional<std::filesystem::path> FindDownloadedFile(
     const std::filesystem::path& directory, std::wstring_view videoId);
-[[nodiscard]] std::filesystem::path StripIdSuffixAndRename(
-    const std::filesystem::path& file, std::wstring_view videoId);
 
 [[nodiscard]] bool DownloadUrlToFile(const wchar_t* url,
                                      const std::filesystem::path& dest,

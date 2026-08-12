@@ -2,8 +2,21 @@
 #include "ModuleLayout.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace rivan::ui {
+
+namespace {
+
+bool HasFiniteOrderedRectangle(const ModuleNormalizedRect& bounds) noexcept {
+    return std::isfinite(bounds.left) && std::isfinite(bounds.top) &&
+           std::isfinite(bounds.right) && std::isfinite(bounds.bottom) &&
+           bounds.right > bounds.left && bounds.bottom > bounds.top &&
+           std::isfinite(bounds.right - bounds.left) &&
+           std::isfinite(bounds.bottom - bounds.top);
+}
+
+} // namespace
 
 bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone) noexcept {
     if (source == target || !IsSideDrop(zone)) return false;
@@ -22,6 +35,11 @@ bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone)
     std::array<ModuleId, 6> sourceMembers{};
     const std::size_t sourceMemberCount = MovingMembers(source, sourceMembers);
     const ModuleLayoutItem targetGeometry = *targetItem;
+    if (!HasFiniteOrderedRectangle(Bounds(targetGeometry))) return false;
+    for (std::size_t index = 0; index < sourceMemberCount; ++index) {
+        const auto* sourceItem = Find(sourceMembers[index]);
+        if (!sourceItem || !HasFiniteOrderedRectangle(Bounds(*sourceItem))) return false;
+    }
     if ((zone == ModuleDropZone::Left || zone == ModuleDropZone::Right) &&
         targetGeometry.width < 0.20F) return false;
     if ((zone == ModuleDropZone::Top || zone == ModuleDropZone::Bottom) &&
@@ -132,11 +150,19 @@ bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone)
 }
 
 bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
-                                float pointerX, float pointerY) noexcept {
-    if (!IsWindowDrop(zone)) return false;
+                                 float pointerX, float pointerY) noexcept {
+    if (!IsWindowDrop(zone) || !std::isfinite(pointerX) || !std::isfinite(pointerY)) return false;
     const auto region = ModuleWindowDropBounds(zone);
     ModuleNormalizedRect destination{};
     const ModuleLayout before = *this;
+    const auto fail = [this, &before]() noexcept {
+        *this = before;
+        return false;
+    };
+
+    for (const auto& item : items) {
+        if (item.visible && !HasFiniteOrderedRectangle(Bounds(item))) return false;
+    }
     const bool freeDestination = FindplusWindowRectangle(
         source, region, pointerX, pointerY, 0.10F, 0.10F, destination);
 
@@ -159,8 +185,12 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
         }
         if (!target) return false;
         targetRoot = TabRoot(target->id);
+        const auto* targetRootItem = Find(targetRoot);
+        if (!targetRootItem || !HasFiniteOrderedRectangle(Bounds(*targetRootItem))) {
+            return false;
+        }
         splitTargetFound = true;
-        const auto targetGeometry = Bounds(*Find(targetRoot));
+        const auto targetGeometry = Bounds(*targetRootItem);
         const bool horizontal = zone == ModuleWindowDropZone::RightTop ||
                                 zone == ModuleWindowDropZone::RightBottom ||
                                 zone == ModuleWindowDropZone::LeftTop ||
@@ -194,15 +224,20 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
             return false;
         }
     }
+    if (!HasFiniteOrderedRectangle(destination) ||
+        destination.right - destination.left < 0.10F ||
+        destination.bottom - destination.top < 0.10F) {
+        return false;
+    }
 
     ModuleNormalizedRect sourceBounds{1.0F, 1.0F, 0.0F, 0.0F};
     for (std::size_t index = 0; index < movingCount; ++index) {
-        if (const auto* item = Find(moving[index])) {
-            sourceBounds.left = std::min(sourceBounds.left, item->x);
-            sourceBounds.top = std::min(sourceBounds.top, item->y);
-            sourceBounds.right = std::max(sourceBounds.right, item->x + item->width);
-            sourceBounds.bottom = std::max(sourceBounds.bottom, item->y + item->height);
-        }
+        const auto* item = Find(moving[index]);
+        if (!item || !HasFiniteOrderedRectangle(Bounds(*item))) return false;
+        sourceBounds.left = std::min(sourceBounds.left, item->x);
+        sourceBounds.top = std::min(sourceBounds.top, item->y);
+        sourceBounds.right = std::max(sourceBounds.right, item->x + item->width);
+        sourceBounds.bottom = std::max(sourceBounds.bottom, item->y + item->height);
     }
     const float sourceWidth = sourceBounds.right - sourceBounds.left;
     const float sourceHeight = sourceBounds.bottom - sourceBounds.top;
@@ -210,62 +245,62 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
     const float scaleX = (destination.right - destination.left) / sourceWidth;
     const float scaleY = (destination.bottom - destination.top) / sourceHeight;
     for (std::size_t index = 0; index < movingCount; ++index) {
-        if (auto* item = Find(moving[index])) {
-            item->visible = true;
-            if (movingCount == 1) {
-                item->x = destination.left;
-                item->y = destination.top;
-                item->width = destination.right - destination.left;
-                item->height = destination.bottom - destination.top;
-            } else {
-                item->x = destination.left + (item->x - sourceBounds.left) * scaleX;
-                item->y = destination.top + (item->y - sourceBounds.top) * scaleY;
-                item->width *= scaleX;
-                item->height *= scaleY;
-            }
-            item->dockState = ModuleDockState::Snapped;
-            if (!item->collapsed) SyncExpandedGeometry(*item);
+        auto* item = Find(moving[index]);
+        if (!item) return fail();
+        item->visible = true;
+        if (movingCount == 1) {
+            item->x = destination.left;
+            item->y = destination.top;
+            item->width = destination.right - destination.left;
+            item->height = destination.bottom - destination.top;
+        } else {
+            item->x = destination.left + (item->x - sourceBounds.left) * scaleX;
+            item->y = destination.top + (item->y - sourceBounds.top) * scaleY;
+            item->width *= scaleX;
+            item->height *= scaleY;
         }
+        item->dockState = ModuleDockState::Snapped;
+        if (!item->collapsed) SyncExpandedGeometry(*item);
     }
     if (!freeDestination && splitTargetFound) {
-        if (auto* target = Find(targetRoot)) {
-            const auto targetBounds = Bounds(*target);
-            const bool horizontal = destination.left == targetBounds.left &&
-                                    destination.right == targetBounds.right;
-            ModuleNormalizedRect remainder = targetBounds;
-            if (horizontal) {
-                if (destination.top <= targetBounds.top) remainder.top = destination.bottom;
-                else remainder.bottom = destination.top;
-            } else {
-                if (destination.left <= targetBounds.left) remainder.left = destination.right;
-                else remainder.right = destination.left;
+        auto* target = Find(targetRoot);
+        if (!target || !HasFiniteOrderedRectangle(Bounds(*target))) return fail();
+        const auto targetBounds = Bounds(*target);
+        const bool horizontal = destination.left == targetBounds.left &&
+                                destination.right == targetBounds.right;
+        ModuleNormalizedRect remainder = targetBounds;
+        if (horizontal) {
+            if (destination.top <= targetBounds.top) remainder.top = destination.bottom;
+            else remainder.bottom = destination.top;
+        } else {
+            if (destination.left <= targetBounds.left) remainder.left = destination.right;
+            else remainder.right = destination.left;
+        }
+        if (!HasFiniteOrderedRectangle(remainder) ||
+            remainder.right - remainder.left < 0.10F ||
+            remainder.bottom - remainder.top < 0.10F) {
+            return fail();
+        }
+        target->x = remainder.left;
+        target->y = remainder.top;
+        target->width = remainder.right - remainder.left;
+        target->height = remainder.bottom - remainder.top;
+        target->dockState = ModuleDockState::Snapped;
+        if (!target->collapsed) SyncExpandedGeometry(*target);
+        for (std::size_t tab = 0; tab < TabCount(); ++tab) {
+            if (auto* tabItem = Find(tabOrder[tab]);
+                tabItem != nullptr && TabRoot(tabItem->id) == targetRoot) {
+                tabItem->x = target->x;
+                tabItem->y = target->y;
+                tabItem->width = target->width;
+                tabItem->height = target->height;
+                if (!tabItem->collapsed) SyncExpandedGeometry(*tabItem);
             }
-            if (remainder.right - remainder.left < 0.10F ||
-                remainder.bottom - remainder.top < 0.10F) {
-                *this = before;
-                return false;
-            }
-            target->x = remainder.left;
-            target->y = remainder.top;
-            target->width = remainder.right - remainder.left;
-            target->height = remainder.bottom - remainder.top;
-            target->dockState = ModuleDockState::Snapped;
-            if (!target->collapsed) SyncExpandedGeometry(*target);
-            for (std::size_t tab = 0; tab < TabCount(); ++tab) {
-                if (auto* tabItem = Find(tabOrder[tab]);
-                    tabItem != nullptr && TabRoot(tabItem->id) == targetRoot) {
-                    tabItem->x = target->x;
-                    tabItem->y = target->y;
-                    tabItem->width = target->width;
-                    tabItem->height = target->height;
-                    if (!tabItem->collapsed) SyncExpandedGeometry(*tabItem);
-                }
-            }
-            for (std::size_t index = 0; index < movingCount; ++index) {
-                if (auto* moved = Find(moving[index])) {
-                    snapGroup[static_cast<std::size_t>(moved - items.data())] = targetRoot;
-                }
-            }
+        }
+        for (std::size_t index = 0; index < movingCount; ++index) {
+            auto* moved = Find(moving[index]);
+            if (!moved) return fail();
+            snapGroup[static_cast<std::size_t>(moved - items.data())] = targetRoot;
         }
     }
     if (!ReattachOutsideCollapseHandles(before)) {

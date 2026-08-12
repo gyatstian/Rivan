@@ -36,7 +36,6 @@ public:
     void LatestInto(AudioAnalysisSnapshot& out, std::size_t maximumFrames) const;
     // Cheap generation probe for consumers that only need change detection.
     [[nodiscard]] std::uint64_t Generation() const noexcept;
-    [[nodiscard]] std::size_t StoredFrames() const noexcept;
 
 private:
     mutable std::mutex mutex_;

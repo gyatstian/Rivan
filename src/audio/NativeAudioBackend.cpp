@@ -240,7 +240,7 @@ private:
 
         const std::span<const unsigned char> bytes{buffer.data(), bytesRead};
         for (std::size_t offset = bytes.size() - 27;; --offset) {
-            if (MatchesBytes(bytes, offset, "OggS") && bytes[offset + 4] == 0) {
+            if (MatchesBytes(bytes, offset, "OggS") && offset + 5 <= bytes.size() && bytes[offset + 4] == 0) {
                 const auto pageOffset = chunkStart + offset;
                 const auto segmentCount = static_cast<std::uintmax_t>(bytes[offset + 26]);
                 if (pageOffset + 27 + segmentCount <= fileSize) {
@@ -406,9 +406,8 @@ public:
         analysis_.Clear();
     }
 
-    void PumpDecoded(const std::size_t maximumReads) {
+    void PumpDecoded() {
         EnsureMedia("NativeAudioBackend::PumpDecoded");
-        (void)maximumReads;
         if (started_) {
             RethrowDecoderErrorIfAvailable();
         } else {
@@ -445,11 +444,7 @@ public:
 
         const UINT32 availableFrames = endpointBufferFrames_ - padding;
         if (availableFrames == 0) {
-            std::unique_lock lock(bufferMutex_, std::try_to_lock);
-            if (!lock.owns_lock()) {
-                return {};
-            }
-            return {decodeEos_ && pendingSize_ == 0 && decoded_.Size() == 0 && padding == 0};
+            return {};
         }
 
         bool decodingComplete = false;
@@ -1005,8 +1000,8 @@ void NativeAudioBackend::Initialize() { impl_->Initialize(); }
 void NativeAudioBackend::Shutdown() noexcept { impl_->Shutdown(); }
 void NativeAudioBackend::Open(const std::filesystem::path& file) { impl_->Open(file); }
 void NativeAudioBackend::Close() noexcept { impl_->Close(); }
-void NativeAudioBackend::PumpDecoded(const std::size_t maximumReads) {
-    impl_->PumpDecoded(maximumReads);
+void NativeAudioBackend::PumpDecoded() {
+    impl_->PumpDecoded();
 }
 RenderResult NativeAudioBackend::Render() { return impl_->Render(); }
 void NativeAudioBackend::Start() { impl_->Start(); }

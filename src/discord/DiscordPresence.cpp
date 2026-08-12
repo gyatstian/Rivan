@@ -9,6 +9,7 @@
 #include <Windows.h>
 
 #include <chrono>
+#include <cstring>
 #include <string_view>
 #include <utility>
 
@@ -142,27 +143,47 @@ bool DiscordPresence::ReadFrame(std::uint32_t& opcode, std::string& payload,
     if (pipe_ == nullptr || pipe_ == INVALID_HANDLE_VALUE) return false;
     const auto handle = static_cast<HANDLE>(pipe_);
 
-    // Named pipes ignore COMMTIMEOUTS; use PeekNamedPipe for non-blocking drain.
-    if (timeoutMs == 0) {
-        DWORD available = 0;
-        if (!PeekNamedPipe(handle, nullptr, 0, nullptr, &available, nullptr) ||
-            available < sizeof(std::uint32_t) * 2) {
-            return false;
+    const auto waitAvailable = [&](std::uint32_t needed) {
+        if (timeoutMs == 0) {
+            DWORD available = 0;
+            return PeekNamedPipe(handle, nullptr, 0, nullptr, &available, nullptr) != FALSE &&
+                   available >= needed;
         }
-    }
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(timeoutMs);
+        for (;;) {
+            DWORD available = 0;
+            if (PeekNamedPipe(handle, nullptr, 0, nullptr, &available, nullptr) == FALSE) {
+                return false;
+            }
+            if (available >= needed) return true;
+            if (std::chrono::steady_clock::now() >= deadline) return false;
+            Sleep(50);
+        }
+    };
+
+    if (!waitAvailable(sizeof(std::uint32_t) * 2)) return false;
 
     std::uint32_t header[2]{};
-    DWORD read = 0;
-    if (!ReadFile(handle, header, sizeof(header), &read, nullptr) || read != sizeof(header)) {
+    DWORD available = 0;
+    if (!PeekNamedPipe(handle, header, sizeof(header), nullptr, &available, nullptr) ||
+        available < sizeof(header)) {
         return false;
     }
-    opcode = header[0];
     const std::uint32_t length = header[1];
     if (length > kPipeBuffer) return false;
-    payload.assign(length, '\0');
-    if (length == 0) return true;
-    read = 0;
-    return ReadFile(handle, payload.data(), length, &read, nullptr) && read == length;
+    if (length != 0 && !waitAvailable(sizeof(header) + length)) return false;
+
+    std::string frame(sizeof(header) + length, '\0');
+    DWORD read = 0;
+    if (!ReadFile(handle, frame.data(), static_cast<DWORD>(frame.size()), &read, nullptr) ||
+        read != frame.size()) {
+        return false;
+    }
+    std::memcpy(header, frame.data(), sizeof(header));
+    opcode = header[0];
+    payload.assign(frame.data() + sizeof(header), frame.data() + frame.size());
+    return true;
 }
 
 bool DiscordPresence::Handshake() {

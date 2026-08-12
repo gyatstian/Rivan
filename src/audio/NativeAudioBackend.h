@@ -42,7 +42,7 @@ public:
     void Open(const std::filesystem::path& file);
     void Close() noexcept;
 
-    void PumpDecoded(std::size_t maximumReads);
+    void PumpDecoded();
     [[nodiscard]] RenderResult Render();
     void Start();
     void Pause();

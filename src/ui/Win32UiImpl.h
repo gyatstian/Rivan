@@ -298,6 +298,10 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     WindowOptions options{};
     HWND window{};
     HINSTANCE instance{};
+    // Most recently observed window rectangle. Persisted on shutdown after the window
+    // handle is gone, so the App keeps the last size/position instead of the stale value.
+    RECT lastWindowRect{};
+    bool hasWindowRect{};
     UiModel model;
     std::vector<HitRegion> hits;
     struct ColorFocusRegion { D2D1_RECT_F bounds{}; std::size_t index{}; };
@@ -654,6 +658,9 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void Paint();
 
     void Resize(UINT width, UINT height, bool minimized = false);
+
+    // Snapshots the window rectangle for later shutdown persistence.
+    void CaptureWindowRect() noexcept;
 
     // ---- Module interaction (implementation in Win32Ui.ModuleInteraction.cpp) ----
     void BeginModuleDrag(ModuleId id, float x, float y,

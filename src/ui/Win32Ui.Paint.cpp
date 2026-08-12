@@ -21,6 +21,15 @@ void Win32Ui::Impl::SyncRefreshTimer() noexcept {
         SetTimer(window, kRefreshTimer, currentTimerMs, nullptr);
     }
 
+void Win32Ui::Impl::CaptureWindowRect() noexcept {
+    if (!window) return;
+    RECT rectangle{};
+    if (GetWindowRect(window, &rectangle)) {
+        lastWindowRect = rectangle;
+        hasWindowRect = true;
+    }
+}
+
 [[nodiscard]] bool Win32Ui::Impl::HasTitlebar() const noexcept {
     return !(windowKind == WindowKind::Main && previewFullscreen &&
              previewIsVideo && IsVideoPreviewModuleVisible());

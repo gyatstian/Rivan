@@ -74,15 +74,25 @@ void PlaylistManager::ReplaceLibrary(std::vector<library::Track> tracks,
             continue;
         }
         auto& playlist = playlists_[found->second];
-        for (const auto id : it->second) playlist.AddTrack(id);
+        std::unordered_set<library::TrackId> seen(playlist.trackIds.begin(),
+                                                  playlist.trackIds.end());
+        playlist.trackIds.reserve(playlist.trackIds.size() + it->second.size());
+        for (const auto id : it->second) {
+            if (seen.insert(id).second) playlist.trackIds.push_back(id);
+        }
         importedIds.insert(it->second.begin(), it->second.end());
         ++it;
     }
     // Imported folder tracks are part of library-wide playback as well.
     if (const auto allMusic = playlistIndex_.find(AllMusicPlaylistId);
-        allMusic != playlistIndex_.end()) {
+        allMusic != playlistIndex_.end() && !importedIds.empty()) {
         auto& playlist = playlists_[allMusic->second];
-        for (const auto id : importedIds) playlist.AddTrack(id);
+        std::unordered_set<library::TrackId> existing(playlist.trackIds.begin(),
+                                                      playlist.trackIds.end());
+        playlist.trackIds.reserve(playlist.trackIds.size() + importedIds.size());
+        for (const auto id : importedIds) {
+            if (existing.insert(id).second) playlist.trackIds.push_back(id);
+        }
     }
     PruneExternalTracks();
     RebuildIndexes();

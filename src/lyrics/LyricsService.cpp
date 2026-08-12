@@ -523,6 +523,7 @@ void LyricsService::Request(std::uint64_t trackId, std::wstring title, std::wstr
     snapshot_.loading = true;
     snapshot_.status = L"Loading lyrics...";
     snapshot_.revision = generation_;
+    publishedRevision_.store(snapshot_.revision, std::memory_order_release);
     condition_.notify_one();
 }
 
@@ -532,6 +533,7 @@ void LyricsService::Reset() {
     pending_.reset();
     snapshot_ = LyricsSnapshot{};
     snapshot_.status = L"No lyrics available";
+    publishedRevision_.store(snapshot_.revision, std::memory_order_release);
 }
 
 LyricsSnapshot LyricsService::Snapshot() const {
@@ -719,6 +721,7 @@ void LyricsService::Publish(const RequestData& request, LyricsDocument document,
         snapshot_.document = std::move(document);
         snapshot_.status = std::move(status);
         snapshot_.revision = request.generation;
+        publishedRevision_.store(snapshot_.revision, std::memory_order_release);
         notify = notify_;
     }
     if (notify) notify();

@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <span>
 #include <string>
@@ -273,7 +274,8 @@ void TestAnalysisBufferReuse() {
     std::vector<float> block(128 * 2, 0.25F);
     buffer.Push(block);
     Check(buffer.Generation() != 0, "analysis buffer generation advances on push");
-    Check(buffer.StoredFrames() == 128, "analysis buffer stores pushed frames");
+    Check(buffer.Latest(256).samples.size() == 128 * 2,
+          "analysis buffer stores pushed frames");
 
     rivan::audio::AudioAnalysisSnapshot first;
     buffer.LatestInto(first, 64);
@@ -1747,6 +1749,209 @@ void TestSnappingWithExistingLayoutConflict() {
           "docking still rejects a new overlap even when the layout already has one");
 }
 
+void TestOutsideCollapseTransactions() {
+    using rivan::ui::ModuleCollapseMode;
+    using rivan::ui::ModuleCollapseSide;
+    using rivan::ui::ModuleId;
+    using rivan::ui::ModuleLayout;
+    using rivan::ui::ModuleNormalizedRect;
+    using rivan::ui::ModuleWindowDropZone;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+
+    const auto layoutsEqual = [](const ModuleLayout& first, const ModuleLayout& second) {
+        const auto valuesEqual = [](float left, float right) {
+            return left == right || (std::isnan(left) && std::isnan(right));
+        };
+        if (first.tabCount != second.tabCount || first.activeTab != second.activeTab ||
+            first.tabOrder != second.tabOrder || first.snapGroup != second.snapGroup) {
+            return false;
+        }
+        for (std::size_t index = 0; index < first.items.size(); ++index) {
+            const auto& left = first.items[index];
+            const auto& right = second.items[index];
+            if (left.id != right.id || !valuesEqual(left.x, right.x) ||
+                !valuesEqual(left.y, right.y) || !valuesEqual(left.width, right.width) ||
+                !valuesEqual(left.height, right.height) ||
+                left.visible != right.visible || left.dockState != right.dockState ||
+                left.collapseMode != right.collapseMode || left.collapseSide != right.collapseSide ||
+                left.collapseTarget != right.collapseTarget ||
+                left.collapseTargetIsWindow != right.collapseTargetIsWindow ||
+                left.collapsed != right.collapsed || !valuesEqual(left.expandedX, right.expandedX) ||
+                !valuesEqual(left.expandedY, right.expandedY) ||
+                !valuesEqual(left.expandedWidth, right.expandedWidth) ||
+                !valuesEqual(left.expandedHeight, right.expandedHeight) ||
+                !valuesEqual(left.handleX, right.handleX) ||
+                !valuesEqual(left.handleY, right.handleY) ||
+                !valuesEqual(left.handleWidth, right.handleWidth) ||
+                !valuesEqual(left.handleHeight, right.handleHeight)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    auto recollapse = ModuleLayout::Defaults();
+    for (auto& item : recollapse.items) item.visible = false;
+    auto* recollapseTarget = recollapse.Find(ModuleId::Rivan);
+    auto* recollapseSource = recollapse.Find(ModuleId::AllMusic);
+    recollapseTarget->visible = true;
+    recollapseTarget->x = 0.30F;
+    recollapseTarget->y = 0.30F;
+    recollapseTarget->width = 0.30F;
+    recollapseTarget->height = 0.30F;
+    recollapseSource->visible = true;
+    recollapseSource->x = 0.05F;
+    recollapseSource->y = 0.05F;
+    recollapseSource->width = 0.15F;
+    recollapseSource->height = 0.15F;
+    Check(recollapse.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                      ModuleCollapseSide::Right,
+                                      ModuleCollapseMode::Outside) &&
+              recollapse.ToggleCollapsedModule(ModuleId::AllMusic) &&
+              recollapse.ResizeModule(ModuleId::Rivan, 0.98F, 0.45F,
+                                      true, false, false, false, false) &&
+              recollapse.ToggleCollapsedModule(ModuleId::AllMusic),
+          "outside collapse re-closes after target resize reaches its handle strip");
+    recollapseTarget = recollapse.Find(ModuleId::Rivan);
+    recollapseSource = recollapse.Find(ModuleId::AllMusic);
+    Check(recollapseSource != nullptr && recollapseTarget != nullptr &&
+              recollapseSource->collapsed &&
+              std::abs(recollapseSource->handleX -
+                       (recollapseTarget->x + recollapseTarget->width)) < 0.001F &&
+              std::abs(recollapseSource->handleX + recollapseSource->handleWidth - 1.0F) < 0.001F &&
+              recollapseSource->expandedX + recollapseSource->expandedWidth > 1.0F &&
+              recollapse.HasValidGeometry() && !recollapse.HasConflictingGeometry(),
+          "re-collapse reserves its edge handle while retaining attached expanded geometry");
+
+    auto noSpace = ModuleLayout::Defaults();
+    for (auto& item : noSpace.items) item.visible = false;
+    auto* target = noSpace.Find(ModuleId::Rivan);
+    auto* source = noSpace.Find(ModuleId::AllMusic);
+    target->visible = true;
+    target->x = 0.50F;
+    target->y = 0.0F;
+    target->width = 0.10F;
+    target->height = 1.0F;
+    source->visible = true;
+    source->x = 0.05F;
+    source->y = 0.40F;
+    source->width = 0.15F;
+    source->height = 0.20F;
+    Check(noSpace.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                   ModuleCollapseSide::Right,
+                                   ModuleCollapseMode::Outside) &&
+              noSpace.ToggleCollapsedModule(ModuleId::AllMusic),
+          "outside collapse opens before an impossible snap");
+    noSpace.ClearModuleCollapse(ModuleId::AllMusic);
+    source = noSpace.Find(ModuleId::AllMusic);
+    ModuleLayout::SyncExpandedGeometry(*source);
+    const auto setBlocker = [&noSpace](ModuleId id, float x, float width) {
+        auto* item = noSpace.Find(id);
+        item->visible = true;
+        item->x = x;
+        item->y = 0.0F;
+        item->width = width;
+        item->height = 1.0F;
+    };
+    setBlocker(ModuleId::GraphicEqualizer, 0.60F, 0.11F);
+    setBlocker(ModuleId::RivanLibrary, 0.71F, 0.11F);
+    setBlocker(ModuleId::VideoPreview, 0.82F, 0.09F);
+    setBlocker(ModuleId::Lyrics, 0.91F, 0.09F);
+    const auto beforeNoSpaceSnap = noSpace;
+    Check(!noSpace.SnapToWindow(ModuleId::AllMusic, ModuleWindowDropZone::RightMiddle,
+                                0.55F, 0.50F) &&
+              layoutsEqual(noSpace, beforeNoSpaceSnap),
+          "no-space snap after outside-collapse drag fails without changing layout");
+
+    auto noSpaceCollapse = ModuleLayout::Defaults();
+    for (auto& item : noSpaceCollapse.items) item.visible = false;
+    auto* collapseTarget = noSpaceCollapse.Find(ModuleId::Rivan);
+    auto* collapseSource = noSpaceCollapse.Find(ModuleId::AllMusic);
+    collapseTarget->visible = true;
+    collapseTarget->x = 0.50F;
+    collapseTarget->width = 0.30F;
+    collapseTarget->height = 1.0F;
+    collapseSource->visible = true;
+    collapseSource->x = 0.05F;
+    collapseSource->y = 0.40F;
+    collapseSource->width = 0.15F;
+    collapseSource->height = 0.20F;
+    const auto setCollapseBlocker = [&noSpaceCollapse](ModuleId id, float x, float width) {
+        auto* item = noSpaceCollapse.Find(id);
+        item->visible = true;
+        item->x = x;
+        item->y = 0.0F;
+        item->width = width;
+        item->height = 1.0F;
+    };
+    setCollapseBlocker(ModuleId::GraphicEqualizer, 0.80F, 0.10F);
+    setCollapseBlocker(ModuleId::RivanLibrary, 0.90F, 0.10F);
+    const auto beforeNoSpaceCollapse = noSpaceCollapse;
+    Check(!noSpaceCollapse.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                             ModuleCollapseSide::Right,
+                                             ModuleCollapseMode::Outside) &&
+              layoutsEqual(noSpaceCollapse, beforeNoSpaceCollapse),
+          "no-space outside collapse fails without changing layout");
+
+    auto nanSource = ModuleLayout::Defaults();
+    for (auto& item : nanSource.items) item.visible = false;
+    auto* nanSourceTarget = nanSource.Find(ModuleId::Rivan);
+    auto* nanSourceItem = nanSource.Find(ModuleId::AllMusic);
+    nanSourceTarget->visible = true;
+    nanSourceTarget->x = 0.30F;
+    nanSourceTarget->y = 0.30F;
+    nanSourceTarget->width = 0.30F;
+    nanSourceTarget->height = 0.30F;
+    nanSourceItem->visible = true;
+    nanSourceItem->width = nan;
+    const auto beforeNanSource = nanSource;
+    Check(!nanSource.CollapseToWindow(ModuleId::AllMusic, ModuleCollapseSide::Right) &&
+              layoutsEqual(nanSource, beforeNanSource),
+          "window collapse rejects non-finite source dimensions transactionally");
+
+    auto nanReattach = ModuleLayout::Defaults();
+    for (auto& item : nanReattach.items) item.visible = false;
+    auto* nanReattachTarget = nanReattach.Find(ModuleId::Rivan);
+    auto* nanReattachSource = nanReattach.Find(ModuleId::AllMusic);
+    nanReattachTarget->visible = true;
+    nanReattachTarget->x = 0.30F;
+    nanReattachTarget->y = 0.30F;
+    nanReattachTarget->width = 0.30F;
+    nanReattachTarget->height = 0.30F;
+    nanReattachSource->visible = true;
+    nanReattachSource->x = 0.05F;
+    nanReattachSource->y = 0.05F;
+    nanReattachSource->width = 0.15F;
+    nanReattachSource->height = 0.15F;
+    Check(nanReattach.CollapseToModule(ModuleId::AllMusic, ModuleId::Rivan,
+                                       ModuleCollapseSide::Right,
+                                       ModuleCollapseMode::Outside),
+          "finite outside collapse prepares corrupted-geometry reattachment test");
+    const auto beforeNanReattach = nanReattach;
+    nanReattachSource = nanReattach.Find(ModuleId::AllMusic);
+    nanReattachSource->expandedX = nan;
+    Check(!nanReattach.ReattachOutsideCollapseHandles(beforeNanReattach) &&
+              layoutsEqual(nanReattach, beforeNanReattach),
+          "outside reattachment rejects non-finite stored geometry transactionally");
+
+    auto nanObstacle = ModuleLayout::Defaults();
+    for (auto& item : nanObstacle.items) item.visible = false;
+    auto* nanObstacleSource = nanObstacle.Find(ModuleId::AllMusic);
+    auto* nanObstacleItem = nanObstacle.Find(ModuleId::Rivan);
+    nanObstacleSource->visible = true;
+    nanObstacleSource->x = 0.0F;
+    nanObstacleSource->y = 0.0F;
+    nanObstacleSource->width = 0.40F;
+    nanObstacleSource->height = 1.0F;
+    nanObstacleItem->visible = true;
+    nanObstacleItem->x = nan;
+    ModuleNormalizedRect available{};
+    Check(!nanObstacle.FindplusWindowRectangle(
+              ModuleId::AllMusic, {0.0F, 0.0F, 1.0F, 1.0F}, 0.75F, 0.5F,
+              0.10F, 0.10F, available),
+          "free-space search rejects non-finite obstacle bounds before sorting");
+}
+
 void TestModuleLayoutSessionRoundTrip() {
     const auto root = std::filesystem::temp_directory_path() /
                       (L"RivanModuleLayoutTests-" + std::to_wstring(GetCurrentProcessId()));
@@ -1987,6 +2192,7 @@ int main() {
     TestWindowSnapping();
     TestCollapsibleSnapping();
     TestSnappingWithExistingLayoutConflict();
+    TestOutsideCollapseTransactions();
     TestModuleLayoutSessionRoundTrip();
     TestLyricsParsing();
     TestLyricsLayoutMigration();

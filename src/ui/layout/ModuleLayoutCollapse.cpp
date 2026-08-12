@@ -47,8 +47,8 @@ ModuleNormalizedRect AttachOutsideExpanded(ModuleNormalizedRect expanded,
 }
 
 ModuleNormalizedRect MakeOutsideCollapseHandle(ModuleNormalizedRect expanded,
-                                                ModuleCollapseSide side,
-                                                float thickness) noexcept {
+                                                 ModuleCollapseSide side,
+                                                 float thickness) noexcept {
     switch (side) {
     case ModuleCollapseSide::Left:
         expanded.left = expanded.right - thickness;
@@ -66,6 +66,19 @@ ModuleNormalizedRect MakeOutsideCollapseHandle(ModuleNormalizedRect expanded,
         break;
     }
     return expanded;
+}
+
+bool HasFiniteOrderedRectangle(const ModuleNormalizedRect& bounds) noexcept {
+    return std::isfinite(bounds.left) && std::isfinite(bounds.top) &&
+           std::isfinite(bounds.right) && std::isfinite(bounds.bottom) &&
+           bounds.right > bounds.left && bounds.bottom > bounds.top &&
+           std::isfinite(bounds.right - bounds.left) &&
+           std::isfinite(bounds.bottom - bounds.top);
+}
+
+bool HasFiniteCanvasRectangle(const ModuleNormalizedRect& bounds) noexcept {
+    return HasFiniteOrderedRectangle(bounds) && bounds.left >= 0.0F && bounds.top >= 0.0F &&
+           bounds.right <= 1.0F && bounds.bottom <= 1.0F;
 }
 
 } // namespace
@@ -252,6 +265,10 @@ bool ModuleLayout::CollapseToWindow(ModuleId source, ModuleCollapseSide side,
     const auto* sourceItem = Find(source);
     if (!sourceItem) return false;
     const ModuleLayout before = *this;
+    const auto fail = [this, &before]() noexcept {
+        *this = before;
+        return false;
+    };
     const bool sourceWasSnapGrouped = IsSnapGrouped(source);
     if (sourceWasSnapGrouped) {
         std::array<ModuleId, 6> members{};
@@ -264,7 +281,9 @@ bool ModuleLayout::CollapseToWindow(ModuleId source, ModuleCollapseSide side,
     }
     const float width = sourceItem->width;
     const float height = sourceItem->height;
-    if (width < 0.10F || height < 0.10F) return false;
+    if (!std::isfinite(width) || !std::isfinite(height) || width < 0.10F || height < 0.10F) {
+        return fail();
+    }
 
     edgePosition = std::clamp(std::isfinite(edgePosition) ? edgePosition : 0.5F, 0.0F, 1.0F);
     ModuleNormalizedRect expanded{};
@@ -276,10 +295,14 @@ bool ModuleLayout::CollapseToWindow(ModuleId source, ModuleCollapseSide side,
         if (!FindplusWindowRectangle(source, {0.0F, 0.0F, 1.0F, 1.0F},
                                      side == ModuleCollapseSide::Left ? 0.0F : 1.0F,
                                      edgePosition, 0.10F, 0.10F, available, side, true)) {
-            return false;
+            return fail();
         }
         const float fittedWidth = std::min(width, available.right - available.left);
         const float fittedHeight = std::min(height, available.bottom - available.top);
+        if (!HasFiniteCanvasRectangle(available) || !std::isfinite(fittedWidth) ||
+            !std::isfinite(fittedHeight) || fittedWidth < 0.10F || fittedHeight < 0.10F) {
+            return fail();
+        }
         const float top = std::clamp(edgePosition - fittedHeight * 0.5F,
                                      available.top, available.bottom - fittedHeight);
         expanded.left = side == ModuleCollapseSide::Left ? 0.0F : 1.0F - fittedWidth;
@@ -298,10 +321,14 @@ bool ModuleLayout::CollapseToWindow(ModuleId source, ModuleCollapseSide side,
         if (!FindplusWindowRectangle(source, {0.0F, 0.0F, 1.0F, 1.0F}, edgePosition,
                                      side == ModuleCollapseSide::Top ? 0.0F : 1.0F,
                                      0.10F, 0.10F, available, side, true)) {
-            return false;
+            return fail();
         }
         const float fittedWidth = std::min(width, available.right - available.left);
         const float fittedHeight = std::min(height, available.bottom - available.top);
+        if (!HasFiniteCanvasRectangle(available) || !std::isfinite(fittedWidth) ||
+            !std::isfinite(fittedHeight) || fittedWidth < 0.10F || fittedHeight < 0.10F) {
+            return fail();
+        }
         const float left = std::clamp(edgePosition - fittedWidth * 0.5F,
                                       available.left, available.right - fittedWidth);
         expanded.left = left;
@@ -314,14 +341,18 @@ bool ModuleLayout::CollapseToWindow(ModuleId source, ModuleCollapseSide side,
         handle.left = std::clamp(center - handleWidth * 0.5F, 0.0F, 1.0F - handleWidth);
         handle.right = handle.left + handleWidth;
     }
-    if (HasCollapseExpansionConflict(source, expanded)) return false;
+    if (!HasFiniteCanvasRectangle(expanded) || !HasFiniteCanvasRectangle(handle) ||
+        expanded.right - expanded.left < 0.10F || expanded.bottom - expanded.top < 0.10F ||
+        handle.right - handle.left < 0.001F || handle.bottom - handle.top < 0.001F) {
+        return fail();
+    }
+    if (HasCollapseExpansionConflict(source, expanded)) return fail();
     auto* item = Find(source);
-    if (!item) return false;
+    if (!item) return fail();
     SetCollapsedGeometry(*item, handle, expanded, ModuleCollapseMode::Outside, side, source, true);
     if (!sourceWasSnapGrouped) snapGroup[static_cast<std::size_t>(item - items.data())] = source;
     if (HasNewConflictingGeometry(before)) {
-        *this = before;
-        return false;
+        return fail();
     }
     return true;
 }
@@ -355,6 +386,10 @@ bool ModuleLayout::CollapseToModule(ModuleId source, ModuleId target, ModuleColl
         }
     }
     const ModuleLayout before = *this;
+    const auto fail = [this, &before]() noexcept {
+        *this = before;
+        return false;
+    };
     const bool sourceWasSnapGrouped = IsSnapGrouped(source);
     if (sourceWasSnapGrouped) {
     std::array<ModuleId, 6> members{};
@@ -400,12 +435,15 @@ bool ModuleLayout::CollapseToModule(ModuleId source, ModuleId target, ModuleColl
         if (collapsedTargetBounds.right - collapsedTargetBounds.left < 0.10F ||
             collapsedTargetBounds.bottom - collapsedTargetBounds.top < 0.10F ||
             HasCollapseExpansionConflict(source, expanded, targetRoot)) {
-            return false;
+            return fail();
         }
     } else {
         const float width = sourceItem->width;
         const float height = sourceItem->height;
-        if (width < 0.10F || height < 0.10F) return false;
+        if (!std::isfinite(width) || !std::isfinite(height) || width < 0.10F ||
+            height < 0.10F) {
+            return fail();
+        }
         edgePosition = std::clamp(std::isfinite(edgePosition) ? edgePosition : 0.5F, 0.0F, 1.0F);
         const ModuleNormalizedRect outsideRegion = [&] {
             switch (side) {
@@ -430,7 +468,7 @@ bool ModuleLayout::CollapseToModule(ModuleId source, ModuleId target, ModuleColl
             : (side == ModuleCollapseSide::Top ? outsideRegion.bottom : outsideRegion.top);
         if (!FindplusWindowRectangle(source, outsideRegion, pointerX, pointerY,
                                      0.10F, 0.10F, available, side)) {
-            return false;
+            return fail();
         }
         const float expandedWidth = std::min(width, available.right - available.left);
         const float expandedHeight = std::min(height, available.bottom - available.top);
@@ -459,25 +497,24 @@ bool ModuleLayout::CollapseToModule(ModuleId source, ModuleId target, ModuleColl
         else handle.bottom = expanded.top + handleThickness;
         if (expanded.left < 0.0F || expanded.top < 0.0F || expanded.right > 1.0F ||
             expanded.bottom > 1.0F || HasCollapseExpansionConflict(source, expanded, targetRoot)) {
-            return false;
+            return fail();
         }
     }
-    if (expanded.right - expanded.left < 0.10F || expanded.bottom - expanded.top < 0.10F ||
+    if (!HasFiniteOrderedRectangle(expanded) || !HasFiniteOrderedRectangle(handle) ||
+        expanded.right - expanded.left < 0.10F || expanded.bottom - expanded.top < 0.10F ||
         handle.right - handle.left < 0.001F || handle.bottom - handle.top < 0.001F) {
-        return false;
+        return fail();
     }
     auto* item = Find(source);
-    if (!item) return false;
+    if (!item) return fail();
     if (!sourceWasSnapGrouped) snapGroup[static_cast<std::size_t>(item - items.data())] = source;
     SetCollapsedGeometry(*item, handle, expanded, mode, side, targetRoot, false);
     if (mode == ModuleCollapseMode::Inside) SetTabGroupGeometry(targetRoot, collapsedTargetBounds);
     if (!ReattachOutsideCollapseHandles(before)) {
-        *this = before;
-        return false;
+        return fail();
     }
     if (HasNewConflictingGeometry(before)) {
-        *this = before;
-        return false;
+        return fail();
     }
     return true;
 }
@@ -539,13 +576,16 @@ bool ModuleLayout::ToggleCollapsedModule(ModuleId id, ModuleExpansionBehavior be
             const auto handle = MakeOutsideCollapseHandle(expanded, item->collapseSide,
                                                           thickness);
             if (expanded.right - expanded.left < 0.10F ||
-                expanded.bottom - expanded.top < 0.10F ||
-                handle.left < 0.0F || handle.top < 0.0F ||
-                handle.right > 1.0F || handle.bottom > 1.0F) {
+                expanded.bottom - expanded.top < 0.10F) {
                 return false;
             }
             SetCollapsedGeometry(*item, handle, expanded, item->collapseMode,
                                  item->collapseSide, targetRoot, false);
+            if (!ReattachOutsideCollapseHandles(before) ||
+                HasNewConflictingGeometry(before)) {
+                *this = before;
+                return false;
+            }
         } else {
             item->x = item->handleX;
             item->y = item->handleY;

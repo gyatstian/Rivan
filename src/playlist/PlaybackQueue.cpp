@@ -294,6 +294,10 @@ void PlaybackQueue::BuildOrder() {
             }
             if (visited.insert(currentIndex_).second) {
                 prefix.push_back(currentIndex_);
+            } else {
+                const auto found = std::find(prefix.begin(), prefix.end(), currentIndex_);
+                if (found != prefix.end()) prefix.erase(found);
+                prefix.push_back(currentIndex_);
             }
 
             std::vector<std::size_t> remaining;

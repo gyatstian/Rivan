@@ -45,20 +45,30 @@ bool SafeArchivePath(const char* name, std::filesystem::path* result) {
 bool ExtractSkinArchive(const std::filesystem::path& archive,
                         const std::filesystem::path& destination,
                         std::string* error) {
-    mz_zip_archive zip{};
-    const auto archiveName = Utf8(archive);
-    if (!mz_zip_reader_init_file(&zip, archiveName.c_str(), 0)) {
+    std::error_code ec;
+    const auto archiveSize = std::filesystem::file_size(archive, ec);
+    MZ_FILE* package = nullptr;
+    (void)_wfopen_s(&package, archive.wstring().c_str(), L"rb");
+    if (package == nullptr) {
         SetError(error, "Unable to open skin package");
         return false;
     }
-    const auto close = [&] { mz_zip_reader_end(&zip); };
+    mz_zip_archive zip{};
+    if (ec || !mz_zip_reader_init_cfile(&zip, package, archiveSize, 0)) {
+        fclose(package);
+        SetError(error, "Unable to open skin package");
+        return false;
+    }
+    const auto close = [&] {
+        mz_zip_reader_end(&zip);
+        fclose(package);
+    };
     const mz_uint count = mz_zip_reader_get_num_files(&zip);
     if (count > kMaximumPackageFiles) {
         close();
         SetError(error, "Skin package exceeds the 512-file limit");
         return false;
     }
-    std::error_code ec;
     std::filesystem::create_directories(destination, ec);
     if (ec) {
         close();
@@ -87,7 +97,21 @@ bool ExtractSkinArchive(const std::filesystem::path& archive,
         }
         total += entry.m_uncomp_size;
         std::filesystem::create_directories(target.parent_path(), ec);
-        if (ec || !mz_zip_reader_extract_to_file(&zip, index, Utf8(target).c_str(), 0)) {
+        if (ec) {
+            close();
+            SetError(error, "Unable to unpack skin file");
+            return false;
+        }
+        MZ_FILE* out = nullptr;
+        (void)_wfopen_s(&out, target.wstring().c_str(), L"wb");
+        if (out == nullptr) {
+            close();
+            SetError(error, "Unable to unpack skin file");
+            return false;
+        }
+        const bool ok = mz_zip_reader_extract_to_cfile(&zip, index, out, 0) != FALSE;
+        fclose(out);
+        if (!ok) {
             close();
             SetError(error, "Unable to unpack skin file");
             return false;
@@ -101,37 +125,62 @@ bool ExtractSkinArchive(const std::filesystem::path& archive,
 bool CreateSkinArchive(const std::filesystem::path& source,
                        const std::filesystem::path& archive,
                        std::string* error) {
+    MZ_FILE* package = nullptr;
+    (void)_wfopen_s(&package, archive.wstring().c_str(), L"wb");
+    if (package == nullptr) {
+        SetError(error, "Unable to create skin package");
+        return false;
+    }
     mz_zip_archive zip{};
-    const auto archiveName = Utf8(archive);
-    if (!mz_zip_writer_init_file(&zip, archiveName.c_str(), 0)) {
+    if (!mz_zip_writer_init_cfile(&zip, package, 0)) {
+        fclose(package);
         SetError(error, "Unable to create skin package");
         return false;
     }
     std::error_code ec;
     std::uint64_t total = 0;
     std::size_t count = 0;
+    const auto abortArchive = [&] {
+        mz_zip_writer_end(&zip);
+        fclose(package);
+        std::filesystem::remove(archive, ec);
+    };
     for (std::filesystem::recursive_directory_iterator it(source, ec), end; !ec && it != end; it.increment(ec)) {
         if (!it->is_regular_file(ec) || ec) continue;
         const auto size = it->file_size(ec);
         if (ec || ++count > kMaximumPackageFiles || size > kMaximumPackageBytes - total) {
-            mz_zip_writer_end(&zip); std::filesystem::remove(archive, ec);
-            SetError(error, "Skin package exceeds the 512-file or 64 MiB limit"); return false;
+            abortArchive();
+            SetError(error, "Skin package exceeds the 512-file or 64 MiB limit");
+            return false;
         }
         total += size;
         const auto relative = std::filesystem::relative(it->path(), source, ec);
         const auto entryName = Utf8(relative.generic_wstring());
-        const auto sourceName = Utf8(it->path());
-        if (ec || !mz_zip_writer_add_file(&zip, entryName.c_str(), sourceName.c_str(), nullptr, 0,
-                                          MZ_BEST_COMPRESSION)) {
-            mz_zip_writer_end(&zip); std::filesystem::remove(archive, ec);
-            SetError(error, "Unable to add file to skin package"); return false;
+        MZ_FILE* in = nullptr;
+        (void)_wfopen_s(&in, it->path().wstring().c_str(), L"rb");
+        if (ec || in == nullptr) {
+            if (in != nullptr) fclose(in);
+            abortArchive();
+            SetError(error, "Unable to add file to skin package");
+            return false;
+        }
+        const bool added = mz_zip_writer_add_cfile(
+            &zip, entryName.c_str(), in, size, nullptr, nullptr, 0,
+            MZ_BEST_COMPRESSION, nullptr, 0, nullptr, 0) != FALSE;
+        fclose(in);
+        if (!added) {
+            abortArchive();
+            SetError(error, "Unable to add file to skin package");
+            return false;
         }
     }
     if (ec || !mz_zip_writer_finalize_archive(&zip)) {
-        mz_zip_writer_end(&zip); std::filesystem::remove(archive, ec);
-        SetError(error, "Unable to finalize skin package"); return false;
+        abortArchive();
+        SetError(error, "Unable to finalize skin package");
+        return false;
     }
     mz_zip_writer_end(&zip);
+    fclose(package);
     if (error != nullptr) error->clear();
     return true;
 }

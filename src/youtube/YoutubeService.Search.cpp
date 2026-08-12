@@ -142,13 +142,10 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
 
     const auto runListing = [&](const std::wstring& target, std::vector<YoutubeEntry>& outEntries,
                                 std::string& output, std::string& error, DWORD& exitCode,
-                                bool videosOnly, std::size_t playlistEnd) -> bool {
+                                bool videosOnly) -> bool {
         std::wstring arguments =
             L"--ignore-config --no-cache-dir --socket-timeout 12 "
             L"--flat-playlist --no-warnings --no-playlist-reverse --newline ";
-        if (playlistEnd > 0) {
-            arguments += L"--playlist-end " + std::to_wstring(playlistEnd) + L" ";
-        }
         arguments += L"--print %(id)s|||%(title)s|||%(duration)s " + detail::QuoteArg(target);
 
         output.clear();
@@ -199,7 +196,7 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
         std::string error;
         DWORD exitCode = 1;
         const std::wstring target = L"ytsearch" + std::to_wstring(count) + L":" + query;
-        const bool ran = runListing(target, stage, output, error, exitCode, false, 0);
+        const bool ran = runListing(target, stage, output, error, exitCode, false);
         anyRan = anyRan || ran;
         lastOutput = std::move(output);
         lastError = std::move(error);

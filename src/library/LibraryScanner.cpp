@@ -143,7 +143,8 @@ std::optional<std::uint64_t> ReadLastOggGranulePosition(const std::filesystem::p
 
         const std::span<const unsigned char> bytes{buffer.data(), bytesRead};
         for (std::size_t offset = bytes.size() - 27;; --offset) {
-            if (MatchesBytes(bytes, offset, "OggS") && bytes[offset + 4] == 0) {
+            if (MatchesBytes(bytes, offset, "OggS") && offset + 5 <= bytes.size() &&
+                bytes[offset + 4] == 0) {
                 const auto pageOffset = chunkStart + offset;
                 const auto segmentCount = static_cast<std::uintmax_t>(bytes[offset + 26]);
                 if (pageOffset + 27 + segmentCount <= fileSize) {
@@ -288,6 +289,16 @@ LibraryScanResult LibraryScanner::Scan(std::span<const std::filesystem::path> re
     for (const auto& requested : requestedRoots) {
         if (requested.empty()) continue;
         auto normalized = NormalizeRoot(requested);
+        auto contained = false;
+        for (const auto& accepted : roots) {
+            std::error_code relEc;
+            auto relative = std::filesystem::relative(normalized, accepted, relEc);
+            if (!relEc && !relative.empty() && relative != L".") {
+                contained = true;
+                break;
+            }
+        }
+        if (contained) continue;
         if (std::find(roots.begin(), roots.end(), normalized) == roots.end()) {
             roots.push_back(std::move(normalized));
         }

@@ -34,8 +34,13 @@ void ModuleLayout::RemoveTab(ModuleId id) noexcept {
     std::array<ModuleId, 6> remaining{};
     std::size_t remainingCount = 0;
     const auto count = TabCount();
+    std::size_t removedIndex = count;
     for (std::size_t index = 0; index < count; ++index) {
-        if (tabOrder[index] != id) remaining[remainingCount++] = tabOrder[index];
+        if (tabOrder[index] != id) {
+            remaining[remainingCount++] = tabOrder[index];
+        } else {
+            removedIndex = index;
+        }
     }
     for (std::size_t index = 0; index < remainingCount; ++index) {
         if (auto* item = Find(remaining[index])) {
@@ -50,9 +55,19 @@ void ModuleLayout::RemoveTab(ModuleId id) noexcept {
         ClearTabs();
         return;
     }
+    // Keep the active tab bound to the same module when the removal shifts positions.
+    if (activeTab < count) {
+        if (tabOrder[activeTab] == id) {
+            activeTab = std::min(activeTab,
+                                 remainingCount == 0 ? 0U : remainingCount - 1U);
+        } else if (activeTab > removedIndex) {
+            --activeTab;
+        }
+    } else {
+        activeTab = 0;
+    }
     tabOrder = remaining;
     tabCount = remainingCount;
-    activeTab = std::min(activeTab, tabCount == 0 ? 0U : tabCount - 1U);
 }
 
 void ModuleLayout::TabWith(ModuleId source, ModuleId target) noexcept {

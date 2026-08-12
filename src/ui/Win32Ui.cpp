@@ -188,6 +188,17 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
 
 HWND Win32Ui::WindowHandle() const noexcept { return impl_->window; }
 
+bool Win32Ui::LastWindowRect(RECT& out) const noexcept {
+    if (impl_->window && IsWindow(impl_->window) && GetWindowRect(impl_->window, &out)) {
+        return true;
+    }
+    if (impl_->hasWindowRect) {
+        out = impl_->lastWindowRect;
+        return true;
+    }
+    return false;
+}
+
 void Win32Ui::RevealYoutubeChooser() noexcept {
     if (impl_->windowKind != WindowKind::Main || !impl_->window) return;
     ShowWindow(impl_->window, IsIconic(impl_->window) ? SW_RESTORE : SW_SHOW);
@@ -261,8 +272,13 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         impl_->Paint();
         return 0;
     case WM_SIZE:
+        // Minimized/maximized rects are not persisted; keep the last normal size.
+        if (wParam != SIZE_MINIMIZED && wParam != SIZE_MAXIMIZED) impl_->CaptureWindowRect();
         impl_->Resize(LOWORD(lParam), HIWORD(lParam), wParam == SIZE_MINIMIZED);
         impl_->SyncRefreshTimer();
+        return 0;
+    case WM_MOVE:
+        impl_->CaptureWindowRect();
         return 0;
     case WM_SIZING:
         impl_->windowResizeActive = true;
@@ -276,6 +292,7 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                                   wParam == WMSZ_TOPRIGHT;
         return TRUE;
     case WM_EXITSIZEMOVE:
+        impl_->CaptureWindowRect();
         impl_->windowResizeRight = false;
         impl_->windowResizeBottom = false;
         impl_->windowResizeLeft = false;

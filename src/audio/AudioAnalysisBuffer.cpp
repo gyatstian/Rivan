@@ -106,9 +106,4 @@ std::uint64_t AudioAnalysisBuffer::Generation() const noexcept {
     return generation_.load(std::memory_order_acquire);
 }
 
-std::size_t AudioAnalysisBuffer::StoredFrames() const noexcept {
-    std::scoped_lock lock(mutex_);
-    return storedFrames_;
-}
-
 } // namespace rivan::audio

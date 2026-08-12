@@ -33,32 +33,6 @@ std::optional<std::filesystem::path> FindDownloadedFile(
     return std::nullopt;
 }
 
-std::filesystem::path StripIdSuffixAndRename(const std::filesystem::path& file,
-                                             std::wstring_view videoId) {
-    if (videoId.empty()) return file;
-    std::wstring stem = file.stem().wstring();
-    const std::wstring suffix = L" [" + std::wstring(videoId) + L"]";
-    if (stem.size() <= suffix.size() ||
-        stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) != 0) {
-        return file;
-    }
-    stem.resize(stem.size() - suffix.size());
-    stem = Trim(std::move(stem));
-    if (stem.empty()) return file;
-    const auto ext = file.extension().wstring();
-    const auto dir = file.parent_path();
-    std::filesystem::path target = dir / (stem + ext);
-    if (target == file) return file;
-    for (int n = 2; PathExistsFile(target); ++n) {
-        if (n > 9999) return file;
-        target = dir / (stem + L" (" + std::to_wstring(n) + L")" + ext);
-    }
-    std::error_code ec;
-    std::filesystem::rename(file, target, ec);
-    if (ec) return file;
-    return target;
-}
-
 } // namespace rivan::youtube::detail
 
 namespace rivan::youtube {
@@ -298,38 +272,7 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
 
     std::optional<std::filesystem::path> local;
     if (!stop.stop_requested()) {
-        if (convertAudio) {
-            for (const auto* ext : {L".mp3", L".aac", L".opus", L".flac", L".wav"}) {
-                const auto candidate = directory / (target.videoId + ext);
-                if (detail::PathExistsFile(candidate)) {
-                    local = candidate;
-                    break;
-                }
-            }
-        } else if (isVideo) {
-            const auto mp4 = directory / (target.videoId + L".mp4");
-            if (detail::PathExistsFile(mp4)) local = mp4;
-        } else {
-            for (const auto* ext : {L".m4a", L".opus", L".webm", L".mp3", L".aac",
-                                    L".flac", L".wav"}) {
-                const auto candidate = directory / (target.videoId + ext);
-                if (detail::PathExistsFile(candidate)) {
-                    local = candidate;
-                    break;
-                }
-            }
-        }
-        if (!local) local = detail::FindDownloadedFile(directory, target.videoId);
-        if (!local) {
-            for (const auto* ext : {L".mp3", L".mp4", L".m4a", L".opus", L".webm", L".wav",
-                                    L".flac", L".m4v"}) {
-                const auto candidate = directory / (target.videoId + ext);
-                if (detail::PathExistsFile(candidate)) {
-                    local = candidate;
-                    break;
-                }
-            }
-        }
+        local = detail::FindDownloadedFile(directory, target.videoId);
     }
 
     {

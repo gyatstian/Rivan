@@ -148,7 +148,11 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
         if (!ReadFile(readPipe, chunk, sizeof(chunk), &read, nullptr) || read == 0) break;
         buffer.append(chunk, chunk + read);
         feedLines(std::string_view(chunk, read));
-        if (buffer.size() > 8 * 1024 * 1024) break;
+        if (buffer.size() > 8 * 1024 * 1024) {
+            TerminateProcess(process.hProcess, 1);
+            errorText = "Captured process output exceeded 8 MiB";
+            break;
+        }
     }
     if (onLine && !lineCarry.empty()) {
         onLine(lineCarry);
@@ -163,6 +167,7 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
     CloseHandle(readPipe);
 
     stdoutText = std::move(buffer);
+    if (!errorText.empty()) return false;
     if (stop.stop_requested()) {
         errorText = "Cancelled";
         return false;

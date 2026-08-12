@@ -205,6 +205,9 @@ private:
     std::uint64_t analysisGeneration_{};
     // Reused across paints so AnalysisInto does not allocate every generation.
     audio::AudioAnalysisSnapshot analysisScratch_{};
+    // Lyrics snapshot is copied only when the service revision advances.
+    std::uint64_t lyricsRevisionCache_{~std::uint64_t{0}};
+    lyrics::LyricsSnapshot lyricsSnapshotCache_;
     // Cap FFT to ~20 Hz even if analysis generation advances every WASAPI period.
     std::chrono::steady_clock::time_point lastAnalysisSubmit_{};
     // Last fully built library/UI snapshot. Live playback fields refresh in place.

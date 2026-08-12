@@ -73,7 +73,12 @@ void App::SnapshotUiModel(ui::UiModel& out) {
         // Avoid re-copying FFT vectors when the analyzer has not published a new frame.
         analyzer_.CopySnapshot(model.visualization);
         model.revision = revision_;
-        model.lyrics = lyrics_.Snapshot();
+        const auto lyricsRevision = lyrics_.Revision();
+        if (lyricsRevision != lyricsRevisionCache_) {
+            lyricsRevisionCache_ = lyricsRevision;
+            lyricsSnapshotCache_ = lyrics_.Snapshot();
+        }
+        model.lyrics = lyricsSnapshotCache_;
         model.lyricsCacheEnabled = settings_.Settings().lyricsCacheEnabled;
     };
 

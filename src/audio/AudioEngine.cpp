@@ -150,6 +150,7 @@ public:
                         return;
                     }
                     if (iterator->type == CommandType::Load ||
+                        iterator->type == CommandType::Stop ||
                         iterator->type == CommandType::Shutdown) {
                         break;
                     }
@@ -392,7 +393,7 @@ private:
             volume = state->status.volume;
         }
         backend.SetVolume(volume);
-        backend.PumpDecoded(32);
+        backend.PumpDecoded();
 
         current = PlaybackState::Stopped;
         {
@@ -418,7 +419,7 @@ private:
             backend.Seek(std::chrono::nanoseconds{0});
         }
 
-        backend.PumpDecoded(32);
+        backend.PumpDecoded();
         if (FinishIfDrained(state, current, backend, backend.Render())) {
             return;
         }
@@ -463,7 +464,7 @@ private:
 
         const bool resume = current == PlaybackState::Playing;
         backend.Seek(requestedPosition);
-        backend.PumpDecoded(32);
+        backend.PumpDecoded();
 
         if (resume) {
             if (FinishIfDrained(state, current, backend, backend.Render())) {
@@ -605,7 +606,7 @@ private:
                     const auto renderResult = backend.Render();
                     UpdatePosition(state, backend);
                     if (!FinishIfDrained(state, current, backend, renderResult)) {
-                        backend.PumpDecoded(32);
+                        backend.PumpDecoded();
                     }
                 } catch (...) {
                     RecordCurrentException(state, current, backend);

@@ -298,6 +298,7 @@ void App::SelectPlaylist(std::uint64_t id) {
     // opens the folder and shows its playlists in the tree.
     if (playlists_.HasChildren(id)) expandedPlaylists_.insert(id);
     ++revision_;
+    if (window_) window_->Refresh();
 }
 
 void App::TogglePlaylistExpanded(std::uint64_t id) {
@@ -359,6 +360,7 @@ void App::SetVolume(float normalizedVolume) {
 void App::SelectSettingsCategory(ui::SettingCategory category) {
     settingsCategory_ = category;
     ++revision_;
+    if (window_) window_->Refresh();
 }
 
 void App::SetMusicFolder(std::size_t index, std::filesystem::path folder) {

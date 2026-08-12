@@ -57,6 +57,10 @@ public:
 
     [[nodiscard]] LyricsSnapshot Snapshot() const;
 
+    [[nodiscard]] std::uint64_t Revision() const noexcept {
+        return publishedRevision_.load(std::memory_order_acquire);
+    }
+
     [[nodiscard]] static LyricsDocument ParseLrc(std::wstring_view text);
     [[nodiscard]] static LyricsDocument ParseLrclibResponse(std::string_view json);
 
@@ -87,6 +91,7 @@ private:
     bool cacheEnabled_{};
     std::uint64_t generation_{};
     std::jthread worker_;
+    std::atomic<std::uint64_t> publishedRevision_{0};
 };
 
 } // namespace rivan::lyrics

@@ -22,6 +22,36 @@ bool HasUsableExpandedGeometry(const ModuleLayoutItem& item) noexcept {
            std::isfinite(item.expandedY + item.expandedHeight);
 }
 
+bool HasFiniteOrderedRectangle(const ModuleNormalizedRect& bounds) noexcept {
+    return std::isfinite(bounds.left) && std::isfinite(bounds.top) &&
+           std::isfinite(bounds.right) && std::isfinite(bounds.bottom) &&
+           bounds.right > bounds.left && bounds.bottom > bounds.top &&
+           std::isfinite(bounds.right - bounds.left) &&
+           std::isfinite(bounds.bottom - bounds.top);
+}
+
+bool HasFiniteCanvasRectangle(const ModuleNormalizedRect& bounds) noexcept {
+    return HasFiniteOrderedRectangle(bounds) && bounds.left >= 0.0F && bounds.top >= 0.0F &&
+           bounds.right <= 1.0F && bounds.bottom <= 1.0F;
+}
+
+bool HasUsableExpandedRectangle(const ModuleNormalizedRect& bounds) noexcept {
+    return HasFiniteOrderedRectangle(bounds) &&
+           bounds.right - bounds.left >= kMinimumModuleExtent &&
+           bounds.bottom - bounds.top >= kMinimumModuleExtent;
+}
+
+bool HasUsableTargetRectangle(const ModuleNormalizedRect& bounds) noexcept {
+    return HasFiniteCanvasRectangle(bounds) &&
+           bounds.right - bounds.left >= kMinimumModuleExtent &&
+           bounds.bottom - bounds.top >= kMinimumModuleExtent;
+}
+
+bool HasUsableHandleRectangle(const ModuleNormalizedRect& bounds) noexcept {
+    return HasFiniteCanvasRectangle(bounds) && bounds.right - bounds.left >= 0.001F &&
+           bounds.bottom - bounds.top >= 0.001F;
+}
+
 bool IsMember(const std::array<ModuleId, 6>& members, std::size_t count,
               ModuleId id) noexcept {
     for (std::size_t index = 0; index < count; ++index) {
@@ -104,6 +134,11 @@ void SquashResizeObstacles(ModuleLayout& layout, ModuleId resizedId,
 } // namespace
 
 bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) noexcept {
+    ModuleLayout candidate = *this;
+    const auto fail = [this, &before]() noexcept {
+        *this = before;
+        return false;
+    };
     const auto mapCenter = [](float center, float oldStart, float oldEnd,
                               float newStart, float newEnd) noexcept {
         const float oldLength = oldEnd - oldStart;
@@ -168,51 +203,52 @@ bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) no
         }
         return false;
     };
-    const auto reserveHandleStrip = [this](ModuleId targetRoot,
-                                           ModuleCollapseSide side,
-                                           const ModuleNormalizedRect& handle) noexcept {
-        auto* target = Find(targetRoot);
+    const auto reserveHandleStrip = [&candidate](ModuleId targetRoot,
+                                                  ModuleCollapseSide side,
+                                                  const ModuleNormalizedRect& handle) noexcept {
+        auto* target = candidate.Find(targetRoot);
         if (!target) return false;
 
         auto bounds = Bounds(*target);
+        if (!HasUsableTargetRectangle(bounds) || !HasFiniteOrderedRectangle(handle)) {
+            return false;
+        }
         const float strip = IsHorizontalCollapseSide(side)
             ? handle.right - handle.left : handle.bottom - handle.top;
         if (!(strip > 0.001F) || !std::isfinite(strip)) return false;
 
-        const auto apply = [this, targetRoot](ModuleNormalizedRect adjusted) noexcept {
-            SetTabGroupGeometry(targetRoot, adjusted);
+        const auto apply = [&candidate, targetRoot](ModuleNormalizedRect adjusted) noexcept {
+            if (!HasUsableTargetRectangle(adjusted)) return false;
+            candidate.SetTabGroupGeometry(targetRoot, adjusted);
+            return true;
         };
         switch (side) {
         case ModuleCollapseSide::Left:
             if (bounds.left >= strip) return true;
             if (bounds.right - strip >= kMinimumModuleExtent) {
                 bounds.left = strip;
-                apply(bounds);
-                return true;
+                return apply(bounds);
             }
             return false;
         case ModuleCollapseSide::Right:
             if (bounds.right <= 1.0F - strip) return true;
             if (1.0F - strip - bounds.left >= kMinimumModuleExtent) {
                 bounds.right = 1.0F - strip;
-                apply(bounds);
-                return true;
+                return apply(bounds);
             }
             return false;
         case ModuleCollapseSide::Top:
             if (bounds.top >= strip) return true;
             if (bounds.bottom - strip >= kMinimumModuleExtent) {
                 bounds.top = strip;
-                apply(bounds);
-                return true;
+                return apply(bounds);
             }
             return false;
         case ModuleCollapseSide::Bottom:
             if (bounds.bottom <= 1.0F - strip) return true;
             if (1.0F - strip - bounds.top >= kMinimumModuleExtent) {
                 bounds.bottom = 1.0F - strip;
-                apply(bounds);
-                return true;
+                return apply(bounds);
             }
             return false;
         case ModuleCollapseSide::None:
@@ -221,15 +257,15 @@ bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) no
         return false;
     };
 
-    for (auto& item : items) {
+    for (auto& item : candidate.items) {
         if (!item.visible || item.collapseMode != ModuleCollapseMode::Outside ||
             item.collapseTargetIsWindow || !item.collapsed) {
             continue;
         }
-        const ModuleId targetRoot = TabRoot(item.collapseTarget);
+        const ModuleId targetRoot = candidate.TabRoot(item.collapseTarget);
         const auto* oldTarget = before.Find(targetRoot);
-        const auto* target = Find(targetRoot);
-        if (!oldTarget || !target || !target->visible || target->collapsed) return false;
+        const auto* target = candidate.Find(targetRoot);
+        if (!oldTarget || !target || !target->visible || target->collapsed) return fail();
 
         ModuleNormalizedRect expanded{item.expandedX, item.expandedY,
                                       item.expandedX + item.expandedWidth,
@@ -237,30 +273,40 @@ bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) no
         ModuleNormalizedRect handle{item.handleX, item.handleY,
                                     item.handleX + item.handleWidth,
                                     item.handleY + item.handleHeight};
-        if (!(expanded.right > expanded.left) || !(expanded.bottom > expanded.top) ||
-            !(handle.right > handle.left) || !(handle.bottom > handle.top)) {
-            return false;
+        const auto oldTargetBounds = Bounds(*oldTarget);
+        const auto currentTargetBounds = Bounds(*target);
+        if (!IsCollapseSide(item.collapseSide) || !HasUsableExpandedRectangle(expanded) ||
+            !HasFiniteOrderedRectangle(handle) || !HasUsableTargetRectangle(oldTargetBounds) ||
+            !HasUsableTargetRectangle(currentTargetBounds)) {
+            return fail();
         }
 
         // The handle belongs outside this target, not to the client edge.
         // Reserve its full strip before reattaching so edge clamping cannot cover the target.
-        if (!reserveHandleStrip(targetRoot, item.collapseSide, handle)) return false;
+        if (!reserveHandleStrip(targetRoot, item.collapseSide, handle)) return fail();
 
-        const auto oldTargetBounds = Bounds(*oldTarget);
-        const auto* attachedTarget = Find(targetRoot);
-        if (!attachedTarget) return false;
+        const auto* attachedTarget = candidate.Find(targetRoot);
+        if (!attachedTarget) return fail();
         const auto targetBounds = Bounds(*attachedTarget);
+        if (!HasUsableTargetRectangle(targetBounds)) return fail();
         if (IsHorizontalCollapseSide(item.collapseSide)) {
             const float expandedCenter = (expanded.top + expanded.bottom) * 0.5F;
             const float expandedLength = expanded.bottom - expanded.top;
             const float handleLength = handle.bottom - handle.top;
+            if (!std::isfinite(expandedCenter) || !std::isfinite(expandedLength) ||
+                !std::isfinite(handleLength) || !(expandedLength > 0.0F) ||
+                !(handleLength > 0.001F) || handleLength > 1.0F) {
+                return fail();
+            }
             const float expandedMappedCenter = mapCenter(
                 expandedCenter, oldTargetBounds.top, oldTargetBounds.bottom,
                 targetBounds.top, targetBounds.bottom);
+            if (!std::isfinite(expandedMappedCenter)) return fail();
             const float clampedCenter = expandedLength <= 1.0F
                 ? std::clamp(expandedMappedCenter, expandedLength * 0.5F,
                              1.0F - expandedLength * 0.5F)
                 : expandedMappedCenter;
+            if (!std::isfinite(clampedCenter)) return fail();
             expanded.top = clampedCenter - expandedLength * 0.5F;
             expanded.bottom = expanded.top + expandedLength;
             handle.top = clampedCenter - handleLength * 0.5F;
@@ -269,19 +315,26 @@ bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) no
             const float expandedCenter = (expanded.left + expanded.right) * 0.5F;
             const float expandedLength = expanded.right - expanded.left;
             const float handleLength = handle.right - handle.left;
+            if (!std::isfinite(expandedCenter) || !std::isfinite(expandedLength) ||
+                !std::isfinite(handleLength) || !(expandedLength > 0.0F) ||
+                !(handleLength > 0.001F) || handleLength > 1.0F) {
+                return fail();
+            }
             const float expandedMappedCenter = mapCenter(
                 expandedCenter, oldTargetBounds.left, oldTargetBounds.right,
                 targetBounds.left, targetBounds.right);
+            if (!std::isfinite(expandedMappedCenter)) return fail();
             const float clampedCenter = expandedLength <= 1.0F
                 ? std::clamp(expandedMappedCenter, expandedLength * 0.5F,
                              1.0F - expandedLength * 0.5F)
                 : expandedMappedCenter;
+            if (!std::isfinite(clampedCenter)) return fail();
             expanded.left = clampedCenter - expandedLength * 0.5F;
             expanded.right = expanded.left + expandedLength;
             handle.left = clampedCenter - handleLength * 0.5F;
             handle.right = handle.left + handleLength;
         }
-        if (!setAttachedAxis(expanded, handle, item.collapseSide, targetBounds)) return false;
+        if (!setAttachedAxis(expanded, handle, item.collapseSide, targetBounds)) return fail();
 
         const float attachedSpace = item.collapseSide == ModuleCollapseSide::Left
             ? targetBounds.left
@@ -291,7 +344,11 @@ bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) no
                     ? targetBounds.top : 1.0F - targetBounds.bottom;
         const float attachedLength = IsHorizontalCollapseSide(item.collapseSide)
             ? handle.right - handle.left : handle.bottom - handle.top;
-        if (!(attachedSpace > 0.001F) || !(attachedLength > 0.001F)) return false;
+        if (!HasUsableExpandedRectangle(expanded) || !HasFiniteOrderedRectangle(handle) ||
+            !std::isfinite(attachedSpace) || !std::isfinite(attachedLength) ||
+            !(attachedSpace > 0.001F) || !(attachedLength > 0.001F)) {
+            return fail();
+        }
         if (item.collapseSide == ModuleCollapseSide::Left && handle.left < 0.0F) {
             handle.left = 0.0F;
             handle.right = std::min(handle.right, attachedSpace);
@@ -307,15 +364,21 @@ bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) no
         }
         if (IsHorizontalCollapseSide(item.collapseSide)) {
             const float length = handle.bottom - handle.top;
+            if (!std::isfinite(length) || !(length > 0.001F) || length > 1.0F) {
+                return fail();
+            }
             handle.top = std::clamp(handle.top, 0.0F, 1.0F - length);
             handle.bottom = handle.top + length;
         } else {
             const float length = handle.right - handle.left;
+            if (!std::isfinite(length) || !(length > 0.001F) || length > 1.0F) {
+                return fail();
+            }
             handle.left = std::clamp(handle.left, 0.0F, 1.0F - length);
             handle.right = handle.left + length;
         }
-        if (handle.right - handle.left < 0.001F || handle.bottom - handle.top < 0.001F) {
-            return false;
+        if (!HasUsableExpandedRectangle(expanded) || !HasUsableHandleRectangle(handle)) {
+            return fail();
         }
 
         item.expandedX = expanded.left;
@@ -331,6 +394,7 @@ bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) no
         item.width = item.handleWidth;
         item.height = item.handleHeight;
     }
+    *this = candidate;
     return true;
 }
 
@@ -825,7 +889,11 @@ bool ModuleLayout::FindplusWindowRectangle(
     ModuleId source, ModuleNormalizedRect region, float pointerX, float pointerY,
     float minimumWidth, float minimumHeight, ModuleNormalizedRect& result,
     std::optional<ModuleCollapseSide> attachedSide, bool attachWindowEdge) const noexcept {
-    if (!(region.right > region.left) || !(region.bottom > region.top) ||
+    if (!std::isfinite(region.left) || !std::isfinite(region.top) ||
+        !std::isfinite(region.right) || !std::isfinite(region.bottom) ||
+        !std::isfinite(pointerX) || !std::isfinite(pointerY) ||
+        !std::isfinite(minimumWidth) || !std::isfinite(minimumHeight) ||
+        !(region.right > region.left) || !(region.bottom > region.top) ||
         !(minimumWidth > 0.0F) || !(minimumHeight > 0.0F)) {
         return false;
     }
@@ -840,6 +908,7 @@ bool ModuleLayout::FindplusWindowRectangle(
             Contains(moving, movingCount, item.id)) continue;
         if (IsTabbed(item.id) && TabRoot(item.id) != item.id) continue;
         const auto bounds = Bounds(item);
+        if (!HasFiniteOrderedRectangle(bounds)) return false;
         if (bounds.right <= region.left || bounds.left >= region.right ||
             bounds.bottom <= region.top || bounds.top >= region.bottom) {
             continue;
@@ -847,8 +916,8 @@ bool ModuleLayout::FindplusWindowRectangle(
         if (obstacleCount < obstacles.size()) obstacles[obstacleCount++] = bounds;
     }
 
-    std::array<float, 12> xCoordinates{};
-    std::array<float, 12> yCoordinates{};
+    std::array<float, 16> xCoordinates{};
+    std::array<float, 16> yCoordinates{};
     std::size_t xCount = 0;
     std::size_t yCount = 0;
     const auto appendCoordinate = [](auto& coordinates, std::size_t& count, float value) {
