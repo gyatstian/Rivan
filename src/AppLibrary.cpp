@@ -108,7 +108,23 @@ void App::StartLibraryScan() {
     for (const auto& root : settings_.Settings().additionalMusicRoots) roots.push_back(root);
     scanThread_ = std::jthread([this, roots = std::move(roots)](std::stop_token stop) {
         library::LibraryScanner scanner;
-        auto result = scanner.Scan(std::span<const std::filesystem::path>(roots), stop);
+        library::LibraryScanResult result;
+        try {
+            result = scanner.Scan(std::span<const std::filesystem::path>(roots), stop);
+        } catch (...) {
+            // An exception escaping the worker would call std::terminate. Publish an
+            // empty result through the normal completion path instead, so
+            // ApplyCompletedScan still applies a consistent (empty) catalog and
+            // shutdown proceeds exactly as after a completed scan.
+            // result stays default-constructed (empty).
+        }
+        // Save probed durations (even partial) to disk so subsequent startups skip
+        // the slow MF container open for unchanged files. Best effort only; a cache
+        // write failure must never kill the worker thread.
+        try {
+            library::LibraryScanner::SaveDurationCache();
+        } catch (...) {
+        }
         if (stop.stop_requested()) return;
         std::scoped_lock lock(scanMutex_);
         completedScan_ = std::move(result);
@@ -122,6 +138,13 @@ void App::ApplyCompletedScan() {
         if (!completedScan_) return;
         result = std::move(completedScan_);
         completedScan_.reset();
+    }
+    // User playlists restore once, on the first scan application, so the per-track
+    // metadata reads do not delay the initial scan start. They must be installed
+    // before ApplyScan/ReplaceLibrary carries them across.
+    if (!userPlaylistsLoaded_) {
+        LoadUserPlaylists();
+        userPlaylistsLoaded_ = true;
     }
     // Apply the completed catalog before exposing it to the UI.  The scan result is
     // moved into PlaylistManager here; no UI callback may observe the intermediate
@@ -153,19 +176,36 @@ void App::RestoreSessionAfterScan() {
             const auto found = std::find_if(tracks.begin(), tracks.end(), [id](const auto& track) { return track.id == *id; });
             if (found != tracks.end()) selectedIndex = static_cast<std::size_t>(std::distance(tracks.begin(), found));
         }
+    } else if (activeTrack_) {
+        // A manual rescan (library edit) rebuilt the catalog; anchor the queue on the
+        // currently playing track so end-of-track and Next/Previous navigation do not
+        // jump back to the top. If the playing file was deleted/moved, fall back below.
+        const auto found = std::find_if(tracks.begin(), tracks.end(),
+                                        [this](const auto& track) { return track.id == activeTrack_->id; });
+        if (found != tracks.end()) {
+            selectedIndex = static_cast<std::size_t>(std::distance(tracks.begin(), found));
+        }
     }
     queue_.SetTracks(std::move(tracks), selectedIndex);
     queue_.SetShuffle(settings_.Session().shuffle);
     queue_.SetRepeat(ToQueueRepeat(settings_.Session().repeat));
     if (selectedIndex && queue_.Current()) {
-        selectedTrack_ = queue_.Current()->id;
-        activeTrack_ = *queue_.Current();
-        const auto metadata = LyricsMetadata(*activeTrack_);
-        lyrics_.Request(activeTrack_->id, metadata.first, metadata.second,
-                        activeTrack_->album, activeTrack_->durationSeconds);
-        audio_.Load(queue_.Current()->filePath);
-        if (settings_.Session().positionMilliseconds != 0) {
-            audio_.Seek(std::chrono::milliseconds(settings_.Session().positionMilliseconds));
+        if (!restored_) {
+            // Startup session restore: re-establish playback state and seek position.
+            selectedTrack_ = queue_.Current()->id;
+            activeTrack_ = *queue_.Current();
+            const auto metadata = LyricsMetadata(*activeTrack_);
+            lyrics_.Request(activeTrack_->id, metadata.first, metadata.second,
+                            activeTrack_->album, activeTrack_->durationSeconds);
+            audio_.Load(queue_.Current()->filePath);
+            if (settings_.Session().positionMilliseconds != 0) {
+                audio_.Seek(std::chrono::milliseconds(settings_.Session().positionMilliseconds));
+            }
+        } else {
+            // Manual rescan: keep the queue anchored on the playing track without
+            // reloading audio (it is already playing and must not restart).
+            selectedTrack_ = queue_.Current()->id;
+            activeTrack_ = *queue_.Current();
         }
     }
     restored_ = true;

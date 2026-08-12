@@ -125,7 +125,17 @@ inline void ReadFloatField(const core::IniDocument& document, std::string_view s
 
 inline std::string FloatText(float value) {
     char buffer[32]{};
-    std::snprintf(buffer, sizeof(buffer), "%.6g", static_cast<double>(value));
+    // std::to_chars is locale-independent (always a '.' separator, unlike a
+    // future setlocale(LC_ALL, "") + snprintf "%.6g") and emits the shortest
+    // representation that round-trips the float. Greatest float needs 9 digits
+    // plus exponent, so max_digits10 + 20 = 29 chars fits the buffer.
+    const auto [end, status] = std::to_chars(buffer, buffer + sizeof(buffer), value);
+    if (status == std::errc{}) {
+        return std::string(buffer, end);
+    }
+    // Fallback for toolchains without floating-point to_chars support; "%.9g"
+    // still round-trips but follows the C locale.
+    std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(value));
     return buffer;
 }
 

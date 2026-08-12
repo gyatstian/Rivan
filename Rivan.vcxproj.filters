@@ -111,9 +111,6 @@
     <ClCompile Include="src\ui\Win32Ui.DropInteraction.cpp">
       <Filter>Pliki źródłowe</Filter>
     </ClCompile>
-    <ClCompile Include="src\ui\Win32Ui.Input.cpp">
-      <Filter>Pliki źródłowe</Filter>
-    </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.Keyboard.cpp">
       <Filter>Pliki źródłowe</Filter>
     </ClCompile>

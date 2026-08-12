@@ -89,7 +89,9 @@ void Win32Ui::Impl::BeginModuleDrag(ModuleId id, float x, float y,
     moduleDragActive = false;
     moduleDetachTabOnMove = detachTabOnMove;
     moduleMoveTabbedGroup = false;
-    moduleMoveSnapGroup = moduleLayoutDraft.IsSnapped(id) && moduleLayoutDraft.IsSnapGrouped(id) &&
+    moduleMoveSnapGroup = !moduleLayoutDraft.IsTabbed(id) &&
+                          moduleLayoutDraft.IsSnapped(id) &&
+                          moduleLayoutDraft.IsSnapGrouped(id) &&
                           moduleLayoutDraft.SnapRoot(id) == id;
     moduleDragSnapRoot = moduleLayoutDraft.SnapRoot(id);
     moduleDragStart = {x, y};
@@ -142,10 +144,21 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
     }
     if (moduleGesture == ModuleGesture::Move && !moduleDetachTabOnMove) {
         moduleMoveTabbedGroup = moduleLayoutDraft.IsTabbed(draggedId);
-        moduleMoveSnapGroup = moduleLayoutDraft.IsSnapped(draggedId) &&
-                              moduleLayoutDraft.IsSnapGrouped(draggedId) &&
-                              moduleLayoutDraft.SnapRoot(draggedId) == draggedId;
+        moduleMoveSnapGroup = !moduleLayoutDraft.IsTabbed(draggedId) &&
+                               moduleLayoutDraft.IsSnapped(draggedId) &&
+                               moduleLayoutDraft.IsSnapGrouped(draggedId) &&
+                               moduleLayoutDraft.SnapRoot(draggedId) == draggedId;
         moduleDragSnapRoot = moduleLayoutDraft.SnapRoot(draggedId);
+    }
+    if (moduleGesture == ModuleGesture::Move && moduleMoveTabbedGroup &&
+        moduleLayoutDraft.IsSnapGrouped(draggedId)) {
+        std::array<ModuleId, 6> tabMembers{};
+        const auto tabRoot = moduleLayoutDraft.TabRoot(draggedId);
+        const auto tabCount = moduleLayoutDraft.GroupTabCount(tabRoot);
+        for (std::size_t index = 0; index < tabCount; ++index) {
+            tabMembers[index] = moduleLayoutDraft.GroupMember(tabRoot, index);
+        }
+        moduleLayoutDraft.DetachSnapMembers(tabMembers, tabCount);
     }
     auto* item = moduleLayoutDraft.Find(draggedId);
     if (!item) return;
@@ -183,8 +196,11 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
         } else if (moduleMoveTabbedGroup) {
             const float deltaX = nextX - item->x;
             const float deltaY = nextY - item->y;
-            for (std::size_t i = 0; i < moduleLayoutDraft.TabCount(); ++i) {
-                if (auto* member = moduleLayoutDraft.Find(moduleLayoutDraft.tabOrder[i])) {
+            const auto tabRoot = moduleLayoutDraft.TabRoot(draggedId);
+            const auto tabCount = moduleLayoutDraft.GroupTabCount(tabRoot);
+            for (std::size_t i = 0; i < tabCount; ++i) {
+                if (auto* member = moduleLayoutDraft.Find(
+                        moduleLayoutDraft.GroupMember(tabRoot, i))) {
                     member->x = std::clamp(member->x + deltaX, 0.0F, 1.0F - member->width);
                     member->y = std::clamp(member->y + deltaY, 0.0F, 1.0F - member->height);
                 }
@@ -248,7 +264,7 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
             continue;
         }
         if (moduleLayoutDraft.IsTabbed(iterator->id)) {
-            const auto activeTab = moduleLayoutDraft.tabOrder[moduleLayoutDraft.ActiveTabIndex()];
+            const auto activeTab = moduleLayoutDraft.GroupActiveMember(iterator->id);
             if (activeTab != iterator->id) continue;
         }
         const auto* geometry = moduleLayoutDraft.Find(moduleLayoutDraft.TabRoot(iterator->id));
@@ -329,6 +345,10 @@ void Win32Ui::Impl::ResolveModuleDropPreview(float x, float y) {
             if (!iterator->visible ||
                 moduleLayoutDraft.IsEffectivelyCollapsed(iterator->id) ||
                 iterator->id == *draggingModule) continue;
+            if (moduleLayoutDraft.IsTabbed(iterator->id) &&
+                moduleLayoutDraft.GroupActiveMember(iterator->id) != iterator->id) {
+                continue;
+            }
             if (moduleDragFromCollapsedArrow && Contains(moduleCollapsedArrowOrigin, x, y)) continue;
             if (moduleLayoutDraft.SnapRoot(iterator->id) ==
                 moduleLayoutDraft.SnapRoot(*draggingModule)) continue;
@@ -517,8 +537,9 @@ void Win32Ui::Impl::DetachModuleFromTabs(ModuleLayout& layout, ModuleId id) cons
     const auto geometry = *root;
     // When the root tab is removed, the remaining tab must keep the group's
     // visible rectangle instead of reverting to its old hidden rectangle.
-    for (std::size_t index = 0; index < layout.TabCount(); ++index) {
-        const auto tab = layout.tabOrder[index];
+    const auto tabCount = layout.GroupTabCount(id);
+    for (std::size_t index = 0; index < tabCount; ++index) {
+        const auto tab = layout.GroupMember(id, index);
         if (tab == id) continue;
         if (auto* item = layout.Find(tab)) {
             item->x = geometry.x;

@@ -66,11 +66,11 @@ namespace rivan::ui {
 
 [[nodiscard]] ComPtr<IDWriteTextFormat> Win32Ui::Impl::BuildTextFormat(
     const std::wstring& family, float size, DWRITE_FONT_WEIGHT weight,
-    const std::filesystem::path& customFile) {
+    const std::filesystem::path& customFile, const DWRITE_FONT_STYLE style) {
     ComPtr<IDWriteTextFormat> format;
     auto collection = CustomFontCollection(customFile);
     if (FAILED(writeFactory->CreateTextFormat(
-            family.c_str(), collection.Get(), weight, DWRITE_FONT_STYLE_NORMAL,
+            family.c_str(), collection.Get(), weight, style,
             DWRITE_FONT_STRETCH_NORMAL, size, L"en-us", format.ReleaseAndGetAddressOf()))) {
         return {};
     }
@@ -105,6 +105,18 @@ namespace rivan::ui {
     // DirectWrite collection because FR_PRIVATE fonts are absent from its system collection.
     void Win32Ui::Impl::ApplySkinFonts() {
         const auto& type = model.activeSkin.typography;
+        const int baseSizeKey = static_cast<int>(type.baseSize * 4.0F);
+        // Cheap per-paint guard mirroring the fontSignature check below: while the raw
+        // typography inputs are unchanged (and the formats exist), skip the wstring
+        // building and DirectWrite re-creation entirely.
+        if (baseSizeKey == lastAppliedFontBaseSizeKey &&
+            type.fontFamily == lastAppliedFontFamily &&
+            type.customFontFile == lastAppliedCustomFontFile &&
+            (type.customFontFile.empty() ||
+             model.activeSkin.directory == lastAppliedSkinDirectory) &&
+            regularFormat) {
+            return;
+        }
         std::wstring family(type.fontFamily.begin(), type.fontFamily.end());
         if (family.empty()) family = L"Segoe UI";
         std::wstring customFile;
@@ -112,9 +124,14 @@ namespace rivan::ui {
             customFile = (model.activeSkin.directory / type.customFontFile).wstring();
         }
         const std::wstring signature =
-            family + L"|" + customFile + L"|" + std::to_wstring(static_cast<int>(type.baseSize * 4.0F));
+            family + L"|" + customFile + L"|" + std::to_wstring(baseSizeKey);
         if (signature == fontSignature && regularFormat) return;
         fontSignature = signature;
+        lastAppliedFontBaseSizeKey = baseSizeKey;
+        lastAppliedFontFamily = type.fontFamily;
+        lastAppliedCustomFontFile = type.customFontFile;
+        lastAppliedSkinDirectory = model.activeSkin.directory;
+        songRowFormats.clear();
 
         const float base = std::clamp(type.baseSize, 8.0F, 32.0F);
         const std::filesystem::path customPath(customFile);
@@ -147,6 +164,7 @@ namespace rivan::ui {
 void Win32Ui::Impl::DiscardTarget() noexcept {
         imageCache.clear();
         trackCoverCache.clear();
+        songRowFormats.clear();
         trackCoverUseCounter = 0;
         nextTrackCoverLookup = {};
         previewBitmap.Reset();

@@ -7,6 +7,8 @@ namespace {
 
 core::IniDocument MakeSessionDocument(const SessionState& session) {
     core::IniDocument document;
+    auto layout = session.moduleLayout;
+    layout.NormalizeTabState();
     document.Set("meta", "format", "1");
     document.Set("window", "x", std::to_string(session.window.x));
     document.Set("window", "y", std::to_string(session.window.y));
@@ -18,8 +20,8 @@ core::IniDocument MakeSessionDocument(const SessionState& session) {
     document.Set("playback", "position_ms", std::to_string(session.positionMilliseconds));
     document.Set("playback", "shuffle", BoolText(session.shuffle));
     document.Set("playback", "repeat", std::string(ToString(session.repeat)));
-    for (std::size_t i = 0; i < session.moduleLayout.items.size(); ++i) {
-        const auto& item = session.moduleLayout.items[i];
+    for (std::size_t i = 0; i < layout.items.size(); ++i) {
+        const auto& item = layout.items[i];
         const std::string key = "module_" + std::to_string(i) + "_";
         document.Set("modules", key + "x", FloatText(item.x));
         document.Set("modules", key + "y", FloatText(item.y));
@@ -29,7 +31,9 @@ core::IniDocument MakeSessionDocument(const SessionState& session) {
         document.Set("modules", key + "dock", item.dockState == ui::ModuleDockState::Snapped
                                                ? "snapped" : "floating");
         document.Set("modules", key + "snap_group",
-                     std::to_string(static_cast<unsigned int>(session.moduleLayout.snapGroup[i])));
+                     std::to_string(static_cast<unsigned int>(layout.snapGroup[i])));
+        document.Set("modules", key + "tab_group_root",
+                     std::to_string(static_cast<unsigned int>(layout.tabGroupRoot[i])));
         document.Set("modules", key + "collapse_mode",
                      std::to_string(static_cast<unsigned int>(item.collapseMode)));
         document.Set("modules", key + "collapse_side",
@@ -47,11 +51,28 @@ core::IniDocument MakeSessionDocument(const SessionState& session) {
         document.Set("modules", key + "handle_width", FloatText(item.handleWidth));
         document.Set("modules", key + "handle_height", FloatText(item.handleHeight));
     }
-    document.Set("modules", "tab_count", std::to_string(session.moduleLayout.tabCount));
-    document.Set("modules", "active_tab", std::to_string(session.moduleLayout.activeTab));
-    for (std::size_t i = 0; i < session.moduleLayout.tabCount; ++i) {
+    const ui::ModuleId legacyRoot = layout.TabCount() == 0
+        ? ui::ModuleId::Rivan : layout.TabRoot(layout.tabOrder[0]);
+    const std::size_t legacyCount = layout.GroupTabCount(legacyRoot);
+    document.Set("modules", "tab_count", std::to_string(legacyCount));
+    document.Set("modules", "active_tab", std::to_string(layout.GroupActiveTab(legacyRoot)));
+    for (std::size_t i = 0; i < legacyCount; ++i) {
         document.Set("modules", "tab_" + std::to_string(i),
-                     std::to_string(static_cast<unsigned int>(session.moduleLayout.tabOrder[i])));
+                     std::to_string(static_cast<unsigned int>(layout.GroupMember(legacyRoot, i))));
+    }
+    document.Set("modules", "tab_order_count", std::to_string(layout.TabCount()));
+    for (std::size_t i = 0; i < layout.TabCount(); ++i) {
+        document.Set("modules", "tab_order_" + std::to_string(i),
+                     std::to_string(static_cast<unsigned int>(layout.tabOrder[i])));
+    }
+    for (std::size_t i = 0; i < layout.items.size(); ++i) {
+        const auto root = layout.items[i].id;
+        if (layout.GroupTabCount(root) < 2 || layout.TabRoot(root) != root) {
+            continue;
+        }
+        document.Set("modules", "tab_group_" + std::to_string(static_cast<unsigned int>(root)) +
+                                  "_active_tab",
+                     std::to_string(layout.GroupActiveTab(root)));
     }
     return document;
 }
@@ -165,6 +186,13 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
         item.x = std::min(item.x, 1.0F - item.width);
         item.y = std::min(item.y, 1.0F - item.height);
         if (!item.collapsed) ui::ModuleLayout::SyncExpandedGeometry(item);
+        if (const auto root = document->Get("modules", key + "tab_group_root")) {
+            if (const auto id = ParseInteger<unsigned int>(*root); id && *id < layout.items.size()) {
+                layout.tabGroupRoot[i] = static_cast<ui::ModuleId>(*id);
+            } else {
+                AddWarning(warnings, "Ignoring invalid modules." + key + "tab_group_root");
+            }
+        }
     }
 
     // Sessions written before the standalone video-preview module used the full
@@ -223,11 +251,15 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
         }
     }
 
-    if (const auto count = document->Get("modules", "tab_count")) {
+    const auto flattenedTabCount = document->Get("modules", "tab_order_count");
+    if (const auto count = flattenedTabCount ? flattenedTabCount
+                                             : document->Get("modules", "tab_count")) {
         if (const auto parsed = ParseInteger<std::size_t>(*count)) {
             layout.tabCount = std::min(*parsed, layout.tabOrder.size());
             for (std::size_t i = 0; i < layout.tabCount; ++i) {
-                if (const auto tab = document->Get("modules", "tab_" + std::to_string(i))) {
+                const std::string key = flattenedTabCount
+                    ? "tab_order_" + std::to_string(i) : "tab_" + std::to_string(i);
+                if (const auto tab = document->Get("modules", key)) {
                     if (const auto id = ParseInteger<unsigned int>(*tab); id && *id < layout.items.size()) {
                         layout.tabOrder[i] = static_cast<ui::ModuleId>(*id);
                     }
@@ -249,6 +281,18 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
             layout.activeTab = std::min(*parsed, layout.tabCount == 0 ? 0U : layout.tabCount - 1U);
         }
     }
+
+    for (std::size_t i = 0; i < layout.items.size(); ++i) {
+        const auto key = "tab_group_" + std::to_string(i) + "_active_tab";
+        if (const auto active = document->Get("modules", key)) {
+            if (const auto parsed = ParseInteger<std::size_t>(*active)) {
+                layout.groupActiveTab[i] = *parsed;
+            } else {
+                AddWarning(warnings, "Ignoring invalid modules." + key);
+            }
+        }
+    }
+    layout.NormalizeTabState();
 
     for (const auto& item : layout.items) {
         std::array<ui::ModuleId, 6> path{};

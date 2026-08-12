@@ -20,6 +20,13 @@ struct LibraryScanResult final {
 
 class LibraryScanner final {
 public:
+    // Enables persisting probed durations across runs. Pass the cache file path (for
+    // example LocalAppData\Rivan\library-durations.cache) before the first Scan call;
+    // call SaveDurationCache after Scan to write back newly probed values. No-op when
+    // the path is empty.
+    static void SetDurationCachePath(std::filesystem::path path);
+    static void SaveDurationCache();
+
     [[nodiscard]] static bool IsSupported(const std::filesystem::path& path) noexcept;
     [[nodiscard]] LibraryScanResult Scan(const std::filesystem::path& root,
                                          std::stop_token stop = {}) const;

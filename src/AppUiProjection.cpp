@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cwctype>
 #include <functional>
+#include <unordered_map>
 #include <utility>
 
 namespace rivan {
@@ -102,23 +103,11 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.nowPlayingPath.clear();
 
     const auto* current = activeTrack_ ? &*activeTrack_ : nullptr;
-    const bool trackCoverArtEnabled = settings_.Settings().trackCoverArtEnabled;
     const bool filePreviewEnabled = settings_.Settings().filePreviewEnabled;
-    const auto ownerForTrack = [this](library::TrackId trackId,
-                                      playlist::PlaylistId fallback) {
-        for (const auto& candidate : playlists_.Playlists()) {
-            if (candidate.kind != playlist::PlaylistKind::Directory) continue;
-            if (std::find(candidate.trackIds.begin(), candidate.trackIds.end(), trackId) !=
-                candidate.trackIds.end()) {
-                return candidate.id;
-            }
-        }
-        return fallback;
-    };
-    const auto makeTrackView = [this, current, trackCoverArtEnabled, filePreviewEnabled](
-                                   const auto& track, playlist::PlaylistId sourcePlaylistId) {
+    const auto makeTrackView = [this, current, filePreviewEnabled](
+                                    const auto& track, playlist::PlaylistId sourcePlaylistId) {
         ui::TrackView view{track.id, track.title, track.artist, track.album,
-                           track.durationSeconds, track.id == selectedTrack_,
+                            track.durationSeconds, track.bitrateKbps, track.id == selectedTrack_,
                            current != nullptr && current->id == track.id,
                            library::Track::IsAudioFile(track.filePath)};
         // Context-menu rename needs the backing filename even when preview and covers are off.
@@ -129,9 +118,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
 
     // Library tree: optional Youtube downloader, flat All Music row, then folders / user.
     if (YoutubeFeatureOn()) {
-        const std::size_t ytCount = !youtubeView_.entries.empty()
-                                        ? youtubeView_.entries.size()
-                                        : 0;
+        const std::size_t ytCount = youtubeView_.entries.size();
         ui::PlaylistView youtube{playlist::YoutubePlaylistId, L"Youtube", ytCount,
                                  selectedPlaylist_ == playlist::YoutubePlaylistId};
         youtube.depth = 0;
@@ -223,6 +210,30 @@ void App::SnapshotUiModel(ui::UiModel& out) {
             }
             out.trackSections.push_back({L"", first, directTracks.size()});
         }
+        // Resolve which Directory folder owns each child track once per snapshot; the
+        // old per-track linear scan across every playlist was O(children x all tracks).
+        std::unordered_map<library::TrackId, playlist::PlaylistId> ownerByTrack;
+        {
+            std::size_t ownedTrackCount = 0;
+            for (const auto& playlist : playlists_.Playlists()) {
+                if (playlist.kind == playlist::PlaylistKind::Directory) {
+                    ownedTrackCount += playlist.trackIds.size();
+                }
+            }
+            ownerByTrack.reserve(ownedTrackCount);
+            for (const auto& playlist : playlists_.Playlists()) {
+                if (playlist.kind != playlist::PlaylistKind::Directory) continue;
+                for (const auto trackId : playlist.trackIds) {
+                    // try_emplace keeps the first owning folder, matching the old scan.
+                    ownerByTrack.try_emplace(trackId, playlist.id);
+                }
+            }
+        }
+        const auto ownerForTrack = [&ownerByTrack](library::TrackId trackId,
+                                                   playlist::PlaylistId fallback) {
+            const auto found = ownerByTrack.find(trackId);
+            return found != ownerByTrack.end() ? found->second : fallback;
+        };
         for (const auto* child : playlists_.Children(selectedPlaylist_)) {
             auto childTracks = playlists_.ResolveTracksRecursive(child->id);
             if (childTracks.empty()) continue;
@@ -284,7 +295,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
         out.selectedPlaylistCanAdd = false;
     }
     out.duplicateAsFile = settings_.Settings().duplicateAsFile;
-    out.trackCoverArtEnabled = trackCoverArtEnabled;
+    out.songRowLayout = settings_.Settings().songRowLayout;
     out.filePreviewEnabled = filePreviewEnabled;
     out.startAtStartup = settings_.Settings().startAtStartup;
     out.exitToTray = settings_.Settings().exitToTray;

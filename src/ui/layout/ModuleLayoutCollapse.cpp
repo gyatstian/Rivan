@@ -105,11 +105,20 @@ bool ModuleLayout::SquashForExpansion(ModuleId source, ModuleNormalizedRect expa
         const auto current = Bounds(obstacle);
         const float currentWidth = current.right - current.left;
         const float currentHeight = current.bottom - current.top;
-        const auto sideCandidate = [&consider, &expanded](ModuleNormalizedRect bounds) {
-            if (bounds.right - bounds.left >= 0.10F &&
-                bounds.bottom - bounds.top >= 0.10F && !Intersects(bounds, expanded)) {
-                consider(bounds);
+        const auto sideCandidate = [this, &consider, &expanded, source,
+                                    obstacleId = obstacle.id](ModuleNormalizedRect bounds) {
+            if (bounds.right - bounds.left < 0.10F ||
+                bounds.bottom - bounds.top < 0.10F || Intersects(bounds, expanded)) {
+                return;
             }
+            for (const auto& candidate : items) {
+                if (!candidate.visible || candidate.collapsed || candidate.id == source ||
+                    candidate.id == obstacleId) {
+                    continue;
+                }
+                if (Intersects(bounds, Bounds(candidate))) return;
+            }
+            consider(bounds);
         };
         const float rightWidth = std::min(currentWidth, 1.0F - expanded.right);
         sideCandidate({expanded.right, current.top,
@@ -208,11 +217,20 @@ bool ModuleLayout::ResizeForExpansion(ModuleId source, ModuleNormalizedRect expa
     };
     const bool shiftSource = hasObstacleOverlap && moveSource;
     const auto shiftCollapseGeometry = [canvasWidth, canvasHeight, extent, horizontal,
-                                        shiftSource, extra](ModuleLayoutItem& item) {
+                                        shiftSource, extra, sourceLeft, sourceTop,
+                                        sourceRight, sourceBottom](ModuleLayoutItem& item) {
         if (item.collapseMode == ModuleCollapseMode::None) return;
         const float width = horizontal ? extent : canvasWidth;
         const float height = horizontal ? canvasHeight : extent;
-        const float shift = !shiftSource ? extra : 0.0F;
+        // Only collapsed modules whose bounds overlap the expanding source shift
+        // with the growth; unrelated collapsed handles keep their pixel position so
+        // they stay visually attached to their own targets.
+        const bool overlapsExpansion = ModuleLayout::Intersects(
+            {item.handleX * canvasWidth, item.handleY * canvasHeight,
+             (item.handleX + item.handleWidth) * canvasWidth,
+             (item.handleY + item.handleHeight) * canvasHeight},
+            {sourceLeft, sourceTop, sourceRight, sourceBottom});
+        const float shift = !shiftSource && overlapsExpansion ? extra : 0.0F;
         if (horizontal) {
             item.handleX = (item.handleX * canvasWidth + shift) / width;
             item.handleWidth = item.handleWidth * canvasWidth / width;
@@ -223,6 +241,14 @@ bool ModuleLayout::ResizeForExpansion(ModuleId source, ModuleNormalizedRect expa
             item.handleHeight = item.handleHeight * canvasHeight / height;
             item.expandedY = (item.expandedY * canvasHeight + shift) / height;
             item.expandedHeight = item.expandedHeight * canvasHeight / height;
+        }
+        if (item.collapsed) {
+            // Rendering and hit testing use the primary rectangle for collapsed items;
+            // keep it identical to the transformed handle rectangle.
+            item.x = item.handleX;
+            item.y = item.handleY;
+            item.width = item.handleWidth;
+            item.height = item.handleHeight;
         }
     };
     for (auto& item : items) {
@@ -508,8 +534,13 @@ bool ModuleLayout::CollapseToModule(ModuleId source, ModuleId target, ModuleColl
     auto* item = Find(source);
     if (!item) return fail();
     if (!sourceWasSnapGrouped) snapGroup[static_cast<std::size_t>(item - items.data())] = source;
+    if (mode == ModuleCollapseMode::Inside) {
+        ScaleCollapsedInsideTabGroup(targetRoot, targetBounds, collapsedTargetBounds);
+    }
     SetCollapsedGeometry(*item, handle, expanded, mode, side, targetRoot, false);
-    if (mode == ModuleCollapseMode::Inside) SetTabGroupGeometry(targetRoot, collapsedTargetBounds);
+    if (mode == ModuleCollapseMode::Inside) {
+        SetTabGroupGeometry(targetRoot, collapsedTargetBounds);
+    }
     if (!ReattachOutsideCollapseHandles(before)) {
         return fail();
     }

@@ -10,8 +10,18 @@ void Win32Ui::Impl::SyncRefreshTimer() noexcept {
             currentTimerMs = 0;
             return;
         }
-        // Video preview needs ~30 Hz while expanded even if transport is idle.
-        const UINT desired = (moduleGesture != ModuleGesture::None ||
+        // The marquee in the player module scrolls continuously, so keep the
+        // refresh rate at 30 Hz whenever the Rivan module is the active visible tab.
+        const bool marqueeActive = [this]() noexcept {
+            if (model.miniPlayer) return false;
+            const auto* item = model.moduleLayout.Find(ModuleId::Rivan);
+            if (!item || !item->visible) return false;
+            if (model.moduleLayout.IsEffectivelyCollapsed(ModuleId::Rivan)) return false;
+            return !model.moduleLayout.IsTabbed(ModuleId::Rivan) ||
+                   model.moduleLayout.GroupActiveMember(ModuleId::Rivan) == ModuleId::Rivan;
+        }();
+        const UINT desired = (marqueeActive ||
+                              moduleGesture != ModuleGesture::None ||
                               model.playback == PlaybackState::Playing ||
                               (IsVideoPreviewModuleVisible() && previewIsVideo) || previewFullscreen)
             ? kRefreshPlayingMilliseconds
@@ -49,11 +59,6 @@ void Win32Ui::Impl::Paint() {
         }
         const std::uint64_t previousRevision = model.revision;
         try { host.SnapshotUiModel(model); } catch (...) {}
-        if (!model.trackCoverArtEnabled && !trackCoverCache.empty()) {
-            trackCoverCache.clear();
-            trackCoverUseCounter = 0;
-            nextTrackCoverLookup = {};
-        }
         // Paint only presents latest decoded preview frame. Decoder work stays off UI thread.
         if (windowKind == WindowKind::Main) SyncFilePreview();
         Win32Ui::Impl::SyncSelectionToPlayback();

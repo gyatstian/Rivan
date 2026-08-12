@@ -36,6 +36,49 @@ std::wstring CurrentExecutablePath() {
     }
 }
 
+// IniDocument::SaveAtomic writes "<name>.tmp.<pid>.<sequence>" next to the target
+// and renames it onto the destination. A crash between the temporary write and the
+// rename strands garbage that accumulates across saves; delete any leftovers at
+// startup. A surviving temp is always garbage from a crashed save, regardless of age.
+void SweepStaleTemporaryIniFiles() {
+    std::error_code error;
+    std::filesystem::directory_iterator iterator(core::AppPaths::LocalDataRoot(), error);
+    if (error) return;
+    const std::filesystem::directory_iterator end;
+    while (iterator != end) {
+        if (iterator->is_regular_file(error)) {
+            const std::wstring name = iterator->path().filename().wstring();
+            if (name.find(L".tmp.") != std::wstring::npos) {
+                std::filesystem::remove(iterator->path(), error);
+            }
+        }
+        error.clear();
+        iterator.increment(error);
+        if (error) return;  // Best effort only; never block startup.
+    }
+}
+
+// Keep a restored window from never being visible again: if the persisted
+// rectangle misses the nearest monitor's work area entirely, park it at the
+// work-area top-left preserving its size so at least a corner ends up on-screen.
+void ClampWindowToWorkArea(RECT& rectangle) {
+    const HMONITOR nearest = MonitorFromRect(&rectangle, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if (nearest == nullptr || !GetMonitorInfoW(nearest, &monitor)) return;
+    const RECT work = monitor.rcWork;
+    RECT overlap{};
+    if (IntersectRect(&overlap, &rectangle, &work) && !IsRectEmpty(&overlap)) {
+        return;  // Already shares at least a corner/edge with the work area.
+    }
+    const int width = rectangle.right - rectangle.left;
+    const int height = rectangle.bottom - rectangle.top;
+    rectangle.left = work.left;
+    rectangle.top = work.top;
+    rectangle.right = rectangle.left + width;
+    rectangle.bottom = rectangle.top + height;
+}
+
 } // namespace
 
 App::App(HINSTANCE instance)
@@ -63,18 +106,26 @@ App::~App() {
         scanThread_.request_stop();
         scanThread_.join();
     }
-    PersistState();
+    if (!persistedOnClose_) PersistState();
 }
 
 bool App::Initialize() {
     std::wstring pathError;
     if (!core::AppPaths::EnsureDirectories(&pathError)) return false;
 
+    SweepStaleTemporaryIniFiles();
+
     std::string error;
-    if (!settings_.Load(&error, nullptr)) {
+    // A corrupt settings.ini or session.ini must not destroy the other half:
+    // load and reset each file independently.
+    if (!settings_.LoadSettings(&error, nullptr)) {
         settings_.ResetSettings();
-        settings_.ResetSession();
+        // Best-effort one-time repair: rewrite defaults so a corrupt file does not
+        // re-fail (and silently re-reset) on every boot. A read-only drive just fails
+        // again; the in-memory defaults remain valid either way.
+        (void)settings_.SaveSettings(&error);
     }
+    if (!settings_.LoadSession(&error, nullptr)) settings_.ResetSession();
 
     auto applicationSettings = settings_.Settings();
     std::error_code filesystemError;
@@ -103,6 +154,7 @@ bool App::Initialize() {
 
     miniPlayer_ = settings_.Session().miniMode;
     moduleLayout_ = settings_.Session().moduleLayout;
+    moduleLayout_.NormalizeTabState();
     if (!moduleLayout_.HasValidGeometry()) {
         moduleLayout_ = ui::ModuleLayout::Defaults();
     }
@@ -149,9 +201,15 @@ bool App::Initialize() {
 
     if (!miniPlayer_) {
         const auto& rectangle = settings_.Session().window;
-        SetWindowPos(window_->WindowHandle(), nullptr, rectangle.x, rectangle.y,
+        RECT target{rectangle.x, rectangle.y,
+                    rectangle.x + rectangle.width, rectangle.y + rectangle.height};
+        ClampWindowToWorkArea(target);
+        SetWindowPos(window_->WindowHandle(), nullptr, target.left, target.top,
                      rectangle.width, rectangle.height, SWP_NOACTIVATE | SWP_NOZORDER);
     }
+    // User playlists are restored lazily on the first scan application (see
+    // ApplyCompletedScan) so per-track metadata reads do not delay the scan start.
+    library::LibraryScanner::SetDurationCachePath(core::AppPaths::LocalDataRoot() / L"library-durations.cache");
     StartLibraryScan();
     return true;
 }
@@ -183,18 +241,7 @@ void App::SetModuleLayout(ui::ModuleLayout layout) {
         item.y = std::min(item.y, 1.0F - item.height);
         if (!item.collapsed) ui::ModuleLayout::SyncExpandedGeometry(item);
     }
-    if (layout.tabCount > layout.tabOrder.size()) layout.tabCount = layout.tabOrder.size();
-    layout.activeTab = std::min(layout.activeTab, layout.tabCount == 0 ? 0U : layout.tabCount - 1U);
-    // Side snapping is represented by geometry and a small explicit state. Keep
-    // malformed persisted/host-provided tab entries from referring to an absent
-    // module, while retaining the existing global tab-group model.
-    for (std::size_t i = 0; i < layout.tabCount; ++i) {
-        if (layout.Find(layout.tabOrder[i]) == nullptr) {
-            layout.tabCount = 0;
-            layout.activeTab = 0;
-            break;
-        }
-    }
+    layout.NormalizeTabState();
     for (std::size_t i = 0; i < layout.items.size(); ++i) {
         if (layout.Find(layout.snapGroup[i]) == nullptr) {
             layout.snapGroup[i] = layout.items[i].id;
@@ -206,7 +253,13 @@ void App::SetModuleLayout(ui::ModuleLayout layout) {
     session.moduleLayout = moduleLayout_;
     std::string error;
     (void)settings_.SetSession(std::move(session), &error);
-    (void)settings_.SaveSession(&error);
+    // Layout messages stream in during interactive resize; keep the in-memory session in
+    // sync every time but throttle the INI write to at most once per ~1.5 s.
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastSessionSave_ >= std::chrono::milliseconds(1500)) {
+        lastSessionSave_ = now;
+        (void)settings_.SaveSession(&error);
+    }
     ++revision_;
     if (window_) window_->Refresh();
 }
@@ -399,10 +452,11 @@ void App::SetFilePreviewEnabled(bool enabled) {
     if (window_) window_->Refresh();
 }
 
-void App::SetTrackCoverArtEnabled(bool enabled) {
+void App::SetSongRowLayout(ui::SongRowLayout layout) {
     auto settings = settings_.Settings();
-    if (settings.trackCoverArtEnabled == enabled) return;
-    settings.trackCoverArtEnabled = enabled;
+    if (settings.songRowLayout.rowHeight == layout.rowHeight &&
+        settings.songRowLayout.fields == layout.fields) return;
+    settings.songRowLayout = layout;
     std::string error;
     if (!settings_.SetSettings(settings, &error)) return;
     (void)settings_.SaveSettings(&error);

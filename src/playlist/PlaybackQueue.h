@@ -30,14 +30,13 @@ public:
     explicit PlaybackQueue(std::uint32_t randomSeed);
 
     void SetTracks(std::vector<library::Track> tracks,
-                   std::optional<std::size_t> startIndex = std::size_t{0});
+                   std::optional<std::size_t> startIndex = std::nullopt);
     void AppendTracks(std::span<const library::Track> tracks);
     [[nodiscard]] std::size_t AppendDroppedFiles(
         std::span<const std::filesystem::path> paths);
     void Clear() noexcept;
 
     [[nodiscard]] bool Empty() const noexcept;
-    [[nodiscard]] std::size_t Size() const noexcept;
     [[nodiscard]] const std::vector<library::Track>& Tracks() const noexcept;
     [[nodiscard]] const library::Track* Current() const noexcept;
 

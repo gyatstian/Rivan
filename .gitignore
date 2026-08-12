@@ -14,6 +14,7 @@ AGENTS.md
 [Rr]elease/
 x64/
 x86/
+graphify-out/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
 *.obj

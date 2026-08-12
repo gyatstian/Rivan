@@ -50,15 +50,6 @@ struct Playlist final {
         trackIds.push_back(trackId);
     }
 
-    bool RemoveTrack(library::TrackId trackId) noexcept {
-        const auto position = std::find(trackIds.begin(), trackIds.end(), trackId);
-        if (position == trackIds.end()) {
-            return false;
-        }
-        trackIds.erase(position);
-        return true;
-    }
-
     // Removes the single entry at a position. Position-based so duplicate entries of the
     // same id can be removed independently.
     bool RemoveAt(std::size_t index) noexcept {

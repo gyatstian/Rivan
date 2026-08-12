@@ -101,6 +101,8 @@
     <ClInclude Include="src\skin\SkinArchive.h" />
     <ClInclude Include="src\skin\SkinManager.h" />
     <ClInclude Include="src\ui\UiHost.h" />
+    <ClInclude Include="src\ui\SongRowLayout.h" />
+    <ClInclude Include="src\ui\TrackCoverCache.h" />
     <ClInclude Include="src\ui\UiModule.h" />
     <ClInclude Include="src\ui\layout\ModuleDropZones.h" />
     <ClInclude Include="src\ui\layout\ModuleLayout.h" />
@@ -113,6 +115,7 @@
     <ClInclude Include="src\ui\Win32UiPreviewState.h" />
     <ClInclude Include="src\ui\Win32UiRenderState.h" />
     <ClInclude Include="src\ui\Win32UiSkinStudioState.h" />
+    <ClInclude Include="src\ui\Win32UiSongRowLayoutState.h" />
     <ClInclude Include="src\visualization\Visualization.h" />
     <ClInclude Include="src\visualization\VisualizationRenderer.h" />
     <ClInclude Include="src\youtube\YoutubeService.h" />
@@ -159,7 +162,6 @@
     <ClCompile Include="src\ui\Win32Ui.Paint.cpp" />
     <ClCompile Include="src\ui\Win32Ui.ModuleRenderer.cpp" />
     <ClCompile Include="src\ui\Win32Ui.ModuleInteraction.cpp" />
-    <ClCompile Include="src\ui\Win32Ui.Input.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Keyboard.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Pointer.cpp" />
     <ClCompile Include="src\ui\Win32Ui.YoutubeChooser.cpp" />

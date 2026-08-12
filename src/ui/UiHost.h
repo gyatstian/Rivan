@@ -6,6 +6,7 @@
 #include "../youtube/YoutubeService.h"
 #include "../lyrics/LyricsService.h"
 #include "layout/ModuleLayout.h"
+#include "SongRowLayout.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -82,6 +83,7 @@ struct TrackView {
     std::wstring artist;
     std::wstring album;
     double durationSeconds{};
+    int bitrateKbps{};
     bool selected{};
     bool playing{};
     bool audioFile{};
@@ -142,7 +144,7 @@ struct UiModel {
     SettingCategory settingsCategory{SettingCategory::General};
     // General pane: library roots in order (index 0 = primary music folder).
     std::vector<std::wstring> musicFolders;
-    bool trackCoverArtEnabled{true};
+    SongRowLayout songRowLayout{SongRowLayout::Defaults()};
     bool filePreviewEnabled{true};
     bool startAtStartup{};
     bool exitToTray{};
@@ -213,6 +215,8 @@ public:
     // Every method is called on the window thread. SnapshotUiModel writes owned values
     // into `out` (reusing capacity when the same model is refreshed). App decides state.
     virtual void SnapshotUiModel(UiModel& out) = 0;
+    // Main window is about to be destroyed. Persist while its live rectangle is available.
+    virtual void OnMainWindowClosing() {}
     virtual void Invoke(Command command) = 0;
     virtual void SelectPlaylist(std::uint64_t id) = 0;
     // Expand/collapse a folder node in the library tree without changing selection.
@@ -228,8 +232,8 @@ public:
     // and removes that entry. index may equal current additional count to append.
     // Persists and triggers a rescan.
     virtual void SetMusicFolder(std::size_t index, std::filesystem::path folder) = 0;
-    // Off skips all row thumbnail lookup and releases their UI cache.
-    virtual void SetTrackCoverArtEnabled(bool enabled) = 0;
+    // Persists normalized song-row geometry and field styling shared by library rows.
+    virtual void SetSongRowLayout(SongRowLayout layout) = 0;
     // Off removes preview state and prevents metadata/video work in the view.
     virtual void SetFilePreviewEnabled(bool enabled) = 0;
     virtual void SetStartAtStartup(bool enabled) = 0;

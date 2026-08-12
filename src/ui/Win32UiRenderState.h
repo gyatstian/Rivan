@@ -20,7 +20,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <optional>
+#include <utility>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace rivan::ui {
@@ -74,6 +77,9 @@ struct Win32UiRenderState {
     std::uint64_t cachedPlaylistDurationRevision{~std::uint64_t{0}};
     double cachedPlaylistDuration{};
     std::wstring fontSignature;
+    std::map<std::tuple<int, SongRowFontWeight, SongRowFontStyle>,
+             Microsoft::WRL::ComPtr<IDWriteTextFormat>>
+        songRowFormats;
 
     std::array<ID2D1Brush*, 14> currentBrushes{};
     std::vector<D2D1_RECT_F> screenBounds;
@@ -87,6 +93,9 @@ struct Win32UiRenderState {
         IDWriteTextFormat* format{};
         DWRITE_TEXT_ALIGNMENT alignment{DWRITE_TEXT_ALIGNMENT_LEADING};
         DWRITE_PARAGRAPH_ALIGNMENT vertical{DWRITE_PARAGRAPH_ALIGNMENT_CENTER};
+        D2D1_DRAW_TEXT_OPTIONS drawOptions{D2D1_DRAW_TEXT_OPTIONS_CLIP};
+        std::optional<D2D1_RECT_F> clipBounds;
+        bool trim{};
     };
     std::vector<DeferredText> deferredTexts;
     struct DeferredTextLayout {

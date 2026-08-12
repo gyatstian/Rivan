@@ -522,8 +522,7 @@ void LyricsService::Request(std::uint64_t trackId, std::wstring title, std::wstr
     snapshot_.trackId = trackId;
     snapshot_.loading = true;
     snapshot_.status = L"Loading lyrics...";
-    snapshot_.revision = generation_;
-    publishedRevision_.store(snapshot_.revision, std::memory_order_release);
+    PublishSnapshotLocked();
     condition_.notify_one();
 }
 
@@ -533,7 +532,7 @@ void LyricsService::Reset() {
     pending_.reset();
     snapshot_ = LyricsSnapshot{};
     snapshot_.status = L"No lyrics available";
-    publishedRevision_.store(snapshot_.revision, std::memory_order_release);
+    PublishSnapshotLocked();
 }
 
 LyricsSnapshot LyricsService::Snapshot() const {
@@ -551,10 +550,18 @@ std::filesystem::path LyricsService::CachePath(const RequestData& request) const
 
 std::optional<LyricsDocument> LyricsService::LoadCache(const RequestData& request) const {
     if (cacheDirectory_.empty()) return std::nullopt;
-    std::ifstream input(CachePath(request), std::ios::binary);
+    const auto cachePath = CachePath(request);
+    std::error_code error;
+    const auto size = std::filesystem::file_size(cachePath, error);
+    if (error || size > kMaximumResponseBytes) return std::nullopt;
+    std::ifstream input(cachePath, std::ios::binary);
     if (!input) return std::nullopt;
-    std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    if (bytes.size() > kMaximumResponseBytes || bytes.rfind("RIVAN-LYRICS-1\n", 0) != 0) return std::nullopt;
+    std::string bytes(static_cast<std::size_t>(size), '\0');
+    if (size > 0) {
+        input.read(bytes.data(), static_cast<std::streamsize>(size));
+        bytes.resize(static_cast<std::size_t>(input.gcount()));
+    }
+    if (bytes.rfind("RIVAN-LYRICS-1\n", 0) != 0) return std::nullopt;
     constexpr std::string_view header = "RIVAN-LYRICS-1\n";
     const auto separator = bytes.find('\n', header.size());
     if (separator == std::string::npos) return std::nullopt;
@@ -720,40 +727,52 @@ void LyricsService::Publish(const RequestData& request, LyricsDocument document,
         snapshot_.available = !document.Empty();
         snapshot_.document = std::move(document);
         snapshot_.status = std::move(status);
-        snapshot_.revision = request.generation;
-        publishedRevision_.store(snapshot_.revision, std::memory_order_release);
+        PublishSnapshotLocked();
         notify = notify_;
     }
     if (notify) notify();
 }
 
+void LyricsService::PublishSnapshotLocked() noexcept {
+    snapshot_.revision = publishedRevision_.load(std::memory_order_relaxed) + 1;
+    publishedRevision_.store(snapshot_.revision, std::memory_order_release);
+}
+
 void LyricsService::Worker(std::stop_token stop) {
     while (!stop.stop_requested()) {
         RequestData request;
-        bool useCache = false;
-        {
-            std::unique_lock lock(mutex_);
-            condition_.wait(lock, stop, [this] { return pending_.has_value(); });
-            if (stop.stop_requested()) return;
-            request = std::move(*pending_);
-            pending_.reset();
-            useCache = cacheEnabled_;
-        }
-        if (useCache) {
-            if (auto document = LoadCache(request)) {
-                Publish(request, std::move(*document), L"Cached lyrics");
-                continue;
+        bool haveRequest = false;
+        try {
+            bool useCache = false;
+            {
+                std::unique_lock lock(mutex_);
+                condition_.wait(lock, stop, [this] { return pending_.has_value(); });
+                if (stop.stop_requested()) return;
+                request = std::move(*pending_);
+                haveRequest = true;
+                pending_.reset();
+                useCache = cacheEnabled_;
+            }
+            if (useCache) {
+                if (auto document = LoadCache(request)) {
+                    Publish(request, std::move(*document), L"Cached lyrics");
+                    continue;
+                }
+            }
+            auto document = Fetch(request, stop);
+            bool saveCache = false;
+            {
+                std::scoped_lock lock(mutex_);
+                saveCache = cacheEnabled_;
+            }
+            if (document && saveCache) SaveCache(request, *document);
+            Publish(request, document ? std::move(*document) : LyricsDocument{},
+                    document ? L"Lyrics" : L"No lyrics available");
+        } catch (...) {
+            if (haveRequest) {
+                Publish(request, LyricsDocument{}, L"No lyrics available");
             }
         }
-        auto document = Fetch(request, stop);
-        bool saveCache = false;
-        {
-            std::scoped_lock lock(mutex_);
-            saveCache = cacheEnabled_;
-        }
-        if (document && saveCache) SaveCache(request, *document);
-        Publish(request, document ? std::move(*document) : LyricsDocument{},
-                document ? L"Lyrics" : L"No lyrics available");
     }
 }
 

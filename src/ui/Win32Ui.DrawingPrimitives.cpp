@@ -51,16 +51,49 @@ void Win32Ui::Impl::AddSettingHit(const D2D1_RECT_F& bounds, SettingCategory cat
 }
 
 void Win32Ui::Impl::DrawText(std::wstring_view textValue, const D2D1_RECT_F& bounds,
-                  ID2D1Brush* brush, IDWriteTextFormat* format,
+                   ID2D1Brush* brush, IDWriteTextFormat* format,
                    DWRITE_TEXT_ALIGNMENT alignment,
-                   DWRITE_PARAGRAPH_ALIGNMENT vertical) {
+                   DWRITE_PARAGRAPH_ALIGNMENT vertical,
+                   const D2D1_DRAW_TEXT_OPTIONS drawOptions,
+                   const D2D1_RECT_F* clipBounds,
+                   const bool trim) {
         if (textValue.empty() || Width(bounds) <= 0.0F || Height(bounds) <= 0.0F) return;
         if (deferTexts) {
-            deferredTexts.push_back({std::wstring(textValue), bounds, brush, format, alignment, vertical});
+            deferredTexts.push_back({std::wstring(textValue), bounds, brush, format, alignment,
+                                     vertical, drawOptions,
+                                     clipBounds ? std::optional<D2D1_RECT_F>{*clipBounds} : std::nullopt,
+                                     trim});
             return;
         }
         format->SetTextAlignment(alignment);
         format->SetParagraphAlignment(vertical);
+        if (clipBounds) target->PushAxisAlignedClip(*clipBounds, D2D1_ANTIALIAS_MODE_ALIASED);
+        if (trim) {
+            ComPtr<IDWriteTextLayout> textLayout;
+            if (SUCCEEDED(writeFactory->CreateTextLayout(
+                    textValue.data(), static_cast<UINT32>(textValue.size()), format,
+                    Width(bounds), Height(bounds), &textLayout))) {
+                DWRITE_TRIMMING trimming{
+                    DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, L'\x2026'};
+                textLayout->SetTrimming(&trimming, nullptr);
+                const auto drawLayout = [this, &textLayout, &bounds, brush,
+                                         drawOptions](ID2D1Brush* drawBrush, const float dx,
+                                                      const float dy) {
+                    target->DrawTextLayout({bounds.left + dx, bounds.top + dy},
+                                           textLayout.Get(), drawBrush, drawOptions);
+                };
+                const float border = std::clamp(model.activeSkin.typography.borderSize, 0.0F, 8.0F);
+                if (border > 0.0F && currentBrushes[3] != nullptr) {
+                    drawLayout(currentBrushes[3], border, 0.0F);
+                    drawLayout(currentBrushes[3], -border, 0.0F);
+                    drawLayout(currentBrushes[3], 0.0F, border);
+                    drawLayout(currentBrushes[3], 0.0F, -border);
+                }
+                drawLayout(brush, 0.0F, 0.0F);
+            }
+            if (clipBounds) target->PopAxisAlignedClip();
+            return;
+        }
         const float border = std::clamp(model.activeSkin.typography.borderSize, 0.0F, 8.0F);
         if (border > 0.0F && currentBrushes[3] != nullptr) {
             // 4 cardinal offsets: ~4x cheaper than 16-sample ring; outline still readable.
@@ -68,14 +101,15 @@ void Win32Ui::Impl::DrawText(std::wstring_view textValue, const D2D1_RECT_F& bou
                 {1.0F, 0.0F}, {-1.0F, 0.0F}, {0.0F, 1.0F}, {0.0F, -1.0F}};
             for (const auto& dir : kOutlineDirs) {
                 const auto outline = Rect(bounds.left + dir.x * border, bounds.top + dir.y * border,
-                                          bounds.right + dir.x * border, bounds.bottom + dir.y * border);
+                                           bounds.right + dir.x * border, bounds.bottom + dir.y * border);
                 target->DrawTextW(textValue.data(), static_cast<UINT32>(textValue.size()), format, outline,
-                                  currentBrushes[3], D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                                  currentBrushes[3], drawOptions,
                                   DWRITE_MEASURING_MODE_NATURAL);
             }
         }
         target->DrawTextW(textValue.data(), static_cast<UINT32>(textValue.size()), format, bounds,
-                          brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                          brush, drawOptions, DWRITE_MEASURING_MODE_NATURAL);
+        if (clipBounds) target->PopAxisAlignedClip();
         if (windowKind == WindowKind::Main && model.skinStudioVisible) {
             constexpr std::array<int, 14> brushToColor{
                 0, 1, 2, 7, 7, 9, 5, 6, 5, 3, 4, 8, 3, 10};
@@ -104,10 +138,15 @@ void Win32Ui::Impl::DrawText(std::wstring_view textValue, const D2D1_RECT_F& bou
         const float span = Width(bounds) + textWidth;
         // Use millisecond phase directly. Dividing by 25 previously moved the text in
         // 25 ms steps, visibly quantizing it even when presentation reached 60 Hz.
+        // Anchor on a per-process baseline: the old GetTickCount64() % 10'000'000 wrap
+        // snapped every marquee back to the start after ~2.78 h of uptime.
+        static const ULONGLONG kMarqueeBase = GetTickCount64();
         constexpr float kPixelsPerMillisecond = 0.04F;
-        const float phase = static_cast<float>(GetTickCount64() % 10'000'000ULL) *
-                            kPixelsPerMillisecond;
-        const float travel = std::fmod(phase, span);
+        // Keep the phase math in double precision; float cannot represent the large
+        // elapsed milliseconds without quantizing the scroll position.
+        const double phaseMs = static_cast<double>(GetTickCount64() - kMarqueeBase) *
+                               kPixelsPerMillisecond;
+        const float travel = static_cast<float>(std::fmod(phaseMs, span));
         const float x = bounds.left - textWidth + travel;
         target->PushAxisAlignedClip(bounds, D2D1_ANTIALIAS_MODE_ALIASED);
         // Draw immediately: deferred text flushes after the clip is popped, letting
@@ -125,7 +164,9 @@ void Win32Ui::Impl::FlushDeferredTexts() {
         auto texts = std::move(deferredTexts);
         deferredTexts.clear();
         for (const auto& text : texts) {
-            DrawText(text.value, text.bounds, text.brush, text.format, text.alignment, text.vertical);
+            DrawText(text.value, text.bounds, text.brush, text.format, text.alignment,
+                     text.vertical, text.drawOptions,
+                     text.clipBounds ? &*text.clipBounds : nullptr, text.trim);
         }
         auto layouts = std::move(deferredTextLayouts);
         deferredTextLayouts.clear();

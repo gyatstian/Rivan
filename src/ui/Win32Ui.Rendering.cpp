@@ -99,21 +99,245 @@ void Win32Ui::Impl::DrawTrackRenameField(const D2D1_RECT_F& bounds, ID2D1Brush* 
     }
 
 // Thin horizontal insertion bar drawn between rows while a track drag is active.
-    void Win32Ui::Impl::DrawTrackDropIndicator(const D2D1_RECT_F& row, bool below, ID2D1Brush* brush) {
+void Win32Ui::Impl::DrawTrackDropIndicator(const D2D1_RECT_F& row, bool below, ID2D1Brush* brush) {
         const float y = below ? row.bottom : row.top;
         target->FillRectangle(Rect(row.left + 2, y - 1.0F, row.right - 2, y + 1.0F), brush);
+}
+
+[[nodiscard]] float Win32Ui::Impl::TrackRowHeight() const noexcept {
+    return std::clamp(model.songRowLayout.rowHeight, 20.0F, 160.0F);
+}
+
+[[nodiscard]] IDWriteTextFormat* Win32Ui::Impl::SongRowFormat(
+    const int sizeDelta, const SongRowFontWeight weight, const SongRowFontStyle style) {
+    const auto key = std::make_tuple(sizeDelta, weight, style);
+    if (const auto found = songRowFormats.find(key); found != songRowFormats.end()) {
+        return found->second.Get();
     }
+    DWRITE_FONT_WEIGHT directWriteWeight = DWRITE_FONT_WEIGHT_NORMAL;
+    switch (weight) {
+    case SongRowFontWeight::SemiBold: directWriteWeight = DWRITE_FONT_WEIGHT_SEMI_BOLD; break;
+    case SongRowFontWeight::Bold: directWriteWeight = DWRITE_FONT_WEIGHT_BOLD; break;
+    case SongRowFontWeight::Normal: break;
+    }
+    const auto& typography = model.activeSkin.typography;
+    std::wstring family(typography.fontFamily.begin(), typography.fontFamily.end());
+    if (family.empty()) family = L"Segoe UI";
+    std::filesystem::path customFile;
+    if (!typography.customFontFile.empty() && !model.activeSkin.directory.empty()) {
+        customFile = model.activeSkin.directory / typography.customFontFile;
+    }
+    const float size = std::clamp(typography.baseSize + static_cast<float>(sizeDelta),
+                                  7.0F, 72.0F);
+    const DWRITE_FONT_STYLE directWriteStyle = style == SongRowFontStyle::Italic
+        ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL;
+    auto format = BuildTextFormat(family, size, directWriteWeight, customFile, directWriteStyle);
+    auto [inserted, ignored] = songRowFormats.emplace(key, std::move(format));
+    (void)ignored;
+    return inserted->second ? inserted->second.Get() : regularFormat.Get();
+}
+
+void Win32Ui::Impl::DrawSongRow(
+    const D2D1_RECT_F& row, const TrackView& track, const std::size_t number,
+    const std::size_t modelIndex, const bool selected, ID2D1Brush* primary,
+    ID2D1Brush* secondary, ID2D1Brush* active, const SongRowLayout* suppliedLayout,
+    const bool sample, std::array<D2D1_RECT_F, kSongRowFieldCount>* fieldBounds) {
+    const SongRowLayout& layout = suppliedLayout ? *suppliedLayout : model.songRowLayout;
+    const auto canvas = row;
+    const bool activeRow = selected || track.playing;
+    const bool showIndicator = track.playing && !sample;
+
+    std::array<std::wstring, kSongRowFieldCount> fieldValues{};
+    std::array<DWRITE_TEXT_ALIGNMENT, kSongRowFieldCount> fieldAlignments{};
+    std::array<float, kSongRowFieldCount> fieldTextAdvances{};
+    std::array<float, kSongRowFieldCount> fieldTextLeftOverhangs{};
+    std::array<float, kSongRowFieldCount> fieldTextRightOverhangs{};
+    std::array<bool, kSongRowFieldCount> measuredTextFields{};
+    for (auto& alignment : fieldAlignments) alignment = DWRITE_TEXT_ALIGNMENT_LEADING;
+    fieldValues[static_cast<std::size_t>(SongRowField::Number)] = std::to_wstring(number) + L".";
+    fieldValues[static_cast<std::size_t>(SongRowField::Title)] =
+        track.title.empty() ? L"Untitled" : track.title;
+    fieldValues[static_cast<std::size_t>(SongRowField::Duration)] = FormatTime(track.durationSeconds);
+    fieldValues[static_cast<std::size_t>(SongRowField::Artist)] =
+        track.artist.empty() ? (sample ? L"Artist name" : L"") : track.artist;
+    fieldValues[static_cast<std::size_t>(SongRowField::Bitrate)] =
+        track.bitrateKbps > 0 ? std::to_wstring(track.bitrateKbps) + L" kbps"
+                              : (sample ? L"320 kbps" : L"-- kbps");
+    fieldAlignments[static_cast<std::size_t>(SongRowField::Duration)] = DWRITE_TEXT_ALIGNMENT_TRAILING;
+    fieldAlignments[static_cast<std::size_t>(SongRowField::Bitrate)] = DWRITE_TEXT_ALIGNMENT_TRAILING;
+    const float textOutline = std::clamp(model.activeSkin.typography.borderSize, 0.0F, 8.0F);
+
+    std::array<float, kSongRowFieldCount> fieldWidths{};
+    for (std::size_t index = 0; index < kSongRowFieldCount; ++index) {
+        const auto field = static_cast<SongRowField>(index);
+        const auto& fieldLayout = layout.Field(field);
+        fieldWidths[index] = fieldLayout.width;
+        if (!fieldLayout.visible || field == SongRowField::Cover || !fieldLayout.fluid ||
+            Width(canvas) <= 0.0F || !writeFactory) {
+            continue;
+        }
+        ComPtr<IDWriteTextLayout> textLayout;
+        if (SUCCEEDED(writeFactory->CreateTextLayout(
+                fieldValues[index].data(), static_cast<UINT32>(fieldValues[index].size()),
+                SongRowFormat(fieldLayout.fontSizeDelta, fieldLayout.fontWeight, fieldLayout.fontStyle),
+                100000.0F, std::max(1.0F, Height(canvas)), &textLayout))) {
+            DWRITE_TEXT_METRICS metrics{};
+            if (SUCCEEDED(textLayout->GetMetrics(&metrics))) {
+                const float advance = metrics.widthIncludingTrailingWhitespace;
+                textLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                textLayout->SetMaxWidth(std::max(1.0F, advance));
+                DWRITE_OVERHANG_METRICS overhang{};
+                if (SUCCEEDED(textLayout->GetOverhangMetrics(&overhang))) {
+                    fieldTextLeftOverhangs[index] = std::max(0.0F, overhang.left);
+                    fieldTextRightOverhangs[index] = std::max(0.0F, overhang.right);
+                }
+                fieldTextAdvances[index] = advance;
+                measuredTextFields[index] = true;
+            }
+        }
+        // Allocate measured glyph overhang, outline, and a one-pixel raster guard
+        // in addition to the renderer's one-pixel inset on each side.
+        if (measuredTextFields[index]) {
+            fieldWidths[index] = SongRowFluidFieldWidth(
+                fieldTextAdvances[index] + fieldTextLeftOverhangs[index] +
+                    fieldTextRightOverhangs[index] + 2.0F * textOutline,
+                Width(canvas));
+        }
+    }
+    SongRowTransientLayout transient;
+    if (showIndicator && Width(canvas) > 0.0F) {
+        transient.numberMinimumX = 13.0F / Width(canvas);
+    }
+    const auto resolvedXs = SongRowResolvedFieldXs(
+        layout, canvas.left, Width(canvas), fieldWidths, transient);
+    if (showIndicator) {
+        DrawText(L">", Rect(row.left + 1.0F, row.top, row.left + 12.0F, row.bottom),
+                 primary, SongRowFormat(0, SongRowFontWeight::Bold));
+    }
+    std::array<D2D1_RECT_F, kSongRowFieldCount> renderBounds{};
+    for (std::size_t index = 0; index < kSongRowFieldCount; ++index) {
+        const auto field = static_cast<SongRowField>(index);
+        const auto& fieldLayout = layout.Field(field);
+        if (!fieldLayout.visible) continue;
+        auto bounds = Rect(canvas.left + resolvedXs[index] * Width(canvas),
+                           canvas.top + fieldLayout.y * Height(canvas),
+                           canvas.left + (resolvedXs[index] + fieldWidths[index]) * Width(canvas),
+                           canvas.top + (fieldLayout.y + fieldLayout.height) * Height(canvas));
+        bounds.left += 1.0F;
+        bounds.right -= 1.0F;
+        bounds.top += 1.0F;
+        bounds.bottom -= 1.0F;
+        renderBounds[index] = bounds;
+        if (fieldBounds) (*fieldBounds)[index] = bounds;
+    }
+    const auto fieldPriority = [](const SongRowField field) noexcept {
+        switch (field) {
+        case SongRowField::Number:
+        case SongRowField::Cover: return 100;
+        case SongRowField::Duration:
+        case SongRowField::Bitrate: return 90;
+        case SongRowField::Title:
+        case SongRowField::Artist: return 50;
+        case SongRowField::Count: return 0;
+        }
+        return 0;
+    };
+    const auto verticalOverlap = [](const D2D1_RECT_F& first,
+                                    const D2D1_RECT_F& second) noexcept {
+        return std::min(first.bottom, second.bottom) > std::max(first.top, second.top);
+    };
+    bool renameDrawn = false;
+    for (std::size_t index = 0; index < kSongRowFieldCount; ++index) {
+        const auto field = static_cast<SongRowField>(index);
+        const auto& fieldLayout = layout.Field(field);
+        if (!fieldLayout.visible) {
+            if (fieldBounds) (*fieldBounds)[index] = {};
+            continue;
+        }
+        const auto bounds = renderBounds[index];
+        if (field == SongRowField::Cover) {
+            if (sample) {
+                DrawBevel(bounds, currentBrushes[2], currentBrushes[3], currentBrushes[4], true);
+                DrawText(L"ART", bounds, secondary, tinyFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+            } else {
+                DrawTrackCover(track, bounds);
+            }
+            continue;
+        }
+        ID2D1Brush* brush = fieldLayout.textColor == SongRowTextColor::Primary ? primary : secondary;
+        if (activeRow && !sample) brush = active;
+        if (field == SongRowField::Title && trackNameEditing && trackRenameIndex == modelIndex && !sample) {
+            DrawTrackRenameField(bounds, active);
+            renameDrawn = true;
+        } else {
+            auto textSlot = bounds;
+            const int priority = fieldPriority(field);
+            for (std::size_t otherIndex = 0; otherIndex < kSongRowFieldCount; ++otherIndex) {
+                const auto other = static_cast<SongRowField>(otherIndex);
+                if (other == field || !layout.Field(other).visible ||
+                    fieldPriority(other) < priority ||
+                    !verticalOverlap(bounds, renderBounds[otherIndex])) continue;
+                const auto& otherBounds = renderBounds[otherIndex];
+                if (otherBounds.left > bounds.left && otherBounds.left < textSlot.right) {
+                    textSlot.right = std::min(textSlot.right,
+                                              otherBounds.left - kSongRowDefaultSnapGapPixels);
+                }
+                if (otherBounds.right > bounds.left && otherBounds.right < bounds.right &&
+                    otherBounds.left <= bounds.left) {
+                    textSlot.left = std::max(textSlot.left,
+                                             otherBounds.right + kSongRowDefaultSnapGapPixels);
+                }
+            }
+            if (textSlot.right < textSlot.left) textSlot.right = textSlot.left;
+            auto textBounds = textSlot;
+            D2D1_DRAW_TEXT_OPTIONS drawOptions = D2D1_DRAW_TEXT_OPTIONS_CLIP;
+            const D2D1_RECT_F* clipBounds = nullptr;
+            bool trim = false;
+            if (fieldLayout.fluid && measuredTextFields[index]) {
+                const float requiredWidth = fieldTextAdvances[index] +
+                    fieldTextLeftOverhangs[index] + fieldTextRightOverhangs[index] +
+                    2.0F * (textOutline + kSongRowFluidTextSafetyPixels);
+                trim = Width(textSlot) + 0.01F < requiredWidth;
+                const float leftPadding = kSongRowFluidTextSafetyPixels + textOutline +
+                    fieldTextLeftOverhangs[index];
+                const float rightPadding = kSongRowFluidTextSafetyPixels + textOutline +
+                    fieldTextRightOverhangs[index];
+                if (fieldAlignments[index] == DWRITE_TEXT_ALIGNMENT_TRAILING) {
+                    textBounds.right = textSlot.right - rightPadding;
+                    textBounds.left = textBounds.right - fieldTextAdvances[index];
+                } else {
+                    textBounds.left = textSlot.left + leftPadding;
+                    textBounds.right = textBounds.left + fieldTextAdvances[index];
+                }
+                // Bounds include the glyph overhang and outline room. Clip only at
+                // the field edge, never at the inner text rectangle.
+                drawOptions = D2D1_DRAW_TEXT_OPTIONS_NONE;
+                clipBounds = &textSlot;
+                if (trim) textBounds = textSlot;
+            }
+            DrawText(fieldValues[index], textBounds, brush,
+                     SongRowFormat(fieldLayout.fontSizeDelta, fieldLayout.fontWeight,
+                                   fieldLayout.fontStyle), fieldAlignments[index],
+                     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, drawOptions, clipBounds, trim);
+        }
+    }
+    if (!sample && !renameDrawn && trackNameEditing && trackRenameIndex == modelIndex) {
+        DrawTrackRenameField(Rect(canvas.left + 4.0F, canvas.top + 2.0F,
+                                  canvas.right - 4.0F, canvas.bottom - 2.0F), active);
+    }
+}
 
 void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<const TrackView*>& tracks,
                        std::size_t& scroll, std::size_t& visibleRows,
                        ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* greenDim,
                        ID2D1Brush* selection, ID2D1Brush* white, ID2D1Brush* dim,
                          bool showArtist) {
-        (void)dim;  // Track lengths now share the title color; kept for signature parity.
+        (void)dim;
         // SCREEN: Track list, including the < NO MATCHING TRACKS > state.
         if (screen == currentBrushes[5]) screenBounds.push_back(bounds);
         target->FillRectangle(bounds, screen);
-        visibleRows = static_cast<std::size_t>(std::max(0.0F, std::floor(Height(bounds) / kTrackRowHeight)));
+        const float rowHeight = TrackRowHeight();
+        visibleRows = static_cast<std::size_t>(std::max(0.0F, std::floor(Height(bounds) / rowHeight)));
         const std::size_t maximum = tracks.size() > visibleRows ? tracks.size() - visibleRows : 0;
         scroll = std::min(scroll, maximum);
         const bool dragging = dragActive && dragKind == DragKind::Track;
@@ -124,33 +348,14 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
             const auto& track = *tracks[index];
             const std::size_t modelIndex = ModelTrackIndex(tracks[index]);
             const bool selected = trackSelection.contains(modelIndex);
-            const float top = bounds.top + static_cast<float>(rowIndex) * kTrackRowHeight;
-            const auto row = Rect(bounds.left, top, bounds.right, top + kTrackRowHeight);
+            const float top = bounds.top + static_cast<float>(rowIndex) * rowHeight;
+            const auto row = Rect(bounds.left, top, bounds.right, top + rowHeight);
             const bool hot = Contains(row, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
             if (selected || track.playing || hot) {
                 target->FillRectangle(row, selected || track.playing ? selection
                                                                      : currentBrushes[7]);
             }
-            if (track.playing) {
-                Win32Ui::Impl::DrawText(L">", Rect(row.left + 2, row.top, row.left + 13, row.bottom), green,
-                         regularFormat.Get());
-            }
-            const std::wstring number = std::to_wstring(index + 1) + L".";
-            Win32Ui::Impl::DrawText(number, Rect(row.left + 13, row.top, row.left + 45, row.bottom),
-                     track.playing ? white : greenDim, regularFormat.Get(), DWRITE_TEXT_ALIGNMENT_TRAILING);
-            std::wstring name = track.title.empty() ? L"Untitled" : track.title;
-            if (showArtist && !track.artist.empty()) name = track.artist + L" - " + name;
-            const auto nameBounds = Rect(row.left + 50, row.top, row.right - 82, row.bottom);
-            if (trackNameEditing && trackRenameIndex == modelIndex) {
-                DrawTrackRenameField(nameBounds, white);
-            } else {
-                Win32Ui::Impl::DrawText(name, nameBounds, selected || track.playing ? white : green,
-                           regularFormat.Get());
-            }
-            Win32Ui::Impl::DrawText(FormatTime(track.durationSeconds), Rect(row.right - 78, row.top, row.right - 28, row.bottom),
-                      selected || track.playing ? white : green, regularFormat.Get(),
-                      DWRITE_TEXT_ALIGNMENT_TRAILING);
-            Win32Ui::Impl::DrawTrackCover(track, row);
+            DrawSongRow(row, track, index + 1, modelIndex, selected, green, greenDim, white);
             HitRegion hit;
             hit.bounds = row;
             hit.kind = HitKind::Track;
@@ -168,6 +373,7 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
             Win32Ui::Impl::DrawText(L"< NO MATCHING TRACKS >", bounds, greenDim, regularFormat.Get(),
                      DWRITE_TEXT_ALIGNMENT_CENTER);
         }
+        (void)showArtist;
     }
 
 // Renders the current folder view: the selected folder's loose tracks first (no
@@ -208,7 +414,8 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
 
         if (screen == currentBrushes[5]) screenBounds.push_back(bounds);
         target->FillRectangle(bounds, screen);
-        visibleRows = static_cast<std::size_t>(std::max(0.0F, std::floor(Height(bounds) / kTrackRowHeight)));
+        const float rowHeight = TrackRowHeight();
+        visibleRows = static_cast<std::size_t>(std::max(0.0F, std::floor(Height(bounds) / rowHeight)));
         const std::size_t maximum = rows.size() > visibleRows ? rows.size() - visibleRows : 0;
         scroll = std::min(scroll, maximum);
         target->PushAxisAlignedClip(bounds, D2D1_ANTIALIAS_MODE_ALIASED);
@@ -220,8 +427,8 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
             const std::size_t index = scroll + rowIndex;
             if (index >= rows.size()) break;
             const auto& row = rows[index];
-            const float top = bounds.top + static_cast<float>(rowIndex) * kTrackRowHeight;
-            const auto rect = Rect(bounds.left, top, bounds.right, top + kTrackRowHeight);
+            const float top = bounds.top + static_cast<float>(rowIndex) * rowHeight;
+            const auto rect = Rect(bounds.left, top, bounds.right, top + rowHeight);
             if (row.header) {
                 const float mid = (rect.top + rect.bottom) * 0.5F;
                 target->DrawLine({rect.left + 4, mid}, {rect.left + 20, mid}, greenDim, 1.0F);
@@ -239,26 +446,7 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
                 target->FillRectangle(rect, selected || track.playing ? selection
                                                                       : currentBrushes[7]);
             }
-            if (track.playing) {
-                Win32Ui::Impl::DrawText(L">", Rect(rect.left + 2, rect.top, rect.left + 13, rect.bottom), green,
-                         regularFormat.Get());
-            }
-            const std::wstring number = std::to_wstring(++trackNumber) + L".";
-            Win32Ui::Impl::DrawText(number, Rect(rect.left + 13, rect.top, rect.left + 45, rect.bottom),
-                     track.playing ? white : greenDim, regularFormat.Get(), DWRITE_TEXT_ALIGNMENT_TRAILING);
-            std::wstring name = track.title.empty() ? L"Untitled" : track.title;
-            if (!track.artist.empty()) name = track.artist + L" - " + name;
-            const auto nameBounds = Rect(rect.left + 50, rect.top, rect.right - 82, rect.bottom);
-            if (trackNameEditing && trackRenameIndex == modelIndex) {
-                DrawTrackRenameField(nameBounds, white);
-            } else {
-                Win32Ui::Impl::DrawText(name, nameBounds, selected || track.playing ? white : green,
-                           regularFormat.Get());
-            }
-            Win32Ui::Impl::DrawText(FormatTime(track.durationSeconds), Rect(rect.right - 78, rect.top, rect.right - 28, rect.bottom),
-                      selected || track.playing ? white : green, regularFormat.Get(),
-                      DWRITE_TEXT_ALIGNMENT_TRAILING);
-            Win32Ui::Impl::DrawTrackCover(track, rect);
+            DrawSongRow(rect, track, ++trackNumber, modelIndex, selected, green, greenDim, white);
             HitRegion hit;
             hit.bounds = rect;
             hit.kind = HitKind::Track;
@@ -337,6 +525,12 @@ void Win32Ui::Impl::DrawMini(const D2D1_SIZE_F size,
     // Only the lone auto-selection of the previously playing row is moved; genuine multi- or
     // ctrl-selections are left untouched.
     void Win32Ui::Impl::SyncSelectionToPlayback() {
+        // Fast path: the previously playing row usually still plays, so skip the
+        // full model scan (O(N) per paint) until the playhead actually moves.
+        if (lastPlayingModelIndex < model.tracks.size() &&
+            model.tracks[lastPlayingModelIndex].playing) {
+            return;
+        }
         std::size_t nowPlaying = static_cast<std::size_t>(-1);
         for (std::size_t i = 0; i < model.tracks.size(); ++i) {
             if (model.tracks[i].playing) { nowPlaying = i; break; }

@@ -3,9 +3,186 @@
 #include "SettingsManager.Persistence.h"
 
 #include "../core/AppPaths.h"
+#include "../ui/SongRowLayoutGeometry.h"
 
 namespace rivan::config {
 namespace {
+
+constexpr std::string_view kSongRowLayoutSection = "song_row_layout";
+
+[[nodiscard]] const char* SongRowWeightText(const ui::SongRowFontWeight weight) noexcept {
+    switch (weight) {
+    case ui::SongRowFontWeight::Normal: return "normal";
+    case ui::SongRowFontWeight::SemiBold: return "semibold";
+    case ui::SongRowFontWeight::Bold: return "bold";
+    }
+    return "normal";
+}
+
+[[nodiscard]] std::optional<ui::SongRowFontWeight> ParseSongRowWeight(
+    const std::string_view text) noexcept {
+    if (text == "normal") return ui::SongRowFontWeight::Normal;
+    if (text == "semibold") return ui::SongRowFontWeight::SemiBold;
+    if (text == "bold") return ui::SongRowFontWeight::Bold;
+    return std::nullopt;
+}
+
+[[nodiscard]] const char* SongRowStyleText(const ui::SongRowFontStyle style) noexcept {
+    return style == ui::SongRowFontStyle::Italic ? "italic" : "normal";
+}
+
+[[nodiscard]] std::optional<ui::SongRowFontStyle> ParseSongRowStyle(
+    const std::string_view text) noexcept {
+    if (text == "normal") return ui::SongRowFontStyle::Normal;
+    if (text == "italic") return ui::SongRowFontStyle::Italic;
+    return std::nullopt;
+}
+
+[[nodiscard]] const char* SongRowColorText(const ui::SongRowTextColor color) noexcept {
+    return color == ui::SongRowTextColor::Secondary ? "secondary" : "primary";
+}
+
+[[nodiscard]] std::optional<ui::SongRowTextColor> ParseSongRowColor(
+    const std::string_view text) noexcept {
+    if (text == "primary") return ui::SongRowTextColor::Primary;
+    if (text == "secondary") return ui::SongRowTextColor::Secondary;
+    return std::nullopt;
+}
+
+[[nodiscard]] const char* SongRowSnapSideText(const ui::SongRowSnapSide side) noexcept {
+    return side == ui::SongRowSnapSide::Left ? "left" : "right";
+}
+
+[[nodiscard]] std::optional<ui::SongRowSnapSide> ParseSongRowSnapSide(
+    const std::string_view text) noexcept {
+    if (text == "left") return ui::SongRowSnapSide::Left;
+    if (text == "right") return ui::SongRowSnapSide::Right;
+    return std::nullopt;
+}
+
+void WriteSongRowLayout(core::IniDocument& document, const ui::SongRowLayout& layout) {
+    document.Set(std::string(kSongRowLayoutSection), "version", "2");
+    document.Set(std::string(kSongRowLayoutSection), "row_height",
+                  FloatText(layout.rowHeight));
+    for (std::size_t index = 0; index < ui::kSongRowFieldCount; ++index) {
+        const auto field = static_cast<ui::SongRowField>(index);
+        const auto& value = layout.Field(field);
+        const std::string prefix = std::string("field_") + ui::SongRowFieldKey(field) + "_";
+        document.Set(std::string(kSongRowLayoutSection), prefix + "visible", BoolText(value.visible));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "x", FloatText(value.x));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "y", FloatText(value.y));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "width", FloatText(value.width));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "height", FloatText(value.height));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "fluid", BoolText(value.fluid));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "font_size_delta",
+                     std::to_string(value.fontSizeDelta));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "font_weight",
+                     SongRowWeightText(value.fontWeight));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "font_style",
+                     SongRowStyleText(value.fontStyle));
+        document.Set(std::string(kSongRowLayoutSection), prefix + "text_color",
+                      SongRowColorText(value.textColor));
+        if (value.snap) {
+            document.Set(std::string(kSongRowLayoutSection), prefix + "snap_target",
+                         ui::SongRowFieldKey(value.snap->target));
+            document.Set(std::string(kSongRowLayoutSection), prefix + "snap_side",
+                         SongRowSnapSideText(value.snap->side));
+            document.Set(std::string(kSongRowLayoutSection), prefix + "snap_gap",
+                         std::to_string(value.snap->gapPixels));
+        }
+    }
+}
+
+[[nodiscard]] bool HasSongRowLayout(const core::IniDocument& document) noexcept {
+    return document.Get(kSongRowLayoutSection, "version").has_value() ||
+           document.Get(kSongRowLayoutSection, "row_height").has_value();
+}
+
+void ReadSongRowLayout(const core::IniDocument& document, ui::SongRowLayout& layout,
+                       std::string* warnings) {
+    int version = 1;
+    if (const auto text = document.Get(kSongRowLayoutSection, "version")) {
+        const auto parsed = ParseInteger<int>(*text);
+        if (!parsed || (*parsed != 1 && *parsed != 2)) {
+            AddWarning(warnings, "Ignoring unsupported song_row_layout.version");
+            return;
+        }
+        version = *parsed;
+    }
+    ReadFloatField(document, kSongRowLayoutSection, "row_height", 20.0F, 160.0F,
+                   layout.rowHeight, warnings);
+    for (std::size_t index = 0; index < ui::kSongRowFieldCount; ++index) {
+        const auto field = static_cast<ui::SongRowField>(index);
+        auto& value = layout.Field(field);
+        const std::string prefix = std::string("field_") + ui::SongRowFieldKey(field) + "_";
+        ReadBoolField(document, kSongRowLayoutSection, prefix + "visible", value.visible, warnings);
+        ReadFloatField(document, kSongRowLayoutSection, prefix + "x", 0.0F, 1.0F,
+                       value.x, warnings);
+        ReadFloatField(document, kSongRowLayoutSection, prefix + "y", 0.0F, 1.0F,
+                       value.y, warnings);
+        ReadFloatField(document, kSongRowLayoutSection, prefix + "width", 0.02F, 1.0F,
+                       value.width, warnings);
+        ReadFloatField(document, kSongRowLayoutSection, prefix + "height", 0.02F, 1.0F,
+                       value.height, warnings);
+        if (version >= 2) {
+            ReadBoolField(document, kSongRowLayoutSection, prefix + "fluid", value.fluid, warnings);
+        }
+        ReadIntegerField(document, kSongRowLayoutSection, prefix + "font_size_delta", -8, 16,
+                         value.fontSizeDelta, warnings);
+        if (const auto text = document.Get(kSongRowLayoutSection, prefix + "font_weight")) {
+            if (const auto weight = ParseSongRowWeight(*text)) value.fontWeight = *weight;
+            else AddWarning(warnings, "Ignoring invalid song_row_layout." + prefix + "font_weight");
+        }
+        if (const auto text = document.Get(kSongRowLayoutSection, prefix + "font_style")) {
+            if (const auto style = ParseSongRowStyle(*text)) value.fontStyle = *style;
+            else AddWarning(warnings, "Ignoring invalid song_row_layout." + prefix + "font_style");
+        }
+        if (const auto text = document.Get(kSongRowLayoutSection, prefix + "text_color")) {
+            if (const auto color = ParseSongRowColor(*text)) value.textColor = *color;
+            else AddWarning(warnings, "Ignoring invalid song_row_layout." + prefix + "text_color");
+        }
+        // Invalid persisted geometry never extends outside the normalized row canvas.
+        if ((!value.fluid && value.x + value.width > 1.0F) ||
+            value.y + value.height > 1.0F) {
+            AddWarning(warnings, "Ignoring out-of-bounds song_row_layout." + prefix + "geometry");
+            value = ui::SongRowLayout::Defaults().Field(field);
+        }
+        value.snap.reset();
+        if (version >= 2) {
+            if (const auto targetText = document.Get(kSongRowLayoutSection, prefix + "snap_target")) {
+                const auto target = ui::SongRowFieldFromKey(*targetText);
+                const auto sideText = document.Get(kSongRowLayoutSection, prefix + "snap_side");
+                const auto side = sideText ? ParseSongRowSnapSide(*sideText) : std::nullopt;
+                int gap = ui::kSongRowDefaultSnapGapPixels;
+                bool validGap = false;
+                if (const auto gapText = document.Get(kSongRowLayoutSection, prefix + "snap_gap")) {
+                    if (const auto parsed = ParseInteger<int>(*gapText)) {
+                        gap = *parsed;
+                        validGap = gap >= ui::kSongRowMinimumSnapGapPixels &&
+                            gap <= ui::kSongRowMaximumSnapGapPixels;
+                    }
+                }
+                if (target && side && validGap) value.snap = {*target, *side, gap};
+                else AddWarning(warnings, "Ignoring invalid song_row_layout." + prefix + "snap");
+            }
+        }
+    }
+    bool hadInvalidSnap = false;
+    for (std::size_t index = 0; index < ui::kSongRowFieldCount; ++index) {
+        const auto field = static_cast<ui::SongRowField>(index);
+        if (!ui::SongRowSnapIsValid(layout, field)) {
+            layout.Field(field).snap.reset();
+            hadInvalidSnap = true;
+        }
+    }
+    const bool hasSnapCycle = ui::SongRowHasSnapCycle(layout);
+    if (hadInvalidSnap || hasSnapCycle) {
+        if (hasSnapCycle) {
+            for (auto& field : layout.fields) field.snap.reset();
+        }
+        AddWarning(warnings, "Ignoring invalid song_row_layout.snap");
+    }
+}
 
 core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     core::IniDocument document;
@@ -23,7 +200,7 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     }
     document.Set("playback", "volume_percent", std::to_string(settings.volumePercent));
     document.Set("appearance", "skin", settings.skinId);
-    document.Set("appearance", "track_covers_enabled", BoolText(settings.trackCoverArtEnabled));
+    WriteSongRowLayout(document, settings.songRowLayout);
     document.Set("appearance", "module_expansion_behavior",
                  settings.moduleExpansionBehavior == ui::ModuleExpansionBehavior::Resize
                      ? "resize" : "squash");
@@ -145,8 +322,16 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
         if (IsIdentifier(*skin)) settings_.skinId = std::string(*skin);
         else AddWarning(warnings, "Ignoring invalid appearance.skin");
     }
-    ReadBoolField(*document, "appearance", "track_covers_enabled",
-                  settings_.trackCoverArtEnabled, warnings);
+    if (HasSongRowLayout(*document)) {
+        ReadSongRowLayout(*document, settings_.songRowLayout, warnings);
+    } else if (const auto legacyCovers = document->Get("appearance", "track_covers_enabled")) {
+        // Pre-builder preference: retain a user's old hidden-cover choice when migrating.
+        if (const auto enabled = ParseBool(*legacyCovers)) {
+            settings_.songRowLayout.Field(ui::SongRowField::Cover).visible = *enabled;
+        } else {
+            AddWarning(warnings, "Ignoring invalid appearance.track_covers_enabled");
+        }
+    }
     if (const auto behavior = document->Get("appearance", "module_expansion_behavior")) {
         if (*behavior == "squash") settings_.moduleExpansionBehavior = ui::ModuleExpansionBehavior::Squash;
         else if (*behavior == "resize") settings_.moduleExpansionBehavior = ui::ModuleExpansionBehavior::Resize;
@@ -260,6 +445,50 @@ bool SettingsManager::Validate(const AppSettings& settings, std::string* error) 
     }
     if (!IsIdentifier(settings.skinId)) {
         SetError(error, "Skin identifier must contain 1-64 ASCII letters, digits, '-' or '_'");
+        return false;
+    }
+    if (!std::isfinite(settings.songRowLayout.rowHeight) ||
+        settings.songRowLayout.rowHeight < 20.0F || settings.songRowLayout.rowHeight > 160.0F) {
+        SetError(error, "Invalid song-row layout dimensions");
+        return false;
+    }
+    for (const auto& field : settings.songRowLayout.fields) {
+        if (!std::isfinite(field.x) || !std::isfinite(field.y) ||
+            !std::isfinite(field.width) || !std::isfinite(field.height) ||
+            field.x < 0.0F || field.x > 1.0F || field.y < 0.0F || field.width < 0.02F ||
+            field.width > 1.0F ||
+            field.height < 0.02F || (!field.fluid && field.x + field.width > 1.0F) ||
+            field.y + field.height > 1.0F || field.fontSizeDelta < -8 ||
+            field.fontSizeDelta > 16) {
+            SetError(error, "Invalid song-row field layout");
+            return false;
+        }
+        if (field.fontWeight != ui::SongRowFontWeight::Normal &&
+            field.fontWeight != ui::SongRowFontWeight::SemiBold &&
+            field.fontWeight != ui::SongRowFontWeight::Bold) {
+            SetError(error, "Invalid song-row font weight");
+            return false;
+        }
+        if (field.fontStyle != ui::SongRowFontStyle::Normal &&
+            field.fontStyle != ui::SongRowFontStyle::Italic) {
+            SetError(error, "Invalid song-row font style");
+            return false;
+        }
+        if (field.textColor != ui::SongRowTextColor::Primary &&
+            field.textColor != ui::SongRowTextColor::Secondary) {
+            SetError(error, "Invalid song-row text color");
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < ui::kSongRowFieldCount; ++index) {
+        if (!ui::SongRowSnapIsValid(settings.songRowLayout,
+                                    static_cast<ui::SongRowField>(index))) {
+            SetError(error, "Invalid song-row field snap");
+            return false;
+        }
+    }
+    if (ui::SongRowHasSnapCycle(settings.songRowLayout)) {
+        SetError(error, "Song-row field snaps cannot form a cycle");
         return false;
     }
     if (error != nullptr) error->clear();

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cwctype>
 #include <system_error>
 #include <utility>
@@ -87,7 +88,31 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
     startup.wShowWindow = SW_HIDE;
     startup.hStdOutput = writePipe;
     startup.hStdError = writePipe;
-    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    // Give the child an immediate-EOF stdin instead of inheriting the app's console
+    // input. The NUL handle is non-inheritable (no SECURITY_ATTRIBUTES), so the child
+    // sees an invalid stdin; fall back to the parent's stdin if NUL cannot be opened.
+    HANDLE nulInput = INVALID_HANDLE_VALUE;
+    {
+        const HANDLE candidate = CreateFileW(L"NUL", GENERIC_READ,
+                                             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                             OPEN_EXISTING, 0, nullptr);
+        if (candidate != INVALID_HANDLE_VALUE) {
+            startup.hStdInput = candidate;
+            nulInput = candidate;
+        } else {
+            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        }
+    }
+
+    // A job object so a cancel terminates the whole process tree (yt-dlp and any
+    // spawned ffmpeg), not just the leader. Best-effort: if the job cannot be created
+    // or assigned, continue without one.
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (job) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+    }
 
     std::wstring commandLine = L"\"" + exe.wstring() + L"\" " + arguments;
     std::wstring environment = BuildUnbufferedEnvironment();
@@ -98,11 +123,21 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
         &process);
     CloseHandle(writePipe);
     writePipe = nullptr;
+    if (nulInput != INVALID_HANDLE_VALUE) CloseHandle(nulInput);
 
     if (!created) {
+        if (job) CloseHandle(job);
         CloseHandle(readPipe);
         errorText = "Unable to start yt-dlp";
         return false;
+    }
+
+    // Assign the leader to the job so TerminateJobObject on cancel kills spawned
+    // children too. Best-effort: proceed without a job if assignment fails (e.g.
+    // ERROR_ACCESS_DENIED on systems without nested-job support).
+    if (job && !AssignProcessToJobObject(job, process.hProcess)) {
+        CloseHandle(job);
+        job = nullptr;
     }
 
     std::string buffer;
@@ -125,34 +160,52 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
         }
     };
 
+    bool processExited = false;
+    std::chrono::steady_clock::time_point drainDeadline{};
     for (;;) {
         if (stop.stop_requested()) {
             TerminateProcess(process.hProcess, 1);
+            if (job) TerminateJobObject(job, 1); // kill any spawned children (ffmpeg)
+            // Termination is asynchronous; wait briefly so the exit code read below
+            // is not a stale STILL_ACTIVE (259).
+            WaitForSingleObject(process.hProcess, 2000);
             break;
         }
         DWORD available = 0;
-        if (!PeekNamedPipe(readPipe, nullptr, 0, nullptr, &available, nullptr)) break;
-        if (available == 0) {
-            const DWORD wait = WaitForSingleObject(process.hProcess, 15);
+        if (!PeekNamedPipe(readPipe, nullptr, 0, nullptr, &available, nullptr)) {
+            // ERROR_BROKEN_PIPE / ERROR_NO_DATA: write end closed, drain complete.
+            break;
+        }
+        if (available > 0) {
+            DWORD read = 0;
+            if (!ReadFile(readPipe, chunk, sizeof(chunk), &read, nullptr) || read == 0) break;
+            buffer.append(chunk, chunk + read);
+            feedLines(std::string_view(chunk, read));
+            if (buffer.size() > 8 * 1024 * 1024) {
+                // Don't kill a healthy long download: keep the tail and continue.
+                // Callers read the retained tail via TailWide for error diagnostics,
+                // progress lines stream through onLine, and Probe output is far below
+                // this cap, so the trimming cannot corrupt boundary parsing.
+                buffer.erase(0, buffer.size() / 2);
+            }
+            continue;
+        }
+        if (!processExited) {
+            const DWORD wait = WaitForSingleObject(process.hProcess, 100);
             if (wait == WAIT_OBJECT_0) {
-                DWORD read = 0;
-                while (ReadFile(readPipe, chunk, sizeof(chunk), &read, nullptr) && read > 0) {
-                    buffer.append(chunk, chunk + read);
-                    feedLines(std::string_view(chunk, read));
-                }
+                processExited = true;
+                drainDeadline =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+            } else if (wait == WAIT_FAILED || wait == WAIT_ABANDONED) {
+                errorText = "Unable to wait for yt-dlp process";
                 break;
             }
             continue;
         }
-        DWORD read = 0;
-        if (!ReadFile(readPipe, chunk, sizeof(chunk), &read, nullptr) || read == 0) break;
-        buffer.append(chunk, chunk + read);
-        feedLines(std::string_view(chunk, read));
-        if (buffer.size() > 8 * 1024 * 1024) {
-            TerminateProcess(process.hProcess, 1);
-            errorText = "Captured process output exceeded 8 MiB";
-            break;
-        }
+        // Process exited. Drain any remaining pipe data with a bounded deadline so a
+        // grandchild that inherited the write handle cannot stall this worker forever.
+        if (std::chrono::steady_clock::now() >= drainDeadline) break;
+        Sleep(5);
     }
     if (onLine && !lineCarry.empty()) {
         onLine(lineCarry);
@@ -165,6 +218,10 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
     CloseHandle(readPipe);
+    // KILL_ON_JOB_CLOSE means any process still in the job dies with this handle;
+    // by now the leader has exited or been terminated (and waited for), so closing
+    // here is safe and also cleans up on early-exit error paths.
+    if (job) CloseHandle(job);
 
     stdoutText = std::move(buffer);
     if (!errorText.empty()) return false;
@@ -218,11 +275,33 @@ std::wstring Utf8ToWide(std::string_view text) {
 }
 
 std::wstring QuoteArg(std::wstring_view value) {
-    std::wstring out = L"\"";
+    std::wstring out;
+    out.reserve(value.size() + 8);
+    out.push_back(L'"');
+    std::size_t backslashRun = 0;
     for (const wchar_t ch : value) {
-        if (ch == L'"') out += L"\\\"";
-        else out.push_back(ch);
+        if (ch == L'\\') {
+            ++backslashRun;
+            continue;
+        }
+        if (ch == L'"') {
+            // CommandLineToArgvW: an even run of backslashes before a quote yields
+            // half as many literal backslashes, then the quote acts as a delimiter;
+            // an odd run yields (n-1)/2 backslashes and an escaped literal quote.
+            // Doubling the run before every quote makes the quote literal and keeps
+            // the argument intact.
+            out.append(backslashRun * 2, L'\\');
+            out += L"\\\"";
+            backslashRun = 0;
+            continue;
+        }
+        out.append(backslashRun, L'\\');
+        backslashRun = 0;
+        out.push_back(ch);
     }
+    // Trailing run before the closing quote must also be doubled so an odd count
+    // does not escape the closing quote.
+    out.append(backslashRun * 2, L'\\');
     out.push_back(L'"');
     return out;
 }

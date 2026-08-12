@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -65,20 +67,45 @@ std::filesystem::path UniqueSibling(const std::filesystem::path& parent,
                      L"." + std::to_wstring(value));
 }
 
-bool ContainsReparsePoint(const std::filesystem::path& source,
-                          const std::filesystem::directory_entry& entry,
-                          std::string* error) {
-    const DWORD attributes = GetFileAttributesW(entry.path().c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES) {
-        SetError(error, "Unable to inspect skin package entry: " + PathDisplay(entry.path()));
-        return true;
-    }
-    if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-        SetError(error, "Skin package cannot contain reparse points: " +
-                        PathDisplay(std::filesystem::relative(entry.path(), source)));
-        return true;
-    }
-    return false;
+constexpr wchar_t kStampSuffix[] = L".rivan-stamp";
+
+std::filesystem::path StampPath(const std::filesystem::path& package,
+                                const std::filesystem::path& workingDirectory) {
+    auto name = package.stem();
+    name += kStampSuffix;
+    return workingDirectory / name;
+}
+
+// True when the extraction directory for `package` is still current: both the
+// directory and its stamp file exist and the stamp matches the package's
+// current size and last-write time.
+bool ExtractionIsCurrent(const std::filesystem::path& package,
+                         const std::filesystem::path& extraction,
+                         const std::filesystem::path& stamp) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(extraction, ec) || ec) return false;
+    if (!std::filesystem::is_regular_file(stamp, ec) || ec) return false;
+    const auto size = std::filesystem::file_size(package, ec);
+    if (ec) return false;
+    const auto lastWrite = std::filesystem::last_write_time(package, ec);
+    if (ec) return false;
+    std::ifstream in(stamp, std::ios::binary);
+    if (!in) return false;
+    const std::string actual((std::istreambuf_iterator<char>(in)),
+                             std::istreambuf_iterator<char>());
+    return actual == std::to_string(size) + ":" +
+                         std::to_string(lastWrite.time_since_epoch().count());
+}
+
+void WriteStamp(const std::filesystem::path& stamp, const std::filesystem::path& package) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(package, ec);
+    if (ec) return;
+    const auto lastWrite = std::filesystem::last_write_time(package, ec);
+    if (ec) return;
+    std::ofstream out(stamp, std::ios::binary | std::ios::trunc);
+    if (!out) return;
+    out << size << ':' << lastWrite.time_since_epoch().count();
 }
 
 } // namespace
@@ -104,8 +131,8 @@ bool SkinManager::Refresh(std::string* error, std::string* warnings) {
         return false;
     }
 
-    std::filesystem::remove_all(workingDirectory_, ec);
-    ec.clear();
+    // Keep the cache between refreshes; staleness is detected per package via
+    // its stamp file (size + last-write time) below.
     std::filesystem::create_directories(workingDirectory_, ec);
     if (ec) {
         SetError(error, "Unable to create skin cache directory: " + ec.message());
@@ -143,9 +170,14 @@ bool SkinManager::Refresh(std::string* error, std::string* warnings) {
     for (const auto& package : packages) {
         std::string manifestError;
         const auto extraction = workingDirectory_ / package.stem();
-        if (!ExtractSkinArchive(package, extraction, &manifestError)) {
-            AddWarning(warnings, "Skipping " + PathDisplay(package) + ": " + manifestError);
-            continue;
+        if (!ExtractionIsCurrent(package, extraction, StampPath(package, workingDirectory_))) {
+            std::filesystem::remove_all(extraction, ec);
+            ec.clear();
+            if (!ExtractSkinArchive(package, extraction, &manifestError)) {
+                AddWarning(warnings, "Skipping " + PathDisplay(package) + ": " + manifestError);
+                continue;
+            }
+            WriteStamp(StampPath(package, workingDirectory_), package);
         }
         auto candidate = Skin::LoadManifest(extraction / Skin::ManifestFileName, &manifestError);
         if (!candidate) {
@@ -181,6 +213,39 @@ bool SkinManager::Refresh(std::string* error, std::string* warnings) {
         }
         candidate->directory = folder;
         skins_.push_back(std::move(*candidate));
+    }
+
+    // Raw <package-stem> extraction directories can also be AppSkins working
+    // directories, so retain all directories rather than delete unsaved Skin
+    // Studio work. Only our suffix-marked stale stamp files are safe to remove.
+    std::vector<std::wstring> expectedStems;
+    expectedStems.reserve(packages.size());
+    for (const auto& package : packages) {
+        expectedStems.push_back(package.stem().wstring());
+    }
+    std::sort(expectedStems.begin(), expectedStems.end());
+    std::vector<std::filesystem::path> staleStamps;
+    std::error_code cacheEc;
+    for (std::filesystem::directory_iterator cacheIterator(workingDirectory_, cacheEc), cacheEnd;
+         !cacheEc && cacheIterator != cacheEnd; cacheIterator.increment(cacheEc)) {
+        if (!cacheIterator->is_regular_file(cacheEc) || cacheEc) {
+            cacheEc.clear();
+            continue;
+        }
+        const auto name = cacheIterator->path().filename().wstring();
+        constexpr std::size_t stampLength = (sizeof(kStampSuffix) / sizeof(kStampSuffix[0])) - 1;
+        if (name.size() < stampLength ||
+            name.compare(name.size() - stampLength, stampLength, kStampSuffix) != 0) continue;
+        const auto packageStem = name.substr(0, name.size() - stampLength);
+        if (!packageStem.empty() &&
+            !std::binary_search(expectedStems.begin(), expectedStems.end(), packageStem)) {
+            staleStamps.push_back(cacheIterator->path());
+        }
+        cacheEc.clear();
+    }
+    for (const auto& stamp : staleStamps) {
+        std::filesystem::remove(stamp, cacheEc);
+        cacheEc.clear();
     }
 
     std::sort(skins_.begin() + 1, skins_.end(), [](const Skin& left, const Skin& right) {
@@ -231,9 +296,14 @@ bool SkinManager::SavePackage(const Skin& skin, std::string* error) const {
     const auto staging = UniqueSibling(skinsDirectory_, L".package-");
     if (!CreateSkinArchive(sourceDirectory, staging, error)) return false;
     const auto destination = PackagePath(skin.id);
-    std::filesystem::remove(destination, ec);
-    std::filesystem::rename(staging, destination, ec);
-    if (ec) { std::filesystem::remove(staging, ec); SetError(error, "Unable to save skin package: " + ec.message()); return false; }
+    if (!MoveFileExW(staging.c_str(), destination.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const auto lastError = GetLastError();
+        std::filesystem::remove(staging, ec);
+        SetError(error, "Unable to save skin package: " +
+                        std::system_category().message(static_cast<int>(lastError)));
+        return false;
+    }
     return true;
 }
 

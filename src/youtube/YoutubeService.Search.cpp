@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <charconv>
-#include <cwctype>
 #include <utility>
 
 namespace rivan::youtube::detail {
@@ -13,8 +12,8 @@ constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
 std::uint64_t HashText(std::wstring_view text) noexcept {
     std::uint64_t hash = kFnvOffset;
-    for (wchar_t ch : text) {
-        ch = static_cast<wchar_t>(std::towlower(ch));
+    for (const wchar_t ch : text) {
+        // Case-sensitive: YouTube video/URL ids differ by case and must not collide.
         const auto value = static_cast<std::uint32_t>(ch);
         for (unsigned shift = 0; shift < 32; shift += 8) {
             hash ^= static_cast<unsigned char>((value >> shift) & 0xffu);
@@ -25,11 +24,11 @@ std::uint64_t HashText(std::wstring_view text) noexcept {
 }
 
 bool LooksLikeYoutubeVideoId(std::wstring_view id) noexcept {
+    // YouTube video ids are always exactly 11 chars from [A-Za-z0-9_-]; length is the
+    // discriminator. Leading pairs like UC/PL also occur on valid 11-char video ids
+    // (channels/playlists sharing a pair have different lengths), so no prefix may be
+    // rejected here.
     if (id.size() != 11) return false;
-    if (id.rfind(L"UC", 0) == 0 || id.rfind(L"PL", 0) == 0 || id.rfind(L"VL", 0) == 0 ||
-        id.rfind(L"RD", 0) == 0 || id.rfind(L"OL", 0) == 0) {
-        return false;
-    }
     for (const wchar_t ch : id) {
         if (!((ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z') ||
               (ch >= L'0' && ch <= L'9') || ch == L'-' || ch == L'_')) {
@@ -188,24 +187,25 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
     bool anyRan = false;
     std::vector<YoutubeEntry> best;
 
-    constexpr std::size_t kStages[] = {1, kSearchFetchCount};
-    for (const std::size_t count : kStages) {
-        if (stop.stop_requested()) break;
+    // The line callback already streams entries incrementally, so a single stage of
+    // kSearchFetchCount is enough; a first narrow stage only added an extra spawn
+    // and network round trip, and its short result aborted the search entirely.
+    constexpr std::size_t kStageCount = kSearchFetchCount;
+    if (!stop.stop_requested()) {
         std::vector<YoutubeEntry> stage;
         std::string output;
         std::string error;
         DWORD exitCode = 1;
-        const std::wstring target = L"ytsearch" + std::to_wstring(count) + L":" + query;
-        const bool ran = runListing(target, stage, output, error, exitCode, false);
-        anyRan = anyRan || ran;
+        const std::wstring target = L"ytsearch" + std::to_wstring(kStageCount) + L":" + query;
+        anyRan = runListing(target, stage, output, error, exitCode, false);
         lastOutput = std::move(output);
         lastError = std::move(error);
         lastExit = exitCode;
         if (!stage.empty()) {
             best = std::move(stage);
-            publishEntries(best, count < kSearchFetchCount);
+            // Final publish (searching=false); the single stage covers the full count.
+            publishEntries(best, false);
         }
-        if (ran && best.size() < count) break;
     }
 
     if (stop.stop_requested()) {

@@ -80,6 +80,7 @@ private:
     [[nodiscard]] std::optional<LyricsDocument> Fetch(const RequestData& request,
                                                       std::stop_token stop) const;
     void Publish(const RequestData& request, LyricsDocument document, std::wstring status);
+    void PublishSnapshotLocked() noexcept;
     [[nodiscard]] std::filesystem::path CachePath(const RequestData& request) const;
 
     std::filesystem::path cacheDirectory_;

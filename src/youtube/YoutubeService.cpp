@@ -8,11 +8,18 @@
 
 namespace rivan::youtube {
 
-YoutubeService::YoutubeService() {
+YoutubeService::YoutubeService()
+    : runner_{[this] { SupervisorLoop(); }} {
     RefreshToolStatus();
 }
 
 YoutubeService::~YoutubeService() {
+    {
+        std::scoped_lock lock(mutex_);
+        shutdown_ = true;
+    }
+    cv_.notify_all();
+    if (runner_.joinable()) runner_.join();
     JoinWorker();
 }
 
@@ -112,16 +119,45 @@ void YoutubeService::JoinWorker() {
     }
 }
 
+void YoutubeService::Enqueue(std::function<void()> step) {
+    {
+        std::scoped_lock lock(mutex_);
+        queue_.push_back(std::move(step));
+    }
+    cv_.notify_one();
+}
+
+void YoutubeService::SupervisorLoop() {
+    for (;;) {
+        std::function<void()> step;
+        {
+            std::unique_lock lock(mutex_);
+            cv_.wait(lock, [&] { return shutdown_ || !queue_.empty(); });
+            if (shutdown_) return;
+            step = std::move(queue_.front());
+            queue_.pop_front();
+        }
+        if (step) step();
+    }
+}
+
 void YoutubeService::Reset() {
-    JoinWorker();
-    std::scoped_lock lock(mutex_);
-    const bool yt = LocateYtDlp().has_value();
-    const bool ff = LocateFfmpeg().has_value();
-    state_ = YoutubeSnapshot{};
-    state_.ytDlpInstalled = yt;
-    state_.ffmpegInstalled = ff;
-    searchCache_.clear();
-    ++state_.generation;
+    Enqueue([this] {
+        JoinWorker();
+        std::function<void()> callback;
+        {
+            std::scoped_lock lock(mutex_);
+            const bool yt = LocateYtDlp().has_value();
+            const bool ff = LocateFfmpeg().has_value();
+            state_ = YoutubeSnapshot{};
+            state_.ytDlpInstalled = yt;
+            state_.ffmpegInstalled = ff;
+            searchCache_.clear();
+            ++state_.generation;
+            callback = notify_;
+        }
+        if (callback) callback();
+    });
 }
 
 void YoutubeService::StoreSearchCacheLocked(const std::wstring& query,
@@ -142,108 +178,150 @@ void YoutubeService::StoreSearchCacheLocked(const std::wstring& query,
 }
 
 void YoutubeService::Cancel() {
-    JoinWorker();
-    std::scoped_lock lock(mutex_);
-    state_.busy = false;
-    state_.job = YoutubeJobKind::Idle;
-    state_.installingYtDlp = false;
-    state_.installingFfmpeg = false;
-    for (auto& entry : state_.entries) {
-        entry.downloading = false;
-        if (entry.downloadProgress >= 0.0F && entry.localPath.empty()) {
-            entry.downloadProgress = -1.0F;
+    Enqueue([this] {
+        JoinWorker();
+        {
+            std::scoped_lock lock(mutex_);
+            state_.busy = false;
+            state_.job = YoutubeJobKind::Idle;
+            state_.installingYtDlp = false;
+            state_.installingFfmpeg = false;
+            for (auto& entry : state_.entries) {
+                entry.downloading = false;
+                if (entry.downloadProgress >= 0.0F && entry.localPath.empty()) {
+                    entry.downloadProgress = -1.0F;
+                }
+            }
+            if (state_.status == L"Searching..." || state_.status == L"Probing..." ||
+                state_.status == L"Downloading..." ||
+                state_.status.rfind(L"Downloading ", 0) == 0 || state_.status == L"Converting..." ||
+                state_.status == L"Resolving..." || state_.status == L"Installing yt-dlp..." ||
+                state_.status == L"Installing ffmpeg...") {
+                state_.status = L"Cancelled";
+            }
+            WriteToolFlagsLocked();
+            ++state_.generation;
         }
-    }
-    if (state_.status == L"Searching..." || state_.status == L"Probing..." ||
-        state_.status == L"Downloading..." ||
-        state_.status.rfind(L"Downloading ", 0) == 0 || state_.status == L"Converting..." ||
-        state_.status == L"Resolving..." || state_.status == L"Installing yt-dlp..." ||
-        state_.status == L"Installing ffmpeg...") {
-        state_.status = L"Cancelled";
-    }
-    WriteToolFlagsLocked();
-    ++state_.generation;
+    });
 }
 
 void YoutubeService::SubmitQuery(std::wstring query) {
     query = detail::Trim(std::move(query));
     if (query.empty()) return;
 
-    JoinWorker();
     const bool url = LooksLikeUrl(query);
-    if (url) {
-        YoutubeEntry entry;
-        entry.id = detail::HashText(query);
-        entry.title = L"Preparing YouTube video...";
-        entry.webpageUrl = std::move(query);
-        const auto entryId = entry.id;
+    const std::wstring cacheKey = L"y:" + query;
+
+    Enqueue([this, query = std::move(query), url, cacheKey] {
+        JoinWorker();
+        if (url) {
+            YoutubeEntry entry;
+            entry.id = detail::HashText(query);
+            entry.title = L"Preparing YouTube video...";
+            entry.webpageUrl = query;
+            const auto entryId = entry.id;
+            {
+                std::scoped_lock lock(mutex_);
+                state_.entries = {std::move(entry)};
+                state_.busy = true;
+                state_.job = YoutubeJobKind::Probe;
+                state_.status = L"Probing...";
+                state_.probe.reset();
+                state_.probeEntryId = entryId;
+                state_.searchPage = 0;
+                state_.searchPageCount = 1;
+                state_.searchIsPaged = false;
+                ++state_.generation;
+            }
+            {
+                std::function<void()> callback;
+                {
+                    std::scoped_lock lock(mutex_);
+                    callback = notify_;
+                }
+                if (callback) callback();
+            }
+            worker_ = std::jthread([this, entryId](std::stop_token stop) {
+                try {
+                    RunProbe(stop, entryId);
+                } catch (...) {
+                    {
+                        std::scoped_lock lock(mutex_);
+                        state_.busy = false;
+                        state_.job = YoutubeJobKind::Idle;
+                        state_.status = L"Probe failed unexpectedly";
+                        ++state_.generation;
+                    }
+                    Notify();
+                }
+            });
+            return;
+        }
+
+        // Search path: check cache, then publish state and potentially spawn.
+        bool cacheHit = false;
         {
             std::scoped_lock lock(mutex_);
-            state_.entries = {std::move(entry)};
-            state_.busy = true;
-            state_.job = YoutubeJobKind::Probe;
-            state_.status = L"Probing...";
-            state_.probe.reset();
-            state_.probeEntryId = entryId;
-            state_.searchPage = 0;
-            state_.searchPageCount = 1;
-            state_.searchIsPaged = false;
-            ++state_.generation;
+            const auto cached = std::find_if(
+                searchCache_.begin(), searchCache_.end(),
+                [&cacheKey](const CachedSearch& entry) { return entry.query == cacheKey; });
+            if (cached != searchCache_.end() && !cached->entries.empty()) {
+                state_.entries = cached->entries;
+                state_.probe.reset();
+                state_.probeEntryId = 0;
+                state_.busy = false;
+                state_.job = YoutubeJobKind::Idle;
+                state_.searchPage = 0;
+                state_.searchIsPaged = true;
+                state_.searchPageCount =
+                    (state_.entries.size() + kSearchPageSize - 1) / kSearchPageSize;
+                if (state_.searchPageCount == 0) state_.searchPageCount = 1;
+                state_.status = std::to_wstring(state_.entries.size()) +
+                    L" result(s) · page 1/" +
+                    std::to_wstring(state_.searchPageCount);
+                CachedSearch hit = std::move(*cached);
+                searchCache_.erase(cached);
+                searchCache_.push_back(std::move(hit));
+                ++state_.generation;
+                cacheHit = true;
+            }
+            if (!cacheHit) {
+                state_.busy = true;
+                state_.job = YoutubeJobKind::Search;
+                state_.status = L"Searching...";
+                state_.entries.clear();
+                state_.probe.reset();
+                state_.probeEntryId = 0;
+                state_.searchPage = 0;
+                state_.searchPageCount = 1;
+                state_.searchIsPaged = false;
+                ++state_.generation;
+            }
         }
-        Notify();
-        worker_ = std::jthread([this, entryId](std::stop_token stop) {
-            RunProbe(stop, entryId);
+        {
+            std::function<void()> callback;
+            {
+                std::scoped_lock lock(mutex_);
+                callback = notify_;
+            }
+            if (callback) callback();
+        }
+        if (cacheHit) return;
+
+        worker_ = std::jthread([this, query = std::move(query)](std::stop_token stop) {
+            try {
+                RunSearch(stop, query);
+            } catch (...) {
+                {
+                    std::scoped_lock lock(mutex_);
+                    state_.busy = false;
+                    state_.job = YoutubeJobKind::Idle;
+                    state_.status = L"Search failed unexpectedly";
+                    ++state_.generation;
+                }
+                Notify();
+            }
         });
-        return;
-    }
-
-    const std::wstring cacheKey = L"y:" + query;
-    bool cacheHit = false;
-    {
-        std::scoped_lock lock(mutex_);
-        const auto cached = std::find_if(
-            searchCache_.begin(), searchCache_.end(),
-            [&cacheKey](const CachedSearch& entry) { return entry.query == cacheKey; });
-        if (cached != searchCache_.end() && !cached->entries.empty()) {
-            state_.entries = cached->entries;
-            state_.probe.reset();
-            state_.probeEntryId = 0;
-            state_.busy = false;
-            state_.job = YoutubeJobKind::Idle;
-            state_.searchPage = 0;
-            state_.searchIsPaged = true;
-            state_.searchPageCount =
-                (state_.entries.size() + kSearchPageSize - 1) / kSearchPageSize;
-            if (state_.searchPageCount == 0) state_.searchPageCount = 1;
-            state_.status = std::to_wstring(state_.entries.size()) +
-                            L" result(s) · page 1/" +
-                            std::to_wstring(state_.searchPageCount);
-            CachedSearch hit = std::move(*cached);
-            searchCache_.erase(cached);
-            searchCache_.push_back(std::move(hit));
-            ++state_.generation;
-            cacheHit = true;
-        }
-        if (cacheHit) {
-            // Notify after releasing mutex_; Notify() takes the same lock to copy callback.
-        } else {
-            state_.busy = true;
-            state_.job = YoutubeJobKind::Search;
-            state_.status = L"Searching...";
-            state_.entries.clear();
-            state_.probe.reset();
-            state_.probeEntryId = 0;
-            state_.searchPage = 0;
-            state_.searchPageCount = 1;
-            state_.searchIsPaged = false;
-            ++state_.generation;
-        }
-    }
-    Notify();
-    if (cacheHit) return;
-
-    worker_ = std::jthread([this, query = std::move(query)](std::stop_token stop) {
-        RunSearch(stop, query);
     });
 }
 
@@ -261,55 +339,97 @@ bool YoutubeService::SetSearchPage(std::size_t page) {
 }
 
 void YoutubeService::Probe(std::uint64_t entryId) {
-    JoinWorker();
-    {
-        std::scoped_lock lock(mutex_);
-        const auto found = std::find_if(
-            state_.entries.begin(), state_.entries.end(),
-            [entryId](const YoutubeEntry& entry) { return entry.id == entryId; });
-        if (found == state_.entries.end()) return;
-        state_.busy = true;
-        state_.job = YoutubeJobKind::Probe;
-        state_.status = L"Probing...";
-        state_.probe.reset();
-        state_.probeEntryId = entryId;
-        ++state_.generation;
-    }
-    Notify();
-    worker_ = std::jthread([this, entryId](std::stop_token stop) { RunProbe(stop, entryId); });
+    Enqueue([this, entryId] {
+        JoinWorker();
+        {
+            std::scoped_lock lock(mutex_);
+            const auto found = std::find_if(
+                state_.entries.begin(), state_.entries.end(),
+                [entryId](const YoutubeEntry& entry) { return entry.id == entryId; });
+            if (found == state_.entries.end()) return;
+            state_.busy = true;
+            state_.job = YoutubeJobKind::Probe;
+            state_.status = L"Probing...";
+            state_.probe.reset();
+            state_.probeEntryId = entryId;
+            ++state_.generation;
+        }
+        {
+            std::function<void()> callback;
+            {
+                std::scoped_lock lock(mutex_);
+                callback = notify_;
+            }
+            if (callback) callback();
+        }
+        worker_ = std::jthread([this, entryId](std::stop_token stop) {
+            try {
+                RunProbe(stop, entryId);
+            } catch (...) {
+                {
+                    std::scoped_lock lock(mutex_);
+                    state_.busy = false;
+                    state_.job = YoutubeJobKind::Idle;
+                    state_.status = L"Probe failed unexpectedly";
+                    ++state_.generation;
+                }
+                Notify();
+            }
+        });
+    });
 }
 
 void YoutubeService::Download(std::uint64_t entryId, std::filesystem::path musicRoot,
                               YoutubeDownloadSelection selection) {
-    JoinWorker();
-    bool start = false;
-    {
-        std::scoped_lock lock(mutex_);
-        auto found = std::find_if(state_.entries.begin(), state_.entries.end(),
-                                  [entryId](const YoutubeEntry& entry) {
-                                      return entry.id == entryId;
-                                  });
-        if (found == state_.entries.end()) return;
-        if (!found->localPath.empty() && detail::PathExistsFile(found->localPath)) {
-            state_.status = L"Already downloaded";
-            ++state_.generation;
-        } else {
-            found->downloading = true;
-            found->failed = false;
-            found->downloadProgress = 0.0F;
-            state_.busy = true;
-            state_.job = YoutubeJobKind::Download;
-            state_.status = L"Downloading 0%";
-            ++state_.generation;
-            start = true;
+    Enqueue([this, entryId, musicRoot = std::move(musicRoot),
+             selection = std::move(selection)] {
+        JoinWorker();
+        bool start = false;
+        {
+            std::scoped_lock lock(mutex_);
+            auto found = std::find_if(state_.entries.begin(), state_.entries.end(),
+                                      [entryId](const YoutubeEntry& entry) {
+                                          return entry.id == entryId;
+                                      });
+            if (found == state_.entries.end()) return;
+            if (!found->localPath.empty() && detail::PathExistsFile(found->localPath)) {
+                state_.status = L"Already downloaded";
+                ++state_.generation;
+            } else {
+                found->downloading = true;
+                found->failed = false;
+                found->downloadProgress = 0.0F;
+                state_.busy = true;
+                state_.job = YoutubeJobKind::Download;
+                state_.status = L"Downloading 0%";
+                ++state_.generation;
+                start = true;
+            }
         }
-    }
-    Notify();
-    if (!start) return;
-
-    worker_ = std::jthread([this, entryId, musicRoot = std::move(musicRoot),
-                            selection = std::move(selection)](std::stop_token stop) mutable {
-        RunDownload(stop, entryId, musicRoot, std::move(selection));
+        {
+            std::function<void()> callback;
+            {
+                std::scoped_lock lock(mutex_);
+                callback = notify_;
+            }
+            if (callback) callback();
+        }
+        if (!start) return;
+        worker_ = std::jthread([this, entryId, musicRoot = std::move(musicRoot),
+                                selection = std::move(selection)](std::stop_token stop) mutable {
+            try {
+                RunDownload(stop, entryId, musicRoot, std::move(selection));
+            } catch (...) {
+                {
+                    std::scoped_lock lock(mutex_);
+                    state_.busy = false;
+                    state_.job = YoutubeJobKind::Idle;
+                    state_.status = L"Download failed unexpectedly";
+                    ++state_.generation;
+                }
+                Notify();
+            }
+        });
     });
 }
 

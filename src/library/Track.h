@@ -23,6 +23,8 @@ struct Track final {
     std::wstring artist;
     std::wstring album;
     double durationSeconds{};
+    // Average source bitrate. Zero means unavailable (for example missing duration).
+    int bitrateKbps{};
 
     [[nodiscard]] bool IsAvailable() const noexcept;
     [[nodiscard]] static bool IsSupportedFile(const std::filesystem::path& path) noexcept;

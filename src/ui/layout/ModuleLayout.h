@@ -18,6 +18,13 @@ struct ModuleLayout final {
     std::array<ModuleId, 6> snapGroup{
         ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
         ModuleId::RivanLibrary, ModuleId::VideoPreview, ModuleId::Lyrics};
+    // tabOrder remains flattened for legacy callers and hit-test IDs. Each item maps
+    // to its tab-group root; an item that is not tabbed maps to itself.
+    std::array<ModuleId, 6> tabGroupRoot{
+        ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
+        ModuleId::RivanLibrary, ModuleId::VideoPreview, ModuleId::Lyrics};
+    // Meaningful at a group-root item index. Values are local indexes within that group.
+    std::array<std::size_t, 6> groupActiveTab{};
 
     [[nodiscard]] static ModuleLayout Defaults() noexcept;
 
@@ -55,6 +62,9 @@ struct ModuleLayout final {
     void ScaleCollapsedInsideModules(ModuleId targetRoot,
                                      const ModuleNormalizedRect& oldBounds,
                                      const ModuleNormalizedRect& newBounds) noexcept;
+    void ScaleCollapsedInsideTabGroup(ModuleId targetRoot,
+                                      const ModuleNormalizedRect& oldBounds,
+                                      const ModuleNormalizedRect& newBounds) noexcept;
     [[nodiscard]] bool SquashForExpansion(ModuleId source,
                                            ModuleNormalizedRect expanded) noexcept;
     [[nodiscard]] bool ResizeForExpansion(ModuleId source,
@@ -102,6 +112,8 @@ struct ModuleLayout final {
         bool attachWindowEdge = false) const noexcept;
     [[nodiscard]] bool IsSnapGrouped(ModuleId id) const noexcept;
     void DetachSnapModule(ModuleId id) noexcept;
+    void DetachSnapMembers(const std::array<ModuleId, 6>& members,
+                           std::size_t count) noexcept;
     [[nodiscard]] bool ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
                                        bool resizeRight, bool resizeBottom,
                                        bool resizeLeft, bool resizeTop,
@@ -118,6 +130,13 @@ struct ModuleLayout final {
         bool resizeLeft = false, bool resizeTop = false) noexcept;
 
     [[nodiscard]] ModuleId TabRoot(ModuleId id) const noexcept;
+    [[nodiscard]] std::size_t GroupTabCount(ModuleId id) const noexcept;
+    [[nodiscard]] ModuleId GroupMember(ModuleId id, std::size_t index) const noexcept;
+    [[nodiscard]] std::size_t TabIndex(ModuleId id) const noexcept;
+    [[nodiscard]] std::size_t GroupActiveTab(ModuleId id) const noexcept;
+    [[nodiscard]] ModuleId GroupActiveMember(ModuleId id) const noexcept;
+    void SetGroupActiveTab(ModuleId id, std::size_t index) noexcept;
+    void NormalizeTabState() noexcept;
     void ClearTabs() noexcept;
     void MakeTab(ModuleId first, ModuleId second) noexcept;
     void RemoveTab(ModuleId id) noexcept;

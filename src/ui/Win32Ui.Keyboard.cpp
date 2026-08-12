@@ -116,7 +116,7 @@ void Win32Ui::Impl::Character(wchar_t character) {
     InvalidateRect(window, nullptr, FALSE);
 }
 
-void Win32Ui::Impl::KeyDown(WPARAM key) {
+bool Win32Ui::Impl::KeyDown(WPARAM key) {
     if (windowKind == WindowKind::Settings && youtubeGrabberHotkeyCapture) {
         if (key == VK_ESCAPE) {
             youtubeGrabberHotkeyCapture = false;
@@ -140,12 +140,12 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
             if (registered) youtubeGrabberHotkeyCapture = false;
         }
         InvalidateRect(window, nullptr, FALSE);
-        return;
+        return true;
     }
     if (previewFullscreen && windowKind == WindowKind::Main) {
         if (key == VK_ESCAPE) {
             ExitPreviewFullscreen();
-            return;
+            return true;
         }
         // Keep media keys working under fullscreen; swallow the rest.
         Command media{};
@@ -166,7 +166,7 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
         default: mediaKey = false; break;
         }
         if (mediaKey) InvokeSafely(media);
-        return;
+        return true;
     }
     if (trackNameEditing) {
         const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -208,16 +208,16 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
             InvalidateRect(window, nullptr, FALSE);
         } else if (key == VK_RETURN) CommitTrackName();
         else if (key == VK_ESCAPE) CancelTrackName();
-        return;
+        return true;
     }
     if (playlistNameEditing) {
         if (key == VK_RETURN) CommitPlaylistName();
         else if (key == VK_ESCAPE) CancelPlaylistName();
-        return;
+        return true;
     }
     if (pickingScreenColor) {
         if (key == VK_ESCAPE) CancelScreenEyedropper();
-        return;
+        return true;
     }
     if (studioNameEditing || managerNameEditing) {
         if (key == VK_RETURN) HandleStudioAction(studioNameEditing ? 96 : 900 + managerSkinIndex);
@@ -226,7 +226,7 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
             managerNameEditing = false;
             InvalidateRect(window, nullptr, FALSE);
         }
-        return;
+        return true;
     }
     if (studioHexEditing) {
         const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -242,7 +242,7 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
             studioHexSelectAll = false;
             InvalidateRect(window, nullptr, FALSE);
         }
-        return;
+        return true;
     }
     if (activeSearch != SearchTarget::None) {
         const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -255,25 +255,25 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
                 playlistQuerySelectAll = true;
                 InvalidateRect(window, nullptr, FALSE);
             }
-            return;
+            return true;
         } else if (control && (key == L'V' || key == L'v')) {
             PastePlaylistQuery();
-            return;
+            return true;
         }
         InvalidateRect(window, nullptr, FALSE);
-        return;
+        return true;
     }
     if (windowKind == WindowKind::Main) {
         const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         if (control && shift) {
             switch (key) {
-            case L'S': HandleLyricsAction(1); return;
-            case L'P': HandleLyricsAction(2); return;
-            case L'L': HandleLyricsAction(3); return;
-            case L'E': HandleLyricsAction(4); return;
-            case L'R': HandleLyricsAction(5); return;
-            case L'C': HandleLyricsAction(6); return;
+            case L'S': HandleLyricsAction(1); return true;
+            case L'P': HandleLyricsAction(2); return true;
+            case L'L': HandleLyricsAction(3); return true;
+            case L'E': HandleLyricsAction(4); return true;
+            case L'R': HandleLyricsAction(5); return true;
+            case L'C': HandleLyricsAction(6); return true;
             default: break;
             }
         }
@@ -281,11 +281,11 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
     if (windowKind == WindowKind::Main && !model.miniPlayer && key == VK_F2 && !trackSelection.empty()) {
         const auto chosen = trackSelection.contains(trackAnchor) ? trackAnchor : *trackSelection.begin();
         BeginTrackRename(chosen);
-        return;
+        return true;
     }
     if (windowKind == WindowKind::Main && !model.miniPlayer && key == VK_DELETE && !trackSelection.empty()) {
         RemoveSelectedTracks();
-        return;
+        return true;
     }
     const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     Command command{};
@@ -313,6 +313,7 @@ void Win32Ui::Impl::KeyDown(WPARAM key) {
     default: handled = false; break;
     }
     if (handled) InvokeSafely(command);
+    return handled;
 }
 
 } // namespace rivan::ui

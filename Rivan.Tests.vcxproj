@@ -54,6 +54,9 @@
     <ClInclude Include="src\ui\layout\ModuleLayout.h" />
     <ClInclude Include="src\ui\layout\ModuleTypes.h" />
     <ClInclude Include="src\ui\UiModule.h" />
+    <ClInclude Include="src\ui\SongRowLayout.h" />
+    <ClInclude Include="src\ui\SongRowLayoutGeometry.h" />
+    <ClInclude Include="src\ui\TrackCoverCache.h" />
     <ClInclude Include="src\config\SettingsManager.Persistence.h" />
     <ClInclude Include="src\lyrics\LyricsService.h" />
   </ItemGroup>

@@ -27,6 +27,7 @@ void App::LoadUserPlaylists() {
     if (!std::filesystem::exists(file, ec) || ec) return;
     auto document = core::IniDocument::Load(file, nullptr);
     if (!document) return;
+    if (!document->HasMetaFormat("1")) return;  // unsupported or missing format
 
     std::size_t count = 0;
     if (const auto stored = document->Get("meta", "count")) {
@@ -119,6 +120,7 @@ void App::ApplyFolderOrderAfterScan() {
     if (!std::filesystem::exists(file, ec) || ec) return;
     auto document = core::IniDocument::Load(file, nullptr);
     if (!document) return;
+    if (!document->HasMetaFormat("1")) return;  // unsupported or missing format
 
     std::size_t count = 0;
     if (const auto stored = document->Get("meta", "count")) {
@@ -173,43 +175,48 @@ void App::SaveTrackOrder(playlist::PlaylistId folderId) const {
     std::error_code ec;
     if (std::filesystem::exists(file, ec) && !ec) {
         if (auto document = core::IniDocument::Load(file, nullptr)) {
-            std::size_t count = 0;
-            if (const auto stored = document->Get("meta", "count")) {
-                const auto text = std::string(*stored);
-                std::size_t value = 0;
-                const auto [end, err] =
-                    std::from_chars(text.data(), text.data() + text.size(), value);
-                if (err == std::errc{} && end == text.data() + text.size()) count = value;
-            }
-            if (count > 100000) count = 100000;
-            const auto selectedPath = selected->directory.wstring();
-            for (std::size_t i = 0; i < count; ++i) {
-                const std::string section = "f" + std::to_string(i);
-                const auto encPath = document->Get(section, "path");
-                if (!encPath) continue;
-                const auto pathUtf8 = core::DecodeIniValue(*encPath, false);
-                if (!pathUtf8) continue;
-                std::wstring folderPath = core::Utf8ToWide(*pathUtf8);
-                if (folderPath == selectedPath) continue;  // rewritten below
-                std::size_t trackCount = 0;
-                if (const auto storedTracks = document->Get(section, "track_count")) {
-                    const auto text = std::string(*storedTracks);
+            // A missing or unsupported meta.format means the file cannot be parsed
+            // reliably; treat it as empty carry-forward so a mismatched future file
+            // is replaced by format=1 content below instead of being misread.
+            if (document->HasMetaFormat("1")) {
+                std::size_t count = 0;
+                if (const auto stored = document->Get("meta", "count")) {
+                    const auto text = std::string(*stored);
                     std::size_t value = 0;
                     const auto [end, err] =
                         std::from_chars(text.data(), text.data() + text.size(), value);
-                    if (err == std::errc{} && end == text.data() + text.size()) trackCount = value;
+                    if (err == std::errc{} && end == text.data() + text.size()) count = value;
                 }
-                if (trackCount > 1000000) trackCount = 1000000;
-                Entry entry;
-                entry.path = std::move(folderPath);
-                for (std::size_t j = 0; j < trackCount; ++j) {
-                    const auto encTrack = document->Get(section, "track" + std::to_string(j));
-                    if (!encTrack) continue;
-                    const auto trackUtf8 = core::DecodeIniValue(*encTrack, false);
-                    if (!trackUtf8) continue;
-                    entry.tracks.push_back(core::Utf8ToWide(*trackUtf8));
+                if (count > 100000) count = 100000;
+                const auto selectedPath = selected->directory.wstring();
+                for (std::size_t i = 0; i < count; ++i) {
+                    const std::string section = "f" + std::to_string(i);
+                    const auto encPath = document->Get(section, "path");
+                    if (!encPath) continue;
+                    const auto pathUtf8 = core::DecodeIniValue(*encPath, false);
+                    if (!pathUtf8) continue;
+                    std::wstring folderPath = core::Utf8ToWide(*pathUtf8);
+                    if (folderPath == selectedPath) continue;  // rewritten below
+                    std::size_t trackCount = 0;
+                    if (const auto storedTracks = document->Get(section, "track_count")) {
+                        const auto text = std::string(*storedTracks);
+                        std::size_t value = 0;
+                        const auto [end, err] =
+                            std::from_chars(text.data(), text.data() + text.size(), value);
+                        if (err == std::errc{} && end == text.data() + text.size()) trackCount = value;
+                    }
+                    if (trackCount > 1000000) trackCount = 1000000;
+                    Entry entry;
+                    entry.path = std::move(folderPath);
+                    for (std::size_t j = 0; j < trackCount; ++j) {
+                        const auto encTrack = document->Get(section, "track" + std::to_string(j));
+                        if (!encTrack) continue;
+                        const auto trackUtf8 = core::DecodeIniValue(*encTrack, false);
+                        if (!trackUtf8) continue;
+                        entry.tracks.push_back(core::Utf8ToWide(*trackUtf8));
+                    }
+                    entries.push_back(std::move(entry));
                 }
-                entries.push_back(std::move(entry));
             }
         }
     }
@@ -246,6 +253,7 @@ void App::ApplyTrackOrderAfterScan() {
     if (!std::filesystem::exists(file, ec) || ec) return;
     auto document = core::IniDocument::Load(file, nullptr);
     if (!document) return;
+    if (!document->HasMetaFormat("1")) return;  // unsupported or missing format
 
     std::size_t count = 0;
     if (const auto stored = document->Get("meta", "count")) {

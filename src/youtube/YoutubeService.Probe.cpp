@@ -347,13 +347,25 @@ namespace rivan::youtube {
 
 void YoutubeService::RunProbe(std::stop_token stop, std::uint64_t entryId) {
     YoutubeEntry target;
+    bool foundEntry = false;
     {
         std::scoped_lock lock(mutex_);
         const auto found = std::find_if(
             state_.entries.begin(), state_.entries.end(),
             [entryId](const YoutubeEntry& entry) { return entry.id == entryId; });
-        if (found == state_.entries.end()) return;
-        target = *found;
+        if (found != state_.entries.end()) {
+            target = *found;
+            foundEntry = true;
+        } else {
+            state_.busy = false;
+            state_.job = YoutubeJobKind::Idle;
+            state_.status = L"Probe failed: entry no longer exists";
+            ++state_.generation;
+        }
+    }
+    if (!foundEntry) {
+        Notify();
+        return;
     }
 
     const auto ytDlp = LocateYtDlp();
@@ -365,7 +377,7 @@ void YoutubeService::RunProbe(std::stop_token stop, std::uint64_t entryId) {
     DWORD exitCode = 1;
     std::optional<YoutubeProbe> result;
     if (ytDlp && !url.empty()) {
-        const auto arguments = L"--dump-single-json --no-warnings --no-playlist " +
+        const auto arguments = L"--ignore-config --no-cache-dir --dump-single-json --no-warnings --no-playlist " +
                                detail::QuoteArg(url);
         if (detail::RunProcessCapture(*ytDlp, arguments, stop, output, error, &exitCode) &&
             exitCode == 0 && !stop.stop_requested()) {

@@ -258,7 +258,6 @@ bool PlaylistManager::AddExternalTrack(PlaylistId playlistId, const library::Tra
     }
     auto& playlist = playlists_[found->second];
     if (playlist.kind == PlaylistKind::Youtube) return false;
-    RememberExternalTrack(track);
     if (playlist.kind == PlaylistKind::User) {
         playlist.AppendTrack(track.id);
     } else {
@@ -271,6 +270,9 @@ bool PlaylistManager::AddExternalTrack(PlaylistId playlistId, const library::Tra
             }
         }
     }
+    // Remember only after the target accepted the id; a rejected duplicate Directory
+    // import must not leave a stale external-track record behind.
+    RememberExternalTrack(track);
     RebuildIndexes();
     return true;
 }
@@ -318,6 +320,10 @@ bool PlaylistManager::MoveUserPlaylist(PlaylistId id, PlaylistId beforeId) {
         return p.id == id && p.kind == PlaylistKind::User;
     });
     if (source == playlists_.end()) return false;
+    if (beforeId != 0) {
+        const auto* before = FindPlaylist(beforeId);
+        if (before == nullptr || before->kind != PlaylistKind::User) return false;
+    }
     Playlist moved = std::move(*source);
     playlists_.erase(source);
     auto target = beforeId == 0

@@ -65,21 +65,25 @@ std::optional<std::filesystem::path> SystemTarPath() {
 namespace rivan::youtube {
 
 void YoutubeService::Warm() {
-    {
-        std::scoped_lock lock(mutex_);
-        if (state_.busy) return;
-        if (!LocateYtDlp().has_value()) return;
-    }
-    if (worker_.joinable()) {
-        std::scoped_lock lock(mutex_);
-        if (state_.busy) return;
-    }
-    JoinWorker();
-    {
-        std::scoped_lock lock(mutex_);
-        if (state_.busy) return;
-    }
-    worker_ = std::jthread([this](std::stop_token stop) { RunWarm(stop); });
+    Enqueue([this] {
+        // Preserve the guard logic verbatim: Warm must never interrupt a real
+        // running job, so it returns early here without joining when busy.
+        {
+            std::scoped_lock lock(mutex_);
+            if (state_.busy) return;
+            if (!LocateYtDlp().has_value()) return;
+        }
+        if (worker_.joinable()) {
+            std::scoped_lock lock(mutex_);
+            if (state_.busy) return;
+        }
+        JoinWorker();
+        {
+            std::scoped_lock lock(mutex_);
+            if (state_.busy) return;
+        }
+        worker_ = std::jthread([this](std::stop_token stop) { RunWarm(stop); });
+    });
 }
 
 void YoutubeService::RunWarm(std::stop_token stop) {
@@ -93,31 +97,33 @@ void YoutubeService::RunWarm(std::stop_token stop) {
 }
 
 void YoutubeService::InstallTool(YoutubeTool tool) {
-    JoinWorker();
-    bool start = false;
-    {
-        std::scoped_lock lock(mutex_);
-        WriteToolFlagsLocked();
-        if (tool == YoutubeTool::YtDlp && state_.ytDlpInstalled) {
-            state_.status = L"yt-dlp already installed";
-            ++state_.generation;
-        } else if (tool == YoutubeTool::Ffmpeg && state_.ffmpegInstalled) {
-            state_.status = L"ffmpeg already installed";
-            ++state_.generation;
-        } else {
-            state_.busy = true;
-            state_.job = YoutubeJobKind::Install;
-            state_.installingYtDlp = tool == YoutubeTool::YtDlp;
-            state_.installingFfmpeg = tool == YoutubeTool::Ffmpeg;
-            state_.status = tool == YoutubeTool::YtDlp ? L"Installing yt-dlp..."
-                                                       : L"Installing ffmpeg...";
-            ++state_.generation;
-            start = true;
+    Enqueue([this, tool] {
+        JoinWorker();
+        bool start = false;
+        {
+            std::scoped_lock lock(mutex_);
+            WriteToolFlagsLocked();
+            if (tool == YoutubeTool::YtDlp && state_.ytDlpInstalled) {
+                state_.status = L"yt-dlp already installed";
+                ++state_.generation;
+            } else if (tool == YoutubeTool::Ffmpeg && state_.ffmpegInstalled) {
+                state_.status = L"ffmpeg already installed";
+                ++state_.generation;
+            } else {
+                state_.busy = true;
+                state_.job = YoutubeJobKind::Install;
+                state_.installingYtDlp = tool == YoutubeTool::YtDlp;
+                state_.installingFfmpeg = tool == YoutubeTool::Ffmpeg;
+                state_.status = tool == YoutubeTool::YtDlp ? L"Installing yt-dlp..."
+                                                           : L"Installing ffmpeg...";
+                ++state_.generation;
+                start = true;
+            }
         }
-    }
-    Notify();
-    if (!start) return;
-    worker_ = std::jthread([this, tool](std::stop_token stop) { RunInstall(stop, tool); });
+        Notify();
+        if (!start) return;
+        worker_ = std::jthread([this, tool](std::stop_token stop) { RunInstall(stop, tool); });
+    });
 }
 
 void YoutubeService::RunInstall(std::stop_token stop, YoutubeTool tool) {
@@ -139,10 +145,10 @@ void YoutubeService::RunInstall(std::stop_token stop, YoutubeTool tool) {
         }
     } else {
         const auto zipPath = tools / L"ffmpeg-essentials.zip";
+        const auto extractDir = tools / L"ffmpeg-extract";
         ok = detail::DownloadUrlToFile(
             L"https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip", zipPath, error);
         if (ok && !stop.stop_requested()) {
-            const auto extractDir = tools / L"ffmpeg-extract";
             std::filesystem::remove_all(extractDir, ec);
             std::filesystem::create_directories(extractDir, ec);
             std::string out;
@@ -166,9 +172,13 @@ void YoutubeService::RunInstall(std::stop_token stop, YoutubeTool tool) {
                 ok = false;
                 error = L"ffmpeg.exe not found in archive";
             }
-            std::filesystem::remove_all(extractDir, ec);
-            std::filesystem::remove(zipPath, ec);
         }
+        // Remove the per-install working files on every path, including a cancel that
+        // lands right after the archive download completed, so ffmpeg-essentials.zip
+        // and ffmpeg-extract cannot leak in tools\. Only these install artifacts are
+        // removed; an installed ffmpeg.exe is never deleted.
+        std::filesystem::remove_all(extractDir, ec);
+        std::filesystem::remove(zipPath, ec);
     }
 
     {

@@ -471,10 +471,14 @@ public:
               "IAudioRenderClient::GetBuffer");
 
         const std::size_t requestedBytes = static_cast<std::size_t>(requestedFrames) * blockAlign_;
-        const std::size_t copiedBytes = decoded_.Read(
-            std::span<std::byte>{reinterpret_cast<std::byte*>(destination), requestedBytes});
-        if (copiedBytes != 0) {
-            decodeCv_.notify_all();
+        std::size_t copiedBytes = 0;
+        {
+            std::unique_lock lock(bufferMutex_);
+            copiedBytes = decoded_.Read(
+                std::span<std::byte>{reinterpret_cast<std::byte*>(destination), requestedBytes});
+            if (copiedBytes != 0) {
+                decodeCv_.notify_all();
+            }
         }
         if (copiedBytes < requestedBytes) {
             std::memset(destination + copiedBytes, 0, requestedBytes - copiedBytes);
@@ -557,8 +561,10 @@ public:
     void SetVolume(const float volume) {
         volume_ = std::clamp(volume, 0.0F, 1.0F);
         if (volumeControl_) {
-            Check(volumeControl_->SetMasterVolume(volume_, nullptr),
-                  "ISimpleAudioVolume::SetMasterVolume");
+            // A transient SetMasterVolume failure must not kill the session; volume is
+            // cosmetic state. The render path reports genuine device failures.
+            const HRESULT result = volumeControl_->SetMasterVolume(volume_, nullptr);
+            (void)result;
         }
     }
 

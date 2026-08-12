@@ -25,12 +25,34 @@ std::optional<std::filesystem::path> FindDownloadedFile(
                            ext == L".webm" || ext == L".wav" || ext == L".flac" ||
                            ext == L".ogg" || ext == L".mp4" || ext == L".m4v";
         if (!media) continue;
-        if (stem == id || name.find(needle) != std::wstring::npos ||
-            name.find(id) != std::wstring::npos) {
+        if (stem == id || name.find(needle) != std::wstring::npos) {
             return entry.path();
         }
     }
     return std::nullopt;
+}
+
+void RemovePartialDownloads(const std::filesystem::path& directory, std::wstring_view videoId) {
+    // yt-dlp writes partial streams as "<title> [<videoId>].<ext>.part" (with .f<NNN>
+    // segments under --concurrent-fragments) plus "<title> [<videoId>].<ext>.ytdl"
+    // bookkeeping. Only files carrying this job's [<videoId>] marker and a partial
+    // name are removed, so completed media and unrelated files are never swept.
+    std::error_code ec;
+    if (!std::filesystem::is_directory(directory, ec)) return;
+    const std::wstring id(videoId);
+    const std::wstring needle = L"[" + id + L"]";
+    for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file(ec)) continue;
+        const auto name = entry.path().filename().wstring();
+        if (name.find(needle) == std::wstring::npos) continue;
+        const auto extension = Lower(entry.path().extension().wstring());
+        if (extension != L".part" && extension != L".ytdl") {
+            continue;
+        }
+        std::filesystem::remove(entry.path(), ec);
+        ec.clear();
+    }
 }
 
 } // namespace rivan::youtube::detail
@@ -205,19 +227,20 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
                      : (isVideo ? L" --embed-thumbnail --add-metadata" : L"");
     std::wstring arguments;
     if (isVideo) {
-        arguments = L"-f " + detail::QuoteArg(videoFormat) +
+        arguments = L"--ignore-config --no-cache-dir -f " + detail::QuoteArg(videoFormat) +
                     L" --merge-output-format mp4 --concurrent-fragments 4 --newline "
                     L"--progress --no-warnings --no-playlist" + embedArt +
                     detail::FfmpegLocationArg() + L" -o " + detail::QuoteArg(outputTemplate) +
                     L" " + detail::QuoteArg(url);
     } else if (convertAudio) {
-        arguments = L"-f " + detail::QuoteArg(selectedAudio) + L" -x --audio-format " +
-                    audioFormatName() + L" --audio-quality " + std::to_wstring(selection.audioQuality) +
+        arguments = L"--ignore-config --no-cache-dir -f " + detail::QuoteArg(selectedAudio) +
+                    L" -x --audio-format " + audioFormatName() +
+                    L" --audio-quality " + std::to_wstring(selection.audioQuality) +
                     L" --concurrent-fragments 4 --newline --progress --no-warnings "
                     L"--no-playlist" + embedArt + detail::FfmpegLocationArg() + L" -o " +
                     detail::QuoteArg(outputTemplate) + L" " + detail::QuoteArg(url);
     } else {
-        arguments = L"-f " + detail::QuoteArg(selectedAudio) +
+        arguments = L"--ignore-config --no-cache-dir -f " + detail::QuoteArg(selectedAudio) +
                     L" --concurrent-fragments 4 --newline --progress --no-warnings "
                     L"--no-playlist" + embedArt + L" -o " + detail::QuoteArg(outputTemplate) +
                     L" " + detail::QuoteArg(url);
@@ -257,7 +280,7 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
     std::string output;
     std::string error;
     DWORD exitCode = 1;
-    (void)detail::RunProcessCapture(
+    const bool ran = detail::RunProcessCapture(
         *ytDlp, arguments, stop, output, error, &exitCode,
         [&](std::string_view line) {
             if (stop.stop_requested()) return;
@@ -272,7 +295,19 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
 
     std::optional<std::filesystem::path> local;
     if (!stop.stop_requested()) {
-        local = detail::FindDownloadedFile(directory, target.videoId);
+        // A non-zero exit from a ran process is a genuine failure; skip the file
+        // lookup so the state update below takes the failure branch.
+        if (ran && exitCode != 0) {
+            local = std::nullopt;
+        } else {
+            local = detail::FindDownloadedFile(directory, target.videoId);
+        }
+    } else {
+        // Cancel path: yt-dlp is killed mid-flight by RunProcessCapture, so its
+        // partial stream files (*.part, *.ytdl) are left behind. Remove only files
+        // matching this job's [<videoId>] marker; downloads are serialized through
+        // JoinWorker, so no other job writes the same pattern concurrently.
+        detail::RemovePartialDownloads(directory, target.videoId);
     }
 
     {

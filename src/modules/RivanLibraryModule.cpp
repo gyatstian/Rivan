@@ -1,20 +1,45 @@
 // RivanLibraryModule.cpp
 // Rendering and module-owned interaction for the RIVAN LIBRARY module.
 #include "../ui/Win32UiImpl.h"
+#include "../ui/TrackCoverCache.h"
 
 namespace rivan::ui {
 
-[[nodiscard]] ComPtr<ID2D1Bitmap> Win32Ui::Impl::CreateTrackCoverBitmapFromHBitmap(HBITMAP bitmap) {
+namespace {
+
+[[nodiscard]] bool CoverSize(IWICBitmapSource* source, const UINT maximumDimension,
+                             UINT& width, UINT& height) noexcept {
+    UINT sourceWidth{};
+    UINT sourceHeight{};
+    if (source == nullptr || maximumDimension == 0 ||
+        FAILED(source->GetSize(&sourceWidth, &sourceHeight)) || sourceWidth == 0 ||
+        sourceHeight == 0) {
+        return false;
+    }
+    const float scale = std::min(static_cast<float>(maximumDimension) / sourceWidth,
+                                 static_cast<float>(maximumDimension) / sourceHeight);
+    width = std::max(1u, static_cast<UINT>(std::lround(sourceWidth * scale)));
+    height = std::max(1u, static_cast<UINT>(std::lround(sourceHeight * scale)));
+    return true;
+}
+
+} // namespace
+
+[[nodiscard]] ComPtr<ID2D1Bitmap> Win32Ui::Impl::CreateTrackCoverBitmapFromHBitmap(
+    HBITMAP bitmap, const UINT maximumDimension) {
         ComPtr<ID2D1Bitmap> result;
         if (!target || !wicFactory || !bitmap) return result;
         ComPtr<IWICBitmap> source;
         ComPtr<IWICBitmapScaler> scaler;
         ComPtr<IWICFormatConverter> converter;
+        UINT width{};
+        UINT height{};
         if (FAILED(wicFactory->CreateBitmapFromHBITMAP(bitmap, nullptr,
-                                                        WICBitmapUsePremultipliedAlpha,
-                                                        source.ReleaseAndGetAddressOf())) ||
+                                                         WICBitmapUsePremultipliedAlpha,
+                                                         source.ReleaseAndGetAddressOf())) ||
+            !CoverSize(source.Get(), maximumDimension, width, height) ||
             FAILED(wicFactory->CreateBitmapScaler(scaler.ReleaseAndGetAddressOf())) ||
-            FAILED(scaler->Initialize(source.Get(), kTrackCoverSize, kTrackCoverSize,
+            FAILED(scaler->Initialize(source.Get(), width, height,
                                       WICBitmapInterpolationModeFant)) ||
             FAILED(wicFactory->CreateFormatConverter(converter.ReleaseAndGetAddressOf())) ||
             FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppPBGRA,
@@ -28,7 +53,8 @@ namespace rivan::ui {
     }
 
 [[nodiscard]] ComPtr<ID2D1Bitmap> Win32Ui::Impl::CreateTrackCoverBitmapFromEncoded(const BYTE* data,
-                                                                          std::size_t size) {
+                                                                                     std::size_t size,
+                                                                                     const UINT maximumDimension) {
         ComPtr<ID2D1Bitmap> result;
         if (!target || !wicFactory || !data || size == 0 || size > MAXDWORD) return result;
         std::vector<BYTE> owned(data, data + size);
@@ -37,14 +63,17 @@ namespace rivan::ui {
         ComPtr<IWICBitmapFrameDecode> frame;
         ComPtr<IWICBitmapScaler> scaler;
         ComPtr<IWICFormatConverter> converter;
+        UINT width{};
+        UINT height{};
         if (FAILED(wicFactory->CreateStream(stream.ReleaseAndGetAddressOf())) ||
             FAILED(stream->InitializeFromMemory(owned.data(), static_cast<DWORD>(owned.size()))) ||
             FAILED(wicFactory->CreateDecoderFromStream(stream.Get(), nullptr,
                                                        WICDecodeMetadataCacheOnDemand,
                                                        decoder.ReleaseAndGetAddressOf())) ||
             FAILED(decoder->GetFrame(0, frame.ReleaseAndGetAddressOf())) ||
+            !CoverSize(frame.Get(), maximumDimension, width, height) ||
             FAILED(wicFactory->CreateBitmapScaler(scaler.ReleaseAndGetAddressOf())) ||
-            FAILED(scaler->Initialize(frame.Get(), kTrackCoverSize, kTrackCoverSize,
+            FAILED(scaler->Initialize(frame.Get(), width, height,
                                       WICBitmapInterpolationModeFant)) ||
             FAILED(wicFactory->CreateFormatConverter(converter.ReleaseAndGetAddressOf())) ||
             FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppPBGRA,
@@ -57,7 +86,8 @@ namespace rivan::ui {
         return result;
     }
 
-[[nodiscard]] ComPtr<ID2D1Bitmap> Win32Ui::Impl::LoadEmbeddedId3TrackCover(const std::wstring& path) {
+[[nodiscard]] ComPtr<ID2D1Bitmap> Win32Ui::Impl::LoadEmbeddedId3TrackCover(
+    const std::wstring& path, const UINT maximumDimension) {
         std::ifstream stream(std::filesystem::path(path), std::ios::binary);
         if (!stream) return {};
         char header[10]{};
@@ -127,7 +157,7 @@ namespace rivan::ui {
                 }
                 if (body < end) {
                     return CreateTrackCoverBitmapFromEncoded(
-                        body, static_cast<std::size_t>(end - body));
+                        body, static_cast<std::size_t>(end - body), maximumDimension);
                 }
                 break;
             }
@@ -148,9 +178,12 @@ void Win32Ui::Impl::TrimTrackCoverCache() {
         }
     }
 
-[[nodiscard]] ID2D1Bitmap* Win32Ui::Impl::TrackCoverBitmap(const std::wstring& path) {
-        if (!model.trackCoverArtEnabled || path.empty() || !target || !wicFactory) return nullptr;
-        const auto cached = trackCoverCache.find(path);
+[[nodiscard]] ID2D1Bitmap* Win32Ui::Impl::TrackCoverBitmap(const std::wstring& path,
+                                                             UINT maximumDimension) {
+    if (path.empty() || !target || !wicFactory) return nullptr;
+        maximumDimension = BucketTrackCoverDimension(maximumDimension);
+        const std::wstring cacheKey = path + L"|" + std::to_wstring(maximumDimension);
+        const auto cached = trackCoverCache.find(cacheKey);
         if (cached != trackCoverCache.end()) {
             cached->second.lastUsed = ++trackCoverUseCounter;
             return cached->second.bitmap.Get();
@@ -167,27 +200,38 @@ void Win32Ui::Impl::TrimTrackCoverCache() {
         HBITMAP bitmap{};
         if (SUCCEEDED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&item))) &&
             SUCCEEDED(item.As(&thumbnails)) &&
-            SUCCEEDED(thumbnails->GetImage({static_cast<LONG>(kTrackCoverSize),
-                                            static_cast<LONG>(kTrackCoverSize)},
+            SUCCEEDED(thumbnails->GetImage({static_cast<LONG>(maximumDimension),
+                                             static_cast<LONG>(maximumDimension)},
                                            SIIGBF_BIGGERSIZEOK | SIIGBF_RESIZETOFIT |
                                                SIIGBF_THUMBNAILONLY,
                                            &bitmap))) {
-            entry.bitmap = CreateTrackCoverBitmapFromHBitmap(bitmap);
+            entry.bitmap = CreateTrackCoverBitmapFromHBitmap(bitmap, maximumDimension);
             DeleteObject(bitmap);
         }
-        if (!entry.bitmap) entry.bitmap = LoadEmbeddedId3TrackCover(path);
+        if (!entry.bitmap) entry.bitmap = LoadEmbeddedId3TrackCover(path, maximumDimension);
         // A null entry is intentional: unsupported/no-art files are remembered too.
-        auto [inserted, ignored] = trackCoverCache.emplace(path, std::move(entry));
+        auto [inserted, ignored] = trackCoverCache.emplace(cacheKey, std::move(entry));
         (void)ignored;
         TrimTrackCoverCache();
         return inserted->second.bitmap.Get();
     }
 
-void Win32Ui::Impl::DrawTrackCover(const TrackView& track, const D2D1_RECT_F& row) {
-        if (auto* bitmap = TrackCoverBitmap(track.filePath)) {
-            const auto cover = Rect(row.right - 24.0F, row.top + 1.0F,
-                                    row.right - 6.0F, row.bottom - 1.0F);
-            target->DrawBitmap(bitmap, cover, 1.0F, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+void Win32Ui::Impl::DrawTrackCover(const TrackView& track, const D2D1_RECT_F& bounds) {
+        const auto width = static_cast<UINT>(std::max(1.0F, std::ceil(Width(bounds))));
+        const auto height = static_cast<UINT>(std::max(1.0F, std::ceil(Height(bounds))));
+        if (auto* bitmap = TrackCoverBitmap(track.filePath, std::max(width, height))) {
+            const auto bitmapSize = bitmap->GetSize();
+            if (bitmapSize.width <= 0.0F || bitmapSize.height <= 0.0F) return;
+            const float scale = std::min(Width(bounds) / bitmapSize.width,
+                                         Height(bounds) / bitmapSize.height);
+            const float drawWidth = bitmapSize.width * scale;
+            const float drawHeight = bitmapSize.height * scale;
+            const auto targetBounds = Rect(bounds.left + (Width(bounds) - drawWidth) * 0.5F,
+                                           bounds.top + (Height(bounds) - drawHeight) * 0.5F,
+                                           bounds.left + (Width(bounds) + drawWidth) * 0.5F,
+                                           bounds.top + (Height(bounds) + drawHeight) * 0.5F);
+            target->DrawBitmap(bitmap, targetBounds, 1.0F,
+                               D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
     }
 

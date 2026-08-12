@@ -6,6 +6,7 @@
 #include "layout/ModulePixelGeometry.h"
 #include "Win32UiModuleState.h"
 #include "Win32UiSkinStudioState.h"
+#include "Win32UiSongRowLayoutState.h"
 #include "Win32UiRenderState.h"
 #include "Win32UiPreviewState.h"
 #include "Win32UiPlaylistState.h"
@@ -95,8 +96,6 @@ constexpr UINT kRefreshIdleMilliseconds = 200;
 constexpr UINT kRefreshMilliseconds = kRefreshPlayingMilliseconds;
 constexpr double kPreviewSeekThresholdSeconds = 0.50;
 constexpr double kPreviewFrameLeadSeconds = 0.033;
-constexpr float kTrackRowHeight = 20.0F;
-constexpr UINT kTrackCoverSize = 18;
 constexpr std::size_t kMaximumTrackCoverCacheEntries = 96;
 // Borderless window: keep OVERLAPPEDWINDOW so Aero snap, resize, and min/max still work,
 // but the caption is removed visually via WM_NCCALCSIZE. This is the pixel thickness of
@@ -266,7 +265,8 @@ void ColorToHsv(skin::Color color, float& hue, float& saturation, float& value) 
 } // namespace
 
 struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
-                       Win32UiRenderState, Win32UiPreviewState, Win32UiPlaylistState {
+                        Win32UiRenderState, Win32UiPreviewState, Win32UiPlaylistState,
+                        Win32UiSongRowLayoutState {
     enum class HitKind : std::uint8_t {
         Command, Playlist, PlaylistToggle, Track, Seek, Volume, Setting,
         PlaylistSearch, WindowControl, Studio, Refresh, SettingsAction, TimeToggle,
@@ -276,6 +276,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
         ModuleCollapseToggle,
         LyricsAction,
         LyricsVerse,
+        SongRowField,
         // Playlist Editor bottom-row buttons and the tree "new playlist" (+) button.
         EditorAdd, EditorRemove, NewPlaylist
     };
@@ -367,18 +368,22 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
 
     [[nodiscard]] bool OpenVideoPreview(const std::wstring& path);
 
-    [[nodiscard]] ComPtr<ID2D1Bitmap> CreateTrackCoverBitmapFromHBitmap(HBITMAP bitmap);
+    [[nodiscard]] ComPtr<ID2D1Bitmap> CreateTrackCoverBitmapFromHBitmap(HBITMAP bitmap,
+                                                                           UINT maximumDimension);
 
     [[nodiscard]] ComPtr<ID2D1Bitmap> CreateTrackCoverBitmapFromEncoded(const BYTE* data,
-                                                                          std::size_t size);
+                                                                           std::size_t size,
+                                                                           UINT maximumDimension);
 
-    [[nodiscard]] ComPtr<ID2D1Bitmap> LoadEmbeddedId3TrackCover(const std::wstring& path);
+    [[nodiscard]] ComPtr<ID2D1Bitmap> LoadEmbeddedId3TrackCover(const std::wstring& path,
+                                                                   UINT maximumDimension);
 
     void TrimTrackCoverCache();
 
-    [[nodiscard]] ID2D1Bitmap* TrackCoverBitmap(const std::wstring& path);
+    [[nodiscard]] ID2D1Bitmap* TrackCoverBitmap(const std::wstring& path,
+                                                 UINT maximumDimension);
 
-    void DrawTrackCover(const TrackView& track, const D2D1_RECT_F& row);
+    void DrawTrackCover(const TrackView& track, const D2D1_RECT_F& bounds);
 
     void UpdateVideoPreviewFrame();
 
@@ -418,10 +423,19 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
 
     [[nodiscard]] ComPtr<IDWriteTextFormat> BuildTextFormat(
         const std::wstring& family, float size, DWRITE_FONT_WEIGHT weight,
-        const std::filesystem::path& customFile = {});
+        const std::filesystem::path& customFile = {},
+        DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL);
 
     [[nodiscard]] std::optional<std::wstring> FontFamilyFromFile(
         const std::filesystem::path& file);
+
+    // ApplySkinFonts guard keys: the raw typography inputs that feed its signature check,
+    // compared before any string building so unchanged skin fonts skip the per-paint
+    // wstring work. fontSignature (in Win32UiRenderState) remains the reset authority.
+    std::string lastAppliedFontFamily;
+    std::filesystem::path lastAppliedCustomFontFile;
+    std::filesystem::path lastAppliedSkinDirectory;
+    int lastAppliedFontBaseSizeKey{std::numeric_limits<int>::min()};
 
     // Rebuilds UI text formats from active skin typography. Custom files use a private
     // DirectWrite collection because FR_PRIVATE fonts are absent from its system collection.
@@ -446,9 +460,12 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     [[nodiscard]] const HitRegion* HitTestContent(float x, float y) const noexcept;
 
     void DrawText(std::wstring_view textValue, const D2D1_RECT_F& bounds,
-                  ID2D1Brush* brush, IDWriteTextFormat* format,
-                  DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING,
-                  DWRITE_PARAGRAPH_ALIGNMENT vertical = DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                   ID2D1Brush* brush, IDWriteTextFormat* format,
+                   DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING,
+                   DWRITE_PARAGRAPH_ALIGNMENT vertical = DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                   D2D1_DRAW_TEXT_OPTIONS drawOptions = D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                   const D2D1_RECT_F* clipBounds = nullptr,
+                   bool trim = false);
 
     // Horizontally scrolling single-line text, like an HTML <marquee> moving to the
     // right. The glyphs travel from the left edge toward the right and wrap around.
@@ -517,6 +534,16 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
                        ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* greenDim,
                         ID2D1Brush* selection, ID2D1Brush* white, ID2D1Brush* dim,
                         bool showArtist = true);
+    [[nodiscard]] float TrackRowHeight() const noexcept;
+    [[nodiscard]] IDWriteTextFormat* SongRowFormat(int sizeDelta,
+                                                    SongRowFontWeight weight,
+                                                    SongRowFontStyle style = SongRowFontStyle::Normal);
+    void DrawSongRow(const D2D1_RECT_F& row, const TrackView& track,
+                     std::size_t number, std::size_t modelIndex, bool selected,
+                     ID2D1Brush* primary, ID2D1Brush* secondary,
+                     ID2D1Brush* active, const SongRowLayout* layout = nullptr,
+                     bool sample = false,
+                     std::array<D2D1_RECT_F, kSongRowFieldCount>* fieldBounds = nullptr);
     void DrawTrackRenameField(const D2D1_RECT_F& bounds, ID2D1Brush* textBrush);
 
     // Renders the current folder view: the selected folder's loose tracks first (no
@@ -608,6 +635,13 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void StudioRailButton(const D2D1_RECT_F& bounds, const wchar_t* icon, const wchar_t* label,
                           StudioSection section, std::uint64_t action,
                           std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawSongRowLayoutEditor(float left, float right, float& y,
+                                 std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void BeginSongRowFieldDrag(SongRowField field, float x, float y);
+    void UpdateSongRowFieldDrag(float x, float y);
+    [[nodiscard]] bool ApplySongRowSnap() noexcept;
+    void AdjustSongRowSnapGap(int delta);
+    void CommitSongRowLayoutEdit();
     void DrawSkinStudio(const D2D1_SIZE_F size,
                         std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
     template <typename LabelFn, typename RowFn>
@@ -706,7 +740,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void UpdateLayerDrag(float y);
     void PointerDown(float x, float y);
     void PointerMove(float x, float y);
-    void PointerUp() noexcept;
+    void PointerUp(std::optional<D2D1_POINT_2F> release = std::nullopt) noexcept;
     // Provides resize borders and a draggable caption for the borderless window.
     [[nodiscard]] LRESULT HitTestNonClient(int screenX, int screenY) const;
     [[nodiscard]] static bool IsImageDrop(const std::filesystem::path& path);
@@ -714,7 +748,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void AddDroppedImages(const std::vector<std::wstring>& paths, POINT dropPoint);
     void ActivateFirstSearchResult();
     void Character(wchar_t character);
-    void KeyDown(WPARAM key);
+    bool KeyDown(WPARAM key);
     void Scroll(float x, float y, int direction);
     // Right-click context menu (tracks / playlists) + selection helpers.
     void PointerRightDown(float x, float y);

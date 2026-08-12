@@ -3,6 +3,7 @@
 // The test executable returns nonzero at the first failed invariant.
 #include "../src/audio/AudioAnalysisBuffer.h"
 #include "../src/config/SettingsManager.h"
+#include "../src/core/IniDocument.h"
 #include "../src/core/IniValueCodec.h"
 #include "../src/library/LibraryScanner.h"
 #include "../src/playlist/PlaybackQueue.h"
@@ -10,6 +11,8 @@
 #include "../src/skin/Skin.h"
 #include "../src/visualization/Visualization.h"
 #include "../src/lyrics/LyricsService.h"
+#include "../src/ui/TrackCoverCache.h"
+#include "../src/ui/SongRowLayoutGeometry.h"
 #include "../src/ui/layout/ModuleLayout.h"
 
 #ifndef NOMINMAX
@@ -18,15 +21,20 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <numbers>
 #include <span>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -432,7 +440,7 @@ void TestUserPlaylistScanFlow() {
           "reordered user playlist comes first");
 }
 
-void TestFilePreviewSettingRoundTrip() {
+void TestSongRowLayoutSettingRoundTrip() {
     const auto root = std::filesystem::temp_directory_path() /
                       (L"RivanSettingsTests-" + std::to_wstring(GetCurrentProcessId()));
     std::error_code ec;
@@ -445,7 +453,17 @@ void TestFilePreviewSettingRoundTrip() {
     auto settings = rivan::config::AppSettings::Defaults();
     settings.musicRoot = root / L"Music";
     std::filesystem::create_directories(settings.musicRoot, ec);
-    settings.trackCoverArtEnabled = false;
+    settings.songRowLayout.rowHeight = 64.0F;
+    settings.songRowLayout.Field(rivan::ui::SongRowField::Title).x = 0.20F;
+    settings.songRowLayout.Field(rivan::ui::SongRowField::Title).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Cover,
+                               rivan::ui::SongRowSnapSide::Right, 3};
+    settings.songRowLayout.Field(rivan::ui::SongRowField::Title).fluid = false;
+    settings.songRowLayout.Field(rivan::ui::SongRowField::Title).fontSizeDelta = 3;
+    settings.songRowLayout.Field(rivan::ui::SongRowField::Title).fontWeight =
+        rivan::ui::SongRowFontWeight::Bold;
+    settings.songRowLayout.Field(rivan::ui::SongRowField::Artist).textColor =
+        rivan::ui::SongRowTextColor::Secondary;
     settings.filePreviewEnabled = false;
     settings.startAtStartup = true;
     settings.exitToTray = true;
@@ -458,12 +476,52 @@ void TestFilePreviewSettingRoundTrip() {
     Check(writer.SetSettings(settings, &error), "file preview setting accepts false");
     Check(writer.SaveSettings(&error), "file preview setting saves");
 
+    std::string persistedSettings;
+    {
+        std::ifstream savedSettings(settingsFile, std::ios::binary);
+        persistedSettings.assign(std::istreambuf_iterator<char>(savedSettings),
+                                 std::istreambuf_iterator<char>());
+    }
+    Check(persistedSettings.find("width_fraction") == std::string::npos,
+          "song row width is not persisted");
+    constexpr std::string_view songRowSection = "[song_row_layout]\n";
+    const auto songRowSectionOffset = persistedSettings.find(songRowSection);
+    Check(songRowSectionOffset != std::string::npos,
+          "song row layout section is persisted");
+    if (songRowSectionOffset != std::string::npos) {
+        persistedSettings.insert(songRowSectionOffset + songRowSection.size(),
+                                 "width_fraction=0.30\n");
+        std::ofstream legacySettings(settingsFile, std::ios::binary | std::ios::trunc);
+        legacySettings << persistedSettings;
+    }
+
     rivan::config::SettingsManager reader(settingsFile, sessionFile);
     Check(reader.LoadSettings(&error), "file preview setting reloads");
     Check(reader.Settings().filePreviewEnabled == false,
            "file preview disabled state survives settings round-trip");
-    Check(reader.Settings().trackCoverArtEnabled == false,
-           "track cover setting survives settings round-trip");
+    const auto& songRowLayout = reader.Settings().songRowLayout;
+    Check(std::abs(songRowLayout.rowHeight - 64.0F) < 0.01F &&
+               std::abs(songRowLayout.Field(rivan::ui::SongRowField::Title).x - 0.20F) < 0.01F &&
+               songRowLayout.Field(rivan::ui::SongRowField::Title).snap.has_value() &&
+               songRowLayout.Field(rivan::ui::SongRowField::Title).snap->target ==
+                   rivan::ui::SongRowField::Cover &&
+               songRowLayout.Field(rivan::ui::SongRowField::Title).snap->gapPixels == 3 &&
+               !songRowLayout.Field(rivan::ui::SongRowField::Title).fluid &&
+              songRowLayout.Field(rivan::ui::SongRowField::Title).fontSizeDelta == 3 &&
+              songRowLayout.Field(rivan::ui::SongRowField::Title).fontWeight ==
+                  rivan::ui::SongRowFontWeight::Bold &&
+              songRowLayout.Field(rivan::ui::SongRowField::Artist).textColor ==
+                  rivan::ui::SongRowTextColor::Secondary,
+           "song row layout survives settings round-trip");
+    Check(reader.SaveSettings(&error), "legacy song row width setting resaves");
+    std::string resaved;
+    {
+        std::ifstream resavedSettings(settingsFile, std::ios::binary);
+        resaved.assign(std::istreambuf_iterator<char>(resavedSettings),
+                       std::istreambuf_iterator<char>());
+    }
+    Check(resaved.find("width_fraction") == std::string::npos,
+          "legacy song row width setting is ignored on load and removed on save");
     Check(reader.Settings().startAtStartup,
           "start at startup survives settings round-trip");
     Check(reader.Settings().exitToTray,
@@ -483,17 +541,189 @@ void TestFilePreviewSettingRoundTrip() {
           "lyrics cache setting survives settings round-trip");
 
     settings.filePreviewEnabled = true;
-    settings.trackCoverArtEnabled = true;
     Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error),
            "file preview setting accepts true");
-    Check(reader.LoadSettings(&error) && reader.Settings().filePreviewEnabled &&
-              reader.Settings().trackCoverArtEnabled,
-           "file preview and track cover settings enable after round-trip");
+    Check(reader.LoadSettings(&error) && reader.Settings().filePreviewEnabled,
+           "file preview setting enables after round-trip");
+    auto invalidLayout = reader.Settings();
+    invalidLayout.songRowLayout.Field(rivan::ui::SongRowField::Title).x = 0.95F;
+    invalidLayout.songRowLayout.Field(rivan::ui::SongRowField::Title).width = 0.10F;
+    Check(!reader.SetSettings(invalidLayout, &error),
+           "song row layout rejects fields outside the row canvas");
+    auto cyclicLayout = reader.Settings();
+    cyclicLayout.songRowLayout.Field(rivan::ui::SongRowField::Title).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Artist,
+                               rivan::ui::SongRowSnapSide::Right, 1};
+    cyclicLayout.songRowLayout.Field(rivan::ui::SongRowField::Artist).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Title,
+                               rivan::ui::SongRowSnapSide::Right, 1};
+    Check(!reader.SetSettings(cyclicLayout, &error),
+          "song row layout rejects cyclic field snaps");
     std::filesystem::remove_all(root, ec);
+}
+
+void TestSongRowLayoutDefaults() {
+    const auto layout = rivan::ui::SongRowLayout::Defaults();
+    const auto& title = layout.Field(rivan::ui::SongRowField::Title);
+    const auto& artist = layout.Field(rivan::ui::SongRowField::Artist);
+
+    Check(std::abs(title.y - 0.03F) < 0.001F &&
+              std::abs(title.height - 0.53F) < 0.001F &&
+              std::abs(artist.y - 0.58F) < 0.001F &&
+              std::abs(artist.height - 0.35F) < 0.001F &&
+              title.y + title.height <= artist.y,
+           "default song name gains lower text room without overlapping artist");
+    Check(layout.Field(rivan::ui::SongRowField::Number).fluid &&
+              layout.Field(rivan::ui::SongRowField::Title).fluid &&
+              layout.Field(rivan::ui::SongRowField::Duration).fluid &&
+              layout.Field(rivan::ui::SongRowField::Artist).fluid &&
+              layout.Field(rivan::ui::SongRowField::Bitrate).fluid &&
+              !layout.Field(rivan::ui::SongRowField::Cover).fluid,
+          "text song-row fields are fluid while cover keeps explicit dimensions");
+
+    constexpr float canvasLeft = 10.0F;
+    constexpr float canvasWidth = 400.0F;
+    Check(std::abs(rivan::ui::SongRowSnappedFieldX(
+                       100.0F, 140.0F, canvasLeft, canvasWidth, 0.10F, 1.0F,
+                       rivan::ui::SongRowSnapSide::Right) - 0.325F) < 0.001F,
+          "song row right snap leaves the default one-pixel gap");
+    Check(std::abs(rivan::ui::SongRowSnappedFieldX(
+                       100.0F, 140.0F, canvasLeft, canvasWidth, 0.10F, 0.0F,
+                       rivan::ui::SongRowSnapSide::Left) - 0.1275F) < 0.001F,
+          "song row left snap abuts the target edge");
+    Check(std::abs(rivan::ui::SongRowSnappedFieldX(
+                       100.0F, 140.0F, canvasLeft, canvasWidth, 0.10F, -2.0F,
+                       rivan::ui::SongRowSnapSide::Right) - 0.3175F) < 0.001F,
+          "song row snap supports negative gaps for intentional overlap");
+    Check(rivan::ui::SongRowSnapHoverSide(100.0F, 50.0F, 100.0F, 140.0F, 20.0F, 80.0F) ==
+              rivan::ui::SongRowSnapSide::Left &&
+              rivan::ui::SongRowSnapHoverSide(140.0F, 50.0F, 100.0F, 140.0F, 20.0F, 80.0F) ==
+              rivan::ui::SongRowSnapSide::Right,
+          "song row snap hover identifies left and right target edges");
+    Check(!rivan::ui::SongRowSnapHoverSide(100.0F, 10.0F, 100.0F, 140.0F, 20.0F, 80.0F) &&
+              !rivan::ui::SongRowSnapHoverSide(109.0F, 50.0F, 100.0F, 140.0F, 20.0F, 80.0F),
+          "song row snap hover ignores outside vertical span and distant edges");
+    Check(rivan::ui::SongRowSnapHoverSide(108.0F, 50.0F, 100.0F, 140.0F, 20.0F, 80.0F) ==
+              rivan::ui::SongRowSnapSide::Left &&
+              !rivan::ui::SongRowSnapHoverSide(108.1F, 50.0F, 100.0F, 140.0F, 20.0F, 80.0F),
+           "song row snap hover accepts the edge threshold and rejects beyond it");
+
+    Check(std::abs(rivan::ui::SongRowFluidFieldWidth(8.0F, 400.0F) - 0.030F) < 0.001F,
+          "fluid song fields reserve inset and rasterization room around measured text");
+    Check(std::abs(rivan::ui::SongRowFluidFieldWidth(8.0F, 400.0F, 1.0F, 4.0F) - 0.045F) < 0.001F,
+          "fluid song fields reserve caller-supplied italic or outline overhang room");
+
+    auto coverClearance = rivan::ui::SongRowLayout::Defaults();
+    std::array<float, rivan::ui::kSongRowFieldCount> coverClearanceWidths{};
+    const auto numberIndex = static_cast<std::size_t>(rivan::ui::SongRowField::Number);
+    const auto coverIndex = static_cast<std::size_t>(rivan::ui::SongRowField::Cover);
+    const auto titleIndex = static_cast<std::size_t>(rivan::ui::SongRowField::Title);
+    coverClearanceWidths[numberIndex] = 0.12F;
+    coverClearanceWidths[coverIndex] = coverClearance.Field(rivan::ui::SongRowField::Cover).width;
+    coverClearanceWidths[titleIndex] = 0.20F;
+    coverClearance.Field(rivan::ui::SongRowField::Title).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Cover,
+                               rivan::ui::SongRowSnapSide::Right, 3};
+    const auto coverResolved = rivan::ui::SongRowResolvedFieldXs(
+        coverClearance, 10.0F, 400.0F, coverClearanceWidths);
+    const float clearedNumberRight = 10.0F +
+        (coverResolved[numberIndex] + coverClearanceWidths[numberIndex]) * 400.0F - 1.0F;
+    const float clearedCoverLeft = 10.0F + coverResolved[coverIndex] * 400.0F + 1.0F;
+    const float clearedCoverRight = 10.0F +
+        (coverResolved[coverIndex] + coverClearanceWidths[coverIndex]) * 400.0F - 1.0F;
+    const float clearedTitleLeft = 10.0F + coverResolved[titleIndex] * 400.0F + 1.0F;
+    Check(std::abs(clearedCoverLeft - clearedNumberRight - 1.0F) < 0.01F &&
+              std::abs(clearedTitleLeft - clearedCoverRight - 3.0F) < 0.01F,
+          "independent cover clears fluid number and repositions attached fields");
+
+    auto multiSnap = rivan::ui::SongRowLayout::Defaults();
+    std::array<float, rivan::ui::kSongRowFieldCount> widths{};
+    widths[static_cast<std::size_t>(rivan::ui::SongRowField::Number)] = 0.05F;
+    widths[static_cast<std::size_t>(rivan::ui::SongRowField::Cover)] = 0.10F;
+    widths[static_cast<std::size_t>(rivan::ui::SongRowField::Title)] = 0.20F;
+    widths[static_cast<std::size_t>(rivan::ui::SongRowField::Artist)] = 0.15F;
+    multiSnap.Field(rivan::ui::SongRowField::Number).x = 0.10F;
+    multiSnap.Field(rivan::ui::SongRowField::Cover).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Number,
+                               rivan::ui::SongRowSnapSide::Right, 2};
+    multiSnap.Field(rivan::ui::SongRowField::Title).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Cover,
+                               rivan::ui::SongRowSnapSide::Right, 3};
+    multiSnap.Field(rivan::ui::SongRowField::Artist).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Cover,
+                               rivan::ui::SongRowSnapSide::Right, 4};
+    const auto resolved = rivan::ui::SongRowResolvedFieldXs(multiSnap, 0.0F, 400.0F, widths);
+    const float numberRight = (resolved[0] + widths[0]) * 400.0F - 1.0F;
+    const float coverLeft = resolved[3] * 400.0F + 1.0F;
+    const float coverRight = (resolved[3] + widths[3]) * 400.0F - 1.0F;
+    const float titleLeft = resolved[1] * 400.0F + 1.0F;
+    const float artistLeft = resolved[4] * 400.0F + 1.0F;
+    Check(std::abs(coverLeft - numberRight - 2.0F) < 0.01F &&
+              std::abs(titleLeft - coverRight - 3.0F) < 0.01F &&
+              std::abs(artistLeft - coverRight - 4.0F) < 0.01F,
+          "multiple song fields retain independent snap gaps to one target and chains");
+
+auto invalid = multiSnap;
+    invalid.Field(rivan::ui::SongRowField::Number).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Title,
+                               rivan::ui::SongRowSnapSide::Left, 1};
+    Check(rivan::ui::SongRowHasSnapCycle(invalid),
+          "song row snap cycle detection rejects circular attachments");
+
+    // Playing indicator shifts the number right during rendering. Snap followers
+    // must track the transient position, not the stored one.
+    auto shifted = rivan::ui::SongRowLayout::Defaults();
+    std::array<float, rivan::ui::kSongRowFieldCount> shiftedWidths{};
+    shiftedWidths[numberIndex] = 0.12F;
+    shiftedWidths[coverIndex] = 0.10F;
+    shifted.Field(rivan::ui::SongRowField::Cover).snap =
+        rivan::ui::SongRowSnap{rivan::ui::SongRowField::Number,
+                               rivan::ui::SongRowSnapSide::Right, 2};
+    const auto shiftedResolved = rivan::ui::SongRowResolvedFieldXs(
+        shifted, 0.0F, 400.0F, shiftedWidths,
+        rivan::ui::SongRowTransientLayout{0.20F});
+    const float shiftedNumberRight =
+        0.0F + (shiftedResolved[numberIndex] + shiftedWidths[numberIndex]) * 400.0F - 1.0F;
+    const float shiftedCoverLeft = 0.0F + shiftedResolved[coverIndex] * 400.0F + 1.0F;
+    Check(std::abs(shiftedResolved[numberIndex] - 0.20F) < 0.001F &&
+              std::abs(shiftedCoverLeft - shiftedNumberRight - 2.0F) < 0.01F,
+          "snapped cover tracks the transmitted number minimum at render time");
+
+    // A wide multi-digit number shifted by the indicator must still force an
+    // independent cover to clear it instead of painting over the digits.
+    auto indicatorClearance = rivan::ui::SongRowLayout::Defaults();
+    std::array<float, rivan::ui::kSongRowFieldCount> clearanceWidths{};
+    clearanceWidths[numberIndex] = 0.12F;
+    clearanceWidths[coverIndex] = 0.10F;
+    indicatorClearance.Field(rivan::ui::SongRowField::Cover).x = 0.30F;
+    const auto clearanceResolved = rivan::ui::SongRowResolvedFieldXs(
+        indicatorClearance, 0.0F, 400.0F, clearanceWidths,
+        rivan::ui::SongRowTransientLayout{0.10F});
+    const float clearanceNumberRight =
+        0.0F + (clearanceResolved[numberIndex] + clearanceWidths[numberIndex]) * 400.0F - 1.0F;
+    const float clearanceCoverLeft = 0.0F + clearanceResolved[coverIndex] * 400.0F + 1.0F;
+    Check(std::abs(clearanceResolved[numberIndex] - 0.10F) < 0.001F &&
+              clearanceCoverLeft >= clearanceNumberRight + 1.0F - 0.01F,
+          "transmitted number minimum keeps independent cover from hiding digits");
+}
+
+void TestTrackCoverCacheDimensions() {
+    using rivan::ui::BucketTrackCoverDimension;
+
+    Check(BucketTrackCoverDimension(1u) == 16u &&
+              BucketTrackCoverDimension(16u) == 16u &&
+              BucketTrackCoverDimension(17u) == 32u &&
+              BucketTrackCoverDimension(33u) == 64u &&
+              BucketTrackCoverDimension(129u) == 256u &&
+              BucketTrackCoverDimension(999u) == rivan::ui::kMaximumTrackCoverDimension,
+          "track cover cache dimensions use capped reusable tiers");
 }
 
 void TestUiModuleRegistry() {
     using rivan::ui::ModuleId;
+    using rivan::ui::ModuleCollapseMode;
+    using rivan::ui::ModuleCollapseSide;
+    using rivan::ui::ModuleLayout;
     using rivan::ui::UiModuleRegistry;
 
     const auto modules = UiModuleRegistry::Modules();
@@ -554,6 +784,46 @@ void TestUiModuleRegistry() {
               std::abs(equalizerGeometry.x - libraryGeometry.x) < 0.001F &&
               std::abs(equalizerGeometry.width - libraryGeometry.width) < 0.001F,
            "removing a module leaves the remaining tab group at its visible size");
+
+    auto independentTabs = ModuleLayout::Defaults();
+    independentTabs.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
+    independentTabs.MakeTab(ModuleId::GraphicEqualizer, ModuleId::RivanLibrary);
+    Check(independentTabs.tabCount == 4 &&
+              independentTabs.IsTabbed(ModuleId::Rivan) &&
+              independentTabs.IsTabbed(ModuleId::AllMusic) &&
+              independentTabs.IsTabbed(ModuleId::GraphicEqualizer) &&
+              independentTabs.IsTabbed(ModuleId::RivanLibrary) &&
+              independentTabs.TabRoot(ModuleId::Rivan) == ModuleId::Rivan &&
+              independentTabs.TabRoot(ModuleId::AllMusic) == ModuleId::Rivan &&
+              independentTabs.TabRoot(ModuleId::GraphicEqualizer) == ModuleId::GraphicEqualizer &&
+              independentTabs.TabRoot(ModuleId::RivanLibrary) == ModuleId::GraphicEqualizer &&
+              independentTabs.GroupTabCount(ModuleId::Rivan) == 2 &&
+              independentTabs.GroupTabCount(ModuleId::GraphicEqualizer) == 2,
+          "multiple tab groups retain independent membership and roots");
+    independentTabs.RemoveTab(ModuleId::RivanLibrary);
+    Check(independentTabs.IsTabbed(ModuleId::Rivan) &&
+              independentTabs.IsTabbed(ModuleId::AllMusic) &&
+              independentTabs.GroupTabCount(ModuleId::Rivan) == 2 &&
+              !independentTabs.IsTabbed(ModuleId::GraphicEqualizer) &&
+              !independentTabs.IsTabbed(ModuleId::RivanLibrary),
+          "removing one tab affects only its selected tab group");
+
+    auto mergedTabGroups = ModuleLayout::Defaults();
+    mergedTabGroups.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
+    mergedTabGroups.MakeTab(ModuleId::GraphicEqualizer, ModuleId::RivanLibrary);
+    mergedTabGroups.MakeTab(ModuleId::VideoPreview, ModuleId::Lyrics);
+    mergedTabGroups.TabWith(ModuleId::AllMusic, ModuleId::GraphicEqualizer);
+    Check(mergedTabGroups.tabCount == 6 &&
+              mergedTabGroups.TabRoot(ModuleId::Rivan) == ModuleId::GraphicEqualizer &&
+              mergedTabGroups.TabRoot(ModuleId::AllMusic) == ModuleId::GraphicEqualizer &&
+              mergedTabGroups.TabRoot(ModuleId::GraphicEqualizer) == ModuleId::GraphicEqualizer &&
+              mergedTabGroups.TabRoot(ModuleId::RivanLibrary) == ModuleId::GraphicEqualizer &&
+              mergedTabGroups.GroupTabCount(ModuleId::GraphicEqualizer) == 4 &&
+              mergedTabGroups.TabRoot(ModuleId::VideoPreview) == ModuleId::VideoPreview &&
+              mergedTabGroups.TabRoot(ModuleId::Lyrics) == ModuleId::VideoPreview &&
+              mergedTabGroups.GroupTabCount(ModuleId::VideoPreview) == 2 &&
+              mergedTabGroups.GroupActiveMember(ModuleId::GraphicEqualizer) == ModuleId::AllMusic,
+          "tabbing two existing groups merges only target and source groups");
 
     using rivan::ui::ModuleDropZone;
     Check(rivan::ui::ResolveModuleDropZone(50.0F, 50.0F, 0.0F, 0.0F, 100.0F, 100.0F) ==
@@ -643,6 +913,114 @@ void TestUiModuleRegistry() {
               std::abs(resizedCollapsible->expandedWidth - resizedCollapsible->width) < 0.001F &&
               std::abs(resizedCollapsible->expandedHeight - resizedCollapsible->height) < 0.001F,
            "resizing a snapped group keeps an expanded collapsible member's geometry in sync");
+
+    auto snappedInsideChildren = rivan::ui::ModuleLayout::Defaults();
+    for (auto& item : snappedInsideChildren.items) item.visible = false;
+    auto* sourceRoot = snappedInsideChildren.Find(ModuleId::Rivan);
+    auto* sourceChild = snappedInsideChildren.Find(ModuleId::AllMusic);
+    auto* targetRoot = snappedInsideChildren.Find(ModuleId::GraphicEqualizer);
+    auto* targetChild = snappedInsideChildren.Find(ModuleId::RivanLibrary);
+    sourceRoot->visible = true;
+    sourceRoot->x = 0.0F;
+    sourceRoot->y = 0.0F;
+    sourceRoot->width = 0.40F;
+    sourceRoot->height = 1.0F;
+    sourceChild->visible = true;
+    sourceChild->x = 0.40F;
+    sourceChild->y = 0.0F;
+    sourceChild->width = 0.10F;
+    sourceChild->height = 1.0F;
+    targetRoot->visible = true;
+    targetRoot->x = 0.60F;
+    targetRoot->y = 0.0F;
+    targetRoot->width = 0.40F;
+    targetRoot->height = 1.0F;
+    targetChild->visible = true;
+    targetChild->x = 0.50F;
+    targetChild->y = 0.0F;
+    targetChild->width = 0.10F;
+    targetChild->height = 1.0F;
+    Check(snappedInsideChildren.CollapseToModule(
+              ModuleId::AllMusic, ModuleId::Rivan, ModuleCollapseSide::Right,
+              ModuleCollapseMode::Inside) &&
+              snappedInsideChildren.CollapseToModule(
+                  ModuleId::RivanLibrary, ModuleId::GraphicEqualizer,
+                  ModuleCollapseSide::Right, ModuleCollapseMode::Inside),
+          "snap re-anchor fixture creates inside-collapsed children on both roots");
+    sourceRoot = snappedInsideChildren.Find(ModuleId::Rivan);
+    sourceChild = snappedInsideChildren.Find(ModuleId::AllMusic);
+    targetRoot = snappedInsideChildren.Find(ModuleId::GraphicEqualizer);
+    targetChild = snappedInsideChildren.Find(ModuleId::RivanLibrary);
+    const auto oldSourceBounds = ModuleLayout::Bounds(*sourceRoot);
+    const auto oldSourceChild = *sourceChild;
+    const auto oldTargetBounds = ModuleLayout::Bounds(*targetRoot);
+    const auto oldTargetChild = *targetChild;
+    Check(snappedInsideChildren.SnapTo(ModuleId::Rivan, ModuleId::GraphicEqualizer,
+                                       ModuleDropZone::Left),
+          "snapping roots with inside-collapsed children succeeds");
+    sourceRoot = snappedInsideChildren.Find(ModuleId::Rivan);
+    sourceChild = snappedInsideChildren.Find(ModuleId::AllMusic);
+    targetRoot = snappedInsideChildren.Find(ModuleId::GraphicEqualizer);
+    targetChild = snappedInsideChildren.Find(ModuleId::RivanLibrary);
+    const auto newSourceBounds = ModuleLayout::Bounds(*sourceRoot);
+    const auto newTargetBounds = ModuleLayout::Bounds(*targetRoot);
+    const float sourceScaleX = (newSourceBounds.right - newSourceBounds.left) /
+        (oldSourceBounds.right - oldSourceBounds.left);
+    const float targetScaleX = (newTargetBounds.right - newTargetBounds.left) /
+        (oldTargetBounds.right - oldTargetBounds.left);
+    Check(sourceChild != nullptr && targetChild != nullptr &&
+              std::abs(sourceChild->expandedX -
+                       (newSourceBounds.left +
+                        (oldSourceChild.expandedX - oldSourceBounds.left) * sourceScaleX)) <
+                  0.001F &&
+              std::abs(sourceChild->handleX -
+                       (newSourceBounds.left +
+                        (oldSourceChild.handleX - oldSourceBounds.left) * sourceScaleX)) <
+                  0.001F &&
+              std::abs(targetChild->expandedX -
+                       (newTargetBounds.left +
+                        (oldTargetChild.expandedX - oldTargetBounds.left) * targetScaleX)) <
+                  0.001F &&
+              std::abs(targetChild->handleX -
+                       (newTargetBounds.left +
+                        (oldTargetChild.handleX - oldTargetBounds.left) * targetScaleX)) <
+                  0.001F,
+           "snapping re-anchors existing inside-collapsed child geometry");
+
+    auto collapsedSnapResize = rivan::ui::ModuleLayout::Defaults();
+    for (auto& item : collapsedSnapResize.items) item.visible = false;
+    auto* collapsedSnapRoot = collapsedSnapResize.Find(ModuleId::Rivan);
+    auto* collapsedSnapMember = collapsedSnapResize.Find(ModuleId::AllMusic);
+    collapsedSnapRoot->visible = true;
+    collapsedSnapRoot->x = 0.0F;
+    collapsedSnapRoot->y = 0.0F;
+    collapsedSnapRoot->width = 0.50F;
+    collapsedSnapRoot->height = 1.0F;
+    collapsedSnapMember->visible = true;
+    collapsedSnapMember->x = 0.50F;
+    collapsedSnapMember->y = 0.0F;
+    collapsedSnapMember->width = 0.50F;
+    collapsedSnapMember->height = 1.0F;
+    Check(collapsedSnapResize.SnapTo(ModuleId::AllMusic, ModuleId::Rivan,
+                                     ModuleDropZone::Right),
+          "collapsed snap-group resize fixture is ready");
+    const auto collapsedExpandedBounds =
+        ModuleLayout::Bounds(*collapsedSnapResize.Find(ModuleId::AllMusic));
+    collapsedSnapResize.SetCollapsedGeometry(
+        *collapsedSnapResize.Find(ModuleId::AllMusic),
+        {collapsedExpandedBounds.right - 0.06F, 0.40F, collapsedExpandedBounds.right, 0.60F},
+        collapsedExpandedBounds, ModuleCollapseMode::Outside, ModuleCollapseSide::Right,
+        ModuleId::AllMusic, true);
+    const float oldCollapsedSnapRootWidth =
+        collapsedSnapResize.Find(ModuleId::Rivan)->width;
+    Check(collapsedSnapResize.ResizeSnapGroup(
+              ModuleId::Rivan, 0.10F, 0.5F, true, false, false, false, false),
+          "a snapped group with a collapsed member accepts a shrink");
+    Check(collapsedSnapResize.Find(ModuleId::Rivan)->width < oldCollapsedSnapRootWidth &&
+              collapsedSnapResize.Find(ModuleId::AllMusic)->collapsed &&
+              collapsedSnapResize.Find(ModuleId::AllMusic)->expandedWidth >
+                  collapsedSnapResize.Find(ModuleId::AllMusic)->width,
+          "collapsed snap-group resize shrinks from expanded member dimensions");
 }
 
 void TestDuplicateModuleGeometryRepair() {
@@ -1058,6 +1436,47 @@ void TestWindowSnapping() {
               std::abs(resizeExpansionAfterShrink.Find(ModuleId::AllMusic)->width *
                        resizeWidthAfterShrink - 800.0F) < 0.01F,
           "overflow expansion grows canvas despite resize behavior");
+}
+
+void TestIniMetaFormat() {
+    using rivan::core::IniDocument;
+
+    // format=1 -> HasMetaFormat("1") true, HasMetaFormat("2") false
+    {
+        auto doc = IniDocument::Parse("[meta]\nformat=1");
+        Check(doc.has_value(), "INI parse with meta.format=1 succeeds");
+        if (doc) {
+            Check(doc->HasMetaFormat("1"), "HasMetaFormat(\"1\") true for format=1");
+            Check(!doc->HasMetaFormat("2"), "HasMetaFormat(\"2\") false for format=1");
+        }
+    }
+
+    // format=2 -> HasMetaFormat("1") false
+    {
+        auto doc = IniDocument::Parse("[meta]\nformat=2");
+        Check(doc.has_value(), "INI parse with meta.format=2 succeeds");
+        if (doc) {
+            Check(!doc->HasMetaFormat("1"), "HasMetaFormat(\"1\") false for format=2");
+        }
+    }
+
+    // No meta section -> HasMetaFormat("1") false
+    {
+        auto doc = IniDocument::Parse("[other]\nkey=value");
+        Check(doc.has_value(), "INI parse without meta section succeeds");
+        if (doc) {
+            Check(!doc->HasMetaFormat("1"), "HasMetaFormat(\"1\") false when meta section missing");
+        }
+    }
+
+    // meta section exists but no format key -> HasMetaFormat("1") false
+    {
+        auto doc = IniDocument::Parse("[meta]\ncount=5");
+        Check(doc.has_value(), "INI parse with meta section but no format key succeeds");
+        if (doc) {
+            Check(!doc->HasMetaFormat("1"), "HasMetaFormat(\"1\") false when meta.format missing");
+        }
+    }
 }
 
 void TestIniValueCodec() {
@@ -1574,7 +1993,54 @@ void TestCollapsibleSnapping() {
     Check(nestedSource != nullptr &&
               std::abs(nestedSource->handleX + nestedSource->handleWidth - 0.40F) < 0.001F &&
               nestedSource->expandedX + nestedSource->expandedWidth <= 0.40F + 0.001F,
-          "resizing a collapse target scales its nested handle and expanded bounds");
+           "resizing a collapse target scales its nested handle and expanded bounds");
+
+    auto insideTargetShrink = ModuleLayout::Defaults();
+    for (auto& item : insideTargetShrink.items) item.visible = false;
+    auto* shrinkTarget = insideTargetShrink.Find(ModuleId::Rivan);
+    auto* firstInsideChild = insideTargetShrink.Find(ModuleId::AllMusic);
+    auto* secondInsideChild = insideTargetShrink.Find(ModuleId::GraphicEqualizer);
+    shrinkTarget->visible = true;
+    shrinkTarget->x = 0.0F;
+    shrinkTarget->y = 0.0F;
+    shrinkTarget->width = 0.60F;
+    shrinkTarget->height = 0.80F;
+    firstInsideChild->visible = true;
+    firstInsideChild->x = 0.60F;
+    firstInsideChild->y = 0.0F;
+    firstInsideChild->width = 0.20F;
+    firstInsideChild->height = 0.80F;
+    secondInsideChild->visible = true;
+    secondInsideChild->x = 0.80F;
+    secondInsideChild->y = 0.0F;
+    secondInsideChild->width = 0.20F;
+    secondInsideChild->height = 0.80F;
+    Check(insideTargetShrink.CollapseToModule(
+              ModuleId::AllMusic, ModuleId::Rivan, ModuleCollapseSide::Right,
+              ModuleCollapseMode::Inside),
+          "inside target shrink fixture creates first collapsed child");
+    const auto oldFirstChild = *insideTargetShrink.Find(ModuleId::AllMusic);
+    const auto oldShrinkTarget = ModuleLayout::Bounds(
+        *insideTargetShrink.Find(ModuleId::Rivan));
+    Check(insideTargetShrink.CollapseToModule(
+              ModuleId::GraphicEqualizer, ModuleId::Rivan, ModuleCollapseSide::Right,
+              ModuleCollapseMode::Inside),
+          "inside target shrinks around an existing inside-collapsed child");
+    firstInsideChild = insideTargetShrink.Find(ModuleId::AllMusic);
+    const auto newShrinkTarget = ModuleLayout::Bounds(
+        *insideTargetShrink.Find(ModuleId::Rivan));
+    const float shrinkScaleX = (newShrinkTarget.right - newShrinkTarget.left) /
+        (oldShrinkTarget.right - oldShrinkTarget.left);
+    Check(firstInsideChild != nullptr &&
+              std::abs(firstInsideChild->expandedX -
+                       (newShrinkTarget.left +
+                        (oldFirstChild.expandedX - oldShrinkTarget.left) * shrinkScaleX)) <
+                  0.001F &&
+              std::abs(firstInsideChild->handleX -
+                       (newShrinkTarget.left +
+                        (oldFirstChild.handleX - oldShrinkTarget.left) * shrinkScaleX)) <
+                  0.001F,
+          "inside target shrink re-anchors existing child geometry");
 
     auto tabbedCollapse = ModuleLayout::Defaults();
     for (auto& item : tabbedCollapse.items) item.visible = false;
@@ -1763,7 +2229,9 @@ void TestOutsideCollapseTransactions() {
             return left == right || (std::isnan(left) && std::isnan(right));
         };
         if (first.tabCount != second.tabCount || first.activeTab != second.activeTab ||
-            first.tabOrder != second.tabOrder || first.snapGroup != second.snapGroup) {
+            first.tabOrder != second.tabOrder || first.snapGroup != second.snapGroup ||
+            first.tabGroupRoot != second.tabGroupRoot ||
+            first.groupActiveTab != second.groupActiveTab) {
             return false;
         }
         for (std::size_t index = 0; index < first.items.size(); ++index) {
@@ -1978,8 +2446,48 @@ void TestModuleLayoutSessionRoundTrip() {
     Check(reader.Session().moduleLayout.tabCount == 2,
            "module tabs survive session round-trip");
     Check(reader.Session().moduleLayout.Find(rivan::ui::ModuleId::Rivan)->dockState ==
-              rivan::ui::ModuleDockState::Snapped,
+               rivan::ui::ModuleDockState::Snapped,
           "module dock state survives session round-trip");
+
+    auto multiGroupSession = writer.Session();
+    multiGroupSession.moduleLayout = rivan::ui::ModuleLayout::Defaults();
+    multiGroupSession.moduleLayout.MakeTab(rivan::ui::ModuleId::Rivan,
+                                           rivan::ui::ModuleId::AllMusic);
+    multiGroupSession.moduleLayout.MakeTab(rivan::ui::ModuleId::GraphicEqualizer,
+                                           rivan::ui::ModuleId::RivanLibrary);
+    multiGroupSession.moduleLayout.SetGroupActiveTab(rivan::ui::ModuleId::Rivan, 1);
+    multiGroupSession.moduleLayout.SetGroupActiveTab(rivan::ui::ModuleId::GraphicEqualizer, 1);
+    Check(writer.SetSession(multiGroupSession, &error) && writer.SaveSession(&error) &&
+              reader.LoadSession(&error),
+          "multiple tab groups save and reload");
+    const auto& loadedMultiGroup = reader.Session().moduleLayout;
+    Check(loadedMultiGroup.tabCount == 4 &&
+              loadedMultiGroup.TabRoot(rivan::ui::ModuleId::Rivan) == rivan::ui::ModuleId::Rivan &&
+              loadedMultiGroup.TabRoot(rivan::ui::ModuleId::AllMusic) == rivan::ui::ModuleId::Rivan &&
+              loadedMultiGroup.TabRoot(rivan::ui::ModuleId::GraphicEqualizer) ==
+                  rivan::ui::ModuleId::GraphicEqualizer &&
+              loadedMultiGroup.TabRoot(rivan::ui::ModuleId::RivanLibrary) ==
+                  rivan::ui::ModuleId::GraphicEqualizer &&
+              loadedMultiGroup.GroupActiveMember(rivan::ui::ModuleId::Rivan) ==
+                  rivan::ui::ModuleId::AllMusic &&
+              loadedMultiGroup.GroupActiveMember(rivan::ui::ModuleId::GraphicEqualizer) ==
+                  rivan::ui::ModuleId::RivanLibrary,
+          "multiple tab groups retain roots and active tabs after persistence");
+
+    {
+        std::ofstream legacySession(root / L"legacy-session.ini", std::ios::binary);
+        legacySession << "[meta]\nformat=1\n[modules]\n"
+                      << "tab_count=2\nactive_tab=1\ntab_0=0\ntab_1=1\n";
+    }
+    rivan::config::SettingsManager legacyReader(root / L"settings.ini", root / L"legacy-session.ini");
+    Check(legacyReader.LoadSession(&error), "legacy global tab session loads");
+    const auto& legacyLayout = legacyReader.Session().moduleLayout;
+    Check(legacyLayout.tabCount == 2 &&
+              legacyLayout.TabRoot(rivan::ui::ModuleId::Rivan) == rivan::ui::ModuleId::Rivan &&
+              legacyLayout.TabRoot(rivan::ui::ModuleId::AllMusic) == rivan::ui::ModuleId::Rivan &&
+              legacyLayout.GroupActiveMember(rivan::ui::ModuleId::Rivan) ==
+                  rivan::ui::ModuleId::AllMusic,
+          "legacy tab_count, tab_i, and active_tab retain their single-group meaning");
 
     auto resizable = writer.Session();
     resizable.moduleLayout = rivan::ui::ModuleLayout::Defaults();
@@ -2077,6 +2585,60 @@ void TestModuleLayoutSessionRoundTrip() {
     std::filesystem::remove_all(root, ec);
 }
 
+void TestLegacySongCoverSettingMigration() {
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanSongRowMigrationTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    const auto settingsFile = root / L"settings.ini";
+    const auto sessionFile = root / L"session.ini";
+    {
+        std::ofstream settings(settingsFile, std::ios::binary);
+        settings << "[meta]\nformat=1\n[library]\nmusic_root="
+                 << (root / L"Music").string()
+                 << "\n[appearance]\nskin=dark-purple\ntrack_covers_enabled=false\n";
+    }
+    std::filesystem::create_directories(root / L"Music", ec);
+
+    rivan::config::SettingsManager manager(settingsFile, sessionFile);
+    std::string error;
+    Check(manager.LoadSettings(&error), "legacy song cover preference loads");
+    Check(!manager.Settings().songRowLayout.Field(rivan::ui::SongRowField::Cover).visible,
+           "legacy disabled song covers migrate to a hidden cover field");
+    Check(manager.SaveSettings(&error), "migrated song row layout saves");
+    std::ifstream saved(settingsFile, std::ios::binary);
+    const std::string persisted((std::istreambuf_iterator<char>(saved)),
+                                std::istreambuf_iterator<char>());
+    Check(persisted.find("[song_row_layout]") != std::string::npos &&
+              persisted.find("track_covers_enabled") == std::string::npos,
+           "song row layout replaces the obsolete song cover setting on save");
+    std::filesystem::remove_all(root, ec);
+}
+
+void TestWindowSessionRoundTrip() {
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanWindowSessionTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+
+    rivan::config::SettingsManager writer(root / L"settings.ini", root / L"session.ini");
+    auto session = writer.Session();
+    session.window = {250, 300, 800, 600};
+    std::string error;
+    Check(writer.SetSession(session, &error) && writer.SaveSession(&error),
+          "main window minimum size saves to the session");
+
+    rivan::config::SettingsManager reader(root / L"settings.ini", root / L"session.ini");
+    Check(reader.LoadSession(&error), "main window minimum size session reloads");
+    const auto& window = reader.Session().window;
+    Check(window.x == 250 && window.y == 300 && window.width == 800 && window.height == 600,
+          "main window size and position survive a session round-trip");
+
+    std::filesystem::remove_all(root, ec);
+}
+
 void TestModuleResizeCollisionBehavior() {
     using rivan::ui::ModuleId;
     using rivan::ui::ModuleLayout;
@@ -2117,7 +2679,30 @@ void TestModuleResizeCollisionBehavior() {
     Check(overlap.ResizeModule(ModuleId::Rivan, 0.90F, 0.25F,
                                true, false, false, false, false) &&
               overlap.HasConflictingGeometry(),
-          "overlap resize toggle preserves legacy overlapping behavior");
+           "overlap resize toggle preserves legacy overlapping behavior");
+
+    auto unsafeCandidate = ModuleLayout::Defaults();
+    for (auto& item : unsafeCandidate.items) item.visible = false;
+    const auto configure = [&unsafeCandidate](ModuleId id, float x, float y,
+                                               float width, float height) {
+        auto* item = unsafeCandidate.Find(id);
+        item->visible = true;
+        item->x = x;
+        item->y = y;
+        item->width = width;
+        item->height = height;
+        ModuleLayout::SyncExpandedGeometry(*item);
+    };
+    configure(ModuleId::Rivan, 0.0F, 0.80F, 0.10F, 0.10F);
+    configure(ModuleId::AllMusic, 0.10F, 0.30F, 0.30F, 0.30F);
+    configure(ModuleId::GraphicEqualizer, 0.60F, 0.30F, 0.30F, 0.30F);
+    Check(unsafeCandidate.SquashForExpansion(
+              ModuleId::Rivan, {0.20F, 0.40F, 0.60F, 0.80F}) &&
+              !unsafeCandidate.HasConflictingGeometry() &&
+              unsafeCandidate.Find(ModuleId::AllMusic)->x < 0.60F &&
+              unsafeCandidate.Find(ModuleId::Rivan)->x == 0.0F &&
+              unsafeCandidate.Find(ModuleId::Rivan)->y == 0.80F,
+          "squash rejects an unsafe candidate and preserves valid layout state");
 }
 
 void TestLyricsParsing() {
@@ -2151,6 +2736,34 @@ void TestLyricsParsing() {
           "LRCLIB parser ignores field-like lyric text");
 }
 
+void TestLyricsPublicationRevisions() {
+    std::mutex mutex;
+    std::condition_variable completion;
+    bool completed = false;
+    rivan::lyrics::LyricsService service;
+    const auto initialRevision = service.Revision();
+    service.SetNotify([&] {
+        if (!service.Snapshot().loading) {
+            std::scoped_lock lock(mutex);
+            completed = true;
+            completion.notify_one();
+        }
+    });
+
+    service.Request(1, L"", L"", L"", 0.0);
+    {
+        std::unique_lock lock(mutex);
+        Check(completion.wait_for(lock, std::chrono::seconds{2}, [&] { return completed; }),
+              "empty lyrics request publishes a completion snapshot");
+    }
+
+    const auto snapshot = service.Snapshot();
+    Check(!snapshot.loading, "completed lyrics snapshot is not loading");
+    Check(service.Revision() == initialRevision + 2 &&
+              snapshot.revision == initialRevision + 2,
+          "lyrics loading and completion snapshots receive distinct revisions");
+}
+
 void TestLyricsLayoutMigration() {
     const auto root = std::filesystem::temp_directory_path() /
                       (L"RivanLyricsMigrationTests-" + std::to_wstring(GetCurrentProcessId()));
@@ -2174,6 +2787,306 @@ void TestLyricsLayoutMigration() {
     std::filesystem::remove_all(root, error);
 }
 
+// ---------------------------------------------------------------------------
+// Pre-release regression coverage: nested-root dedup and the AddExternalTrack
+// duplicate guard. (Another agent appends layout tests below this banner.)
+// ---------------------------------------------------------------------------
+
+void TestNestedRootDedup() {
+    TemporaryLibrary files;
+    rivan::library::LibraryScanner scanner;
+    // [child, parent] configuration: the acceptance loop keeps both roots, so a
+    // later pass must drop the broader parent and scan the child only once.
+    const std::vector<std::filesystem::path> roots{files.Root() / L"Rock",
+                                                   files.Root()};
+    const auto scan = scanner.Scan(std::span<const std::filesystem::path>(roots));
+    Check(scan.root.filename() == L"Rock",
+          "child-first overlapping roots keep the first (deepest) root as catalog root");
+    Check(scan.tracks.size() == 3,
+          "child-first overlapping roots scan the deeper root only");
+    std::unordered_set<rivan::library::TrackId> seenTracks;
+    bool duplicatedTrack = false;
+    for (const auto& track : scan.tracks) {
+        if (!seenTracks.insert(track.id).second) duplicatedTrack = true;
+    }
+    Check(!duplicatedTrack,
+          "child-first overlapping roots emit no duplicate track ids");
+    Check(scan.tracks.size() > 0 && scan.tracks.front().filePath.filename() == L"four.opus",
+          "scanned tracks stay ordered by folded file path");
+    Check(scan.playlists.front().kind == rivan::playlist::PlaylistKind::AllMusic,
+          "All Music remains the leading playlist");
+    std::unordered_set<rivan::library::TrackId> seenAllMusic;
+    bool duplicatedAllMusic = false;
+    for (const auto id : scan.playlists.front().trackIds) {
+        if (!seenAllMusic.insert(id).second) duplicatedAllMusic = true;
+    }
+    Check(!duplicatedAllMusic,
+          "overlapping roots add each id to All Music exactly once");
+    const auto rock = std::find_if(scan.playlists.begin(), scan.playlists.end(),
+                                   [](const auto& playlist) {
+                                       return playlist.kind ==
+                                                  rivan::playlist::PlaylistKind::Directory &&
+                                              playlist.directory.filename() == L"Rock";
+                                   });
+    Check(rock != scan.playlists.end() && rock->trackIds.size() == 3,
+          "the child folder playlist keeps its direct tracks once");
+    if (rock != scan.playlists.end()) {
+        std::unordered_set<rivan::library::TrackId> seenRock;
+        bool duplicatedRock = false;
+        for (const auto id : rock->trackIds) {
+            if (!seenRock.insert(id).second) duplicatedRock = true;
+        }
+        Check(!duplicatedRock,
+              "overlapping roots do not duplicate ids in the child playlist");
+    }
+}
+
+void TestSiblingRootRetention() {
+    TemporaryLibrary files;
+    rivan::library::LibraryScanner scanner;
+    const std::vector<std::filesystem::path> roots{files.Root() / L"Rock",
+                                                   files.Root() / L"Game"};
+    const auto scan = scanner.Scan(std::span<const std::filesystem::path>(roots));
+    Check(scan.tracks.size() == 4,
+          "same-drive sibling roots are both scanned instead of being treated as descendants");
+    const auto hasDirectory = [&scan](std::wstring_view name) {
+        return std::any_of(scan.playlists.begin(), scan.playlists.end(), [name](const auto& playlist) {
+            return playlist.kind == rivan::playlist::PlaylistKind::Directory &&
+                   playlist.directory.filename() == name;
+        });
+    };
+    Check(hasDirectory(L"Rock") && hasDirectory(L"Game"),
+          "same-drive sibling roots both produce directory playlists");
+}
+
+void TestAddExternalTrackDuplicateGuard() {
+    rivan::playlist::Playlist folder;
+    folder.id = 42;
+    folder.name = L"Folder";
+    folder.kind = rivan::playlist::PlaylistKind::Directory;
+    // A Directory playlist can retain an id from a previous rescan even when the
+    // source file is gone, leaving that id outside the scan catalog.
+    const auto orphan = rivan::library::Track::FromFile(
+        std::filesystem::path(L"C:/music/a.mp3"));
+    folder.trackIds.push_back(orphan.id);
+    rivan::playlist::PlaylistManager manager;
+    manager.ApplyScan(MakeScan({}, {folder}));
+    Check(!manager.AddExternalTrack(folder.id, orphan),
+          "AddExternalTrack rejects a duplicate Directory id");
+    Check(manager.FindTrack(orphan.id) == nullptr,
+          "rejected duplicate import leaves no stale external track");
+    const auto fresh = rivan::library::Track::FromFile(
+        std::filesystem::path(L"C:/music/b.mp3"));
+    Check(manager.AddExternalTrack(folder.id, fresh),
+          "AddExternalTrack still accepts a fresh Directory id");
+    Check(manager.FindTrack(fresh.id) != nullptr,
+          "accepted import resolves through the manager");
+}
+
+// ---------------------------------------------------------------------------
+// Pre-release layout regression coverage: collapse-shift isolation during
+// resize expansion and proportional tab-strip widths in narrow panels.
+// ---------------------------------------------------------------------------
+
+void TestCollapseShiftIsolation() {
+    using rivan::ui::ModuleCollapseMode;
+    using rivan::ui::ModuleCollapseSide;
+    using rivan::ui::ModuleExpansionBehavior;
+    using rivan::ui::ModuleId;
+    using rivan::ui::ModuleLayout;
+
+    // The source collapses to the left window edge; one peer is collapsed with its
+    // handle inside the source's expanded bounds while a second peer collapses to
+    // the same edge well below the source. The blocker covers the source's expanded
+    // rectangle only afterwards, forcing the resize path.
+    const auto prepare = [] {
+        auto layout = ModuleLayout::Defaults();
+        for (auto& item : layout.items) item.visible = false;
+        auto* source = layout.Find(ModuleId::Rivan);
+        auto* blocker = layout.Find(ModuleId::AllMusic);
+        source->visible = true;
+        source->x = 0.0F;
+        source->y = 0.0F;
+        source->width = 0.30F;
+        source->height = 0.40F;
+        blocker->visible = true;
+        blocker->x = 0.30F;
+        blocker->y = 0.0F;
+        blocker->width = 0.30F;
+        blocker->height = 1.0F;
+        Check(layout.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Left, 0.20F),
+              "collapse-shift fixture collapses the expansion source to the left edge");
+        auto* overlapping = layout.Find(ModuleId::GraphicEqualizer);
+        overlapping->visible = true;
+        // Deterministic window-collapsed geometry covering the source's rectangle;
+        // SetCollapsedGeometry mirrors CollapseToWindow's handle attachment.
+        layout.SetCollapsedGeometry(
+            *overlapping, {0.0F, 0.05F, 0.06F, 0.15F}, {0.0F, 0.0F, 0.30F, 0.40F},
+            ModuleCollapseMode::Outside, ModuleCollapseSide::Left, ModuleId::GraphicEqualizer,
+            true);
+        auto* unrelated = layout.Find(ModuleId::RivanLibrary);
+        unrelated->visible = true;
+        layout.SetCollapsedGeometry(
+            *unrelated, {0.0F, 0.70F, 0.06F, 0.80F}, {0.0F, 0.60F, 0.30F, 0.90F},
+            ModuleCollapseMode::Outside, ModuleCollapseSide::Left, ModuleId::RivanLibrary,
+            true);
+        blocker = layout.Find(ModuleId::AllMusic);
+        blocker->x = 0.20F;
+        blocker->width = 0.50F;
+        return layout;
+    };
+
+    auto layout = prepare();
+    const auto* source = layout.Find(ModuleId::Rivan);
+    const auto* overlapping = layout.Find(ModuleId::GraphicEqualizer);
+    const auto* unrelated = layout.Find(ModuleId::RivanLibrary);
+    const rivan::ui::ModuleNormalizedRect sourceRect{
+        source->expandedX, source->expandedY,
+        source->expandedX + source->expandedWidth,
+        source->expandedY + source->expandedHeight};
+    Check(ModuleLayout::Intersects(ModuleLayout::Bounds(*overlapping), sourceRect) &&
+              !ModuleLayout::Intersects(ModuleLayout::Bounds(*unrelated), sourceRect),
+          "collapse-shift fixture places only one collapsed peer inside the source");
+
+    const auto overlappingBefore = *overlapping;
+    const auto unrelatedBefore = *unrelated;
+    const float sourceRightPixels =
+        (source->expandedX + source->expandedWidth) * 1000.0F;
+    const float blockerLeftPixels = layout.Find(ModuleId::AllMusic)->x * 1000.0F;
+    // Matches ResizeForExpansion: overlapping obstacle right edge plus the 8px gap.
+    const float expectedShift = sourceRightPixels - blockerLeftPixels + 8.0F;
+    Check(expectedShift > 0.0F, "collapse-shift fixture forces canvas growth");
+
+    float resizedWidth = 0.0F;
+    float resizedHeight = 0.0F;
+    Check(layout.ToggleCollapsedModule(ModuleId::Rivan, ModuleExpansionBehavior::Resize,
+                                       1000.0F, 800.0F, &resizedWidth, &resizedHeight) &&
+              resizedWidth > 1000.0F,
+          "resize expansion runs the collapse-shift pass");
+    overlapping = layout.Find(ModuleId::GraphicEqualizer);
+    unrelated = layout.Find(ModuleId::RivanLibrary);
+    source = layout.Find(ModuleId::Rivan);
+    Check(std::abs(unrelated->handleX * resizedWidth -
+                   unrelatedBefore.handleX * 1000.0F) < 0.01F &&
+              std::abs(unrelated->expandedX * resizedWidth -
+                       unrelatedBefore.expandedX * 1000.0F) < 0.01F &&
+              unrelated->handleX < 0.001F,
+          "unrelated collapsed peer keeps its handle attached to the window edge");
+    Check(std::abs(overlapping->handleX * resizedWidth -
+                   (overlappingBefore.handleX * 1000.0F + expectedShift)) < 0.01F &&
+              std::abs(overlapping->expandedX * resizedWidth -
+                       (overlappingBefore.expandedX * 1000.0F + expectedShift)) < 0.01F,
+          "collapsed peer overlapping the expanding source shifts with the growth");
+    Check(std::abs(overlapping->x - overlapping->handleX) < 0.0001F &&
+              std::abs(overlapping->y - overlapping->handleY) < 0.0001F &&
+              std::abs(overlapping->width - overlapping->handleWidth) < 0.0001F &&
+              std::abs(overlapping->height - overlapping->handleHeight) < 0.0001F &&
+              std::abs(unrelated->x - unrelated->handleX) < 0.0001F &&
+              std::abs(unrelated->y - unrelated->handleY) < 0.0001F &&
+              std::abs(unrelated->width - unrelated->handleWidth) < 0.0001F &&
+              std::abs(unrelated->height - unrelated->handleHeight) < 0.0001F,
+          "horizontal collapse resize keeps item rectangles equal to handle rectangles");
+    Check(!layout.HasConflictingGeometry() && source != nullptr && !source->collapsed,
+          "collapse-shift resize opens the source without new conflicts");
+
+    auto vertical = ModuleLayout::Defaults();
+    for (auto& item : vertical.items) item.visible = false;
+    auto* verticalSource = vertical.Find(ModuleId::Rivan);
+    auto* verticalBlocker = vertical.Find(ModuleId::AllMusic);
+    verticalSource->visible = true;
+    verticalSource->x = 0.0F;
+    verticalSource->y = 0.0F;
+    verticalSource->width = 0.40F;
+    verticalSource->height = 0.30F;
+    verticalBlocker->visible = true;
+    verticalBlocker->x = 0.0F;
+    verticalBlocker->y = 0.30F;
+    verticalBlocker->width = 1.0F;
+    verticalBlocker->height = 0.50F;
+    Check(vertical.CollapseToWindow(ModuleId::Rivan, ModuleCollapseSide::Top, 0.20F),
+          "vertical collapse-shift fixture collapses the source to the top edge");
+    auto* verticalOverlapping = vertical.Find(ModuleId::GraphicEqualizer);
+    verticalOverlapping->visible = true;
+    vertical.SetCollapsedGeometry(
+        *verticalOverlapping, {0.05F, 0.0F, 0.15F, 0.06F}, {0.0F, 0.0F, 0.40F, 0.30F},
+        ModuleCollapseMode::Outside, ModuleCollapseSide::Top,
+        ModuleId::GraphicEqualizer, true);
+    auto* verticalUnrelated = vertical.Find(ModuleId::RivanLibrary);
+    verticalUnrelated->visible = true;
+    vertical.SetCollapsedGeometry(
+        *verticalUnrelated, {0.70F, 0.70F, 0.80F, 0.76F}, {0.60F, 0.60F, 0.90F, 0.90F},
+        ModuleCollapseMode::Outside, ModuleCollapseSide::Top,
+        ModuleId::RivanLibrary, true);
+    verticalBlocker = vertical.Find(ModuleId::AllMusic);
+    verticalBlocker->y = 0.20F;
+    verticalBlocker->height = 0.50F;
+    float verticalWidth = 0.0F;
+    float verticalHeight = 0.0F;
+    Check(vertical.ToggleCollapsedModule(ModuleId::Rivan, ModuleExpansionBehavior::Resize,
+                                         1000.0F, 800.0F, &verticalWidth, &verticalHeight) &&
+              verticalHeight > 800.0F,
+          "vertical resize expansion runs the collapse-shift pass");
+    verticalOverlapping = vertical.Find(ModuleId::GraphicEqualizer);
+    verticalUnrelated = vertical.Find(ModuleId::RivanLibrary);
+    Check(std::abs(verticalOverlapping->x - verticalOverlapping->handleX) < 0.0001F &&
+              std::abs(verticalOverlapping->y - verticalOverlapping->handleY) < 0.0001F &&
+              std::abs(verticalOverlapping->width - verticalOverlapping->handleWidth) < 0.0001F &&
+              std::abs(verticalOverlapping->height - verticalOverlapping->handleHeight) < 0.0001F &&
+              std::abs(verticalUnrelated->x - verticalUnrelated->handleX) < 0.0001F &&
+              std::abs(verticalUnrelated->y - verticalUnrelated->handleY) < 0.0001F &&
+              std::abs(verticalUnrelated->width - verticalUnrelated->handleWidth) < 0.0001F &&
+              std::abs(verticalUnrelated->height - verticalUnrelated->handleHeight) < 0.0001F,
+          "vertical collapse resize keeps item rectangles equal to handle rectangles");
+}
+
+void TestTabStripProportionalWidths() {
+    using rivan::ui::ModuleId;
+    using rivan::ui::ModuleLayout;
+
+    auto layout = ModuleLayout::Defaults();
+    layout.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
+    layout.TabWith(ModuleId::GraphicEqualizer, ModuleId::Rivan);
+    layout.TabWith(ModuleId::RivanLibrary, ModuleId::Rivan);
+    layout.TabWith(ModuleId::VideoPreview, ModuleId::Rivan);
+    const ModuleId root = ModuleId::Rivan;
+    Check(layout.tabCount == 5 && layout.GroupTabCount(root) == 5,
+          "narrow-panel tab fixture groups five modules");
+
+    // Narrow panel: five tabs at the old 44px floor would need 220px and overflow.
+    // The mirror below reproduces the renderer's proportional tab-strip math.
+    constexpr float boundsLeft = 10.0F;
+    constexpr float boundsRight = 110.0F;
+    const std::size_t count = layout.GroupTabCount(root);
+    const auto boundary = [boundsLeft, boundsRight, count](std::size_t index) {
+        return boundsLeft + (boundsRight - boundsLeft) *
+            static_cast<float>(index) / static_cast<float>(count);
+    };
+    float lastRight = boundsLeft;
+    for (std::size_t index = 0; index < count; ++index) {
+        const float left = boundary(index);
+        const float right = std::min(boundsRight, boundary(index + 1));
+        lastRight = right;
+        Check(left < right, "tab strip keeps every tab rectangle ordered");
+        Check(left >= boundsLeft - 0.001F && right <= boundsRight + 0.001F,
+              "tab strip keeps every tab rectangle inside the panel");
+    }
+    Check(std::abs(lastRight - boundsRight) < 0.001F,
+          "the last tab ends exactly at the panel right edge");
+
+    // The renderer maps a pixel inside a tab to its group member, so the last tab
+    // must remain reachable through the layout's tab-index scheme.
+    const float tabWidth = (boundsRight - boundsLeft) / static_cast<float>(count);
+    const auto hitIndex = [boundsLeft, tabWidth](float x) {
+        return static_cast<std::size_t>((x - boundsLeft) / tabWidth);
+    };
+    const std::size_t lastIndex = count - 1;
+    const float lastCenter = boundary(lastIndex) + tabWidth * 0.5F;
+    Check(hitIndex(lastCenter) == lastIndex &&
+              layout.GroupMember(root, lastIndex) == ModuleId::VideoPreview &&
+              layout.TabIndex(ModuleId::VideoPreview) == lastIndex,
+          "the last tab stays reachable and maps to its group member");
+}
+
 } // namespace
 
 int main() {
@@ -2184,8 +3097,13 @@ int main() {
     TestAnalysisBufferReuse();
     TestSkinCustomizationRoundTrip();
     TestSkinRejectsUnsafeAssets();
-    TestFilePreviewSettingRoundTrip();
+    TestSongRowLayoutSettingRoundTrip();
+    TestSongRowLayoutDefaults();
+    TestTrackCoverCacheDimensions();
+    TestLegacySongCoverSettingMigration();
+    TestWindowSessionRoundTrip();
     TestModuleResizeCollisionBehavior();
+    TestIniMetaFormat();
     TestIniValueCodec();
     TestUiModuleRegistry();
     TestDuplicateModuleGeometryRepair();
@@ -2195,7 +3113,13 @@ int main() {
     TestOutsideCollapseTransactions();
     TestModuleLayoutSessionRoundTrip();
     TestLyricsParsing();
+    TestLyricsPublicationRevisions();
     TestLyricsLayoutMigration();
+    TestNestedRootDedup();
+    TestSiblingRootRetention();
+    TestAddExternalTrackDuplicateGuard();
+    TestCollapseShiftIsolation();
+    TestTabStripProportionalWidths();
     if (failures == 0) std::cout << "Rivan core tests passed\n";
     return failures == 0 ? 0 : 1;
 }

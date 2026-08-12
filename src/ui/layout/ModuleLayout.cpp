@@ -412,7 +412,10 @@ ModuleLayout ModuleLayout::Defaults() noexcept {
             ModuleDockState::Floating}}},
         {}, 0, 0,
         {ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
-          ModuleId::RivanLibrary, ModuleId::VideoPreview, ModuleId::Lyrics}};
+          ModuleId::RivanLibrary, ModuleId::VideoPreview, ModuleId::Lyrics},
+        {ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
+         ModuleId::RivanLibrary, ModuleId::VideoPreview, ModuleId::Lyrics},
+        {}};
 }
 
 ModuleLayoutItem* ModuleLayout::Find(ModuleId id) noexcept {
@@ -430,12 +433,7 @@ const ModuleLayoutItem* ModuleLayout::Find(ModuleId id) const noexcept {
 }
 
 bool ModuleLayout::IsTabbed(ModuleId id) const noexcept {
-    const auto count = TabCount();
-    if (count < 2) return false;
-    for (std::size_t index = 0; index < count; ++index) {
-        if (Find(tabOrder[index]) != nullptr && tabOrder[index] == id) return true;
-    }
-    return false;
+    return GroupTabCount(id) >= 2;
 }
 
 bool ModuleLayout::IsSnapped(ModuleId id) const noexcept {
@@ -666,6 +664,39 @@ void ModuleLayout::ScaleCollapsedInsideModules(ModuleId targetRoot,
             candidate.collapseMode != ModuleCollapseMode::Inside ||
             candidate.collapseTargetIsWindow ||
             SnapRoot(TabRoot(candidate.collapseTarget)) != targetRoot) {
+            continue;
+        }
+        const auto expanded = ScaleBounds(
+            {candidate.expandedX, candidate.expandedY,
+             candidate.expandedX + candidate.expandedWidth,
+             candidate.expandedY + candidate.expandedHeight}, oldBounds, newBounds);
+        const auto handle = ScaleBounds(
+            {candidate.handleX, candidate.handleY,
+             candidate.handleX + candidate.handleWidth,
+             candidate.handleY + candidate.handleHeight}, oldBounds, newBounds);
+        candidate.expandedX = expanded.left;
+        candidate.expandedY = expanded.top;
+        candidate.expandedWidth = expanded.right - expanded.left;
+        candidate.expandedHeight = expanded.bottom - expanded.top;
+        candidate.handleX = handle.left;
+        candidate.handleY = handle.top;
+        candidate.handleWidth = handle.right - handle.left;
+        candidate.handleHeight = handle.bottom - handle.top;
+        candidate.x = handle.left;
+        candidate.y = handle.top;
+        candidate.width = candidate.handleWidth;
+        candidate.height = candidate.handleHeight;
+    }
+}
+
+void ModuleLayout::ScaleCollapsedInsideTabGroup(
+    ModuleId targetRoot, const ModuleNormalizedRect& oldBounds,
+    const ModuleNormalizedRect& newBounds) noexcept {
+    for (auto& candidate : items) {
+        if (!candidate.visible || !candidate.collapsed ||
+            candidate.collapseMode != ModuleCollapseMode::Inside ||
+            candidate.collapseTargetIsWindow ||
+            TabRoot(candidate.collapseTarget) != targetRoot) {
             continue;
         }
         const auto expanded = ScaleBounds(
@@ -1049,6 +1080,62 @@ void ModuleLayout::DetachSnapModule(ModuleId id) noexcept {
     }
 }
 
+void ModuleLayout::DetachSnapMembers(const std::array<ModuleId, 6>& members,
+                                     std::size_t count) noexcept {
+    count = std::min(count, members.size());
+    if (count == 0) return;
+
+    std::array<ModuleId, 6> oldRoots{};
+    for (std::size_t index = 0; index < items.size(); ++index) {
+        oldRoots[index] = SnapRoot(items[index].id);
+    }
+
+    const auto isDetached = [&members, count](ModuleId id) noexcept {
+        return ModuleLayout::Contains(members, count, id);
+    };
+    std::array<ModuleId, 6> affectedRoots{};
+    std::size_t affectedCount = 0;
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto* item = Find(members[index]);
+        if (!item) continue;
+        const auto itemIndex = static_cast<std::size_t>(item - items.data());
+        const ModuleId root = oldRoots[itemIndex];
+        if (!Contains(affectedRoots, affectedCount, root) &&
+            affectedCount < affectedRoots.size()) {
+            affectedRoots[affectedCount++] = root;
+        }
+    }
+
+    for (std::size_t index = 0; index < count; ++index) {
+        if (auto* item = Find(members[index])) {
+            const auto itemIndex = static_cast<std::size_t>(item - items.data());
+            snapGroup[itemIndex] = item->id;
+            item->dockState = ModuleDockState::Floating;
+        }
+    }
+
+    for (std::size_t rootIndex = 0; rootIndex < affectedCount; ++rootIndex) {
+        const ModuleId oldRoot = affectedRoots[rootIndex];
+        std::array<std::size_t, 6> remaining{};
+        std::size_t remainingCount = 0;
+        for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex) {
+            if (items[itemIndex].visible && !isDetached(items[itemIndex].id) &&
+                oldRoots[itemIndex] == oldRoot && remainingCount < remaining.size()) {
+                remaining[remainingCount++] = itemIndex;
+            }
+        }
+        const ModuleId newRoot = remainingCount == 0
+            ? oldRoot
+            : (isDetached(oldRoot) ? items[remaining[0]].id : oldRoot);
+        for (std::size_t index = 0; index < remainingCount; ++index) {
+            auto& item = items[remaining[index]];
+            snapGroup[remaining[index]] = newRoot;
+            item.dockState = remainingCount > 1
+                ? ModuleDockState::Snapped : ModuleDockState::Floating;
+        }
+    }
+}
+
 bool ModuleLayout::ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
                                    bool resizeRight, bool resizeBottom,
                                    bool resizeLeft, bool resizeTop,
@@ -1071,8 +1158,14 @@ bool ModuleLayout::ResizeSnapGroup(ModuleId id, float pointerX, float pointerY,
         groupTop = std::min(groupTop, item.y);
         groupRight = std::max(groupRight, item.x + item.width);
         groupBottom = std::max(groupBottom, item.y + item.height);
-        minimumScaleX = std::max(minimumScaleX, 0.10F / item.width);
-        minimumScaleY = std::max(minimumScaleY, 0.10F / item.height);
+        const float basisWidth = item.collapsed ? item.expandedWidth : item.width;
+        const float basisHeight = item.collapsed ? item.expandedHeight : item.height;
+        if (std::isfinite(basisWidth) && basisWidth > 0.0F) {
+            minimumScaleX = std::max(minimumScaleX, 0.10F / basisWidth);
+        }
+        if (std::isfinite(basisHeight) && basisHeight > 0.0F) {
+            minimumScaleY = std::max(minimumScaleY, 0.10F / basisHeight);
+        }
     }
     for (const auto& item : items) {
         if (!item.visible || !item.collapsed ||

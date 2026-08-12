@@ -11,6 +11,13 @@
 
 namespace rivan {
 
+void App::OnMainWindowClosing() {
+    // WM_CLOSE is the real exit path; persist here (window rect still live) and let
+    // ~App skip its duplicate PersistState for the same degenerate write.
+    persistedOnClose_ = true;
+    PersistState();
+}
+
 void App::PersistState() {
     auto applicationSettings = settings_.Settings();
     const auto status = audio_.Status();

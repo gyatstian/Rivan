@@ -19,6 +19,9 @@ bool PluginHost::IsCompatible(const PluginDescriptor& descriptor) noexcept {
 
 bool PluginHost::Register(std::unique_ptr<IPlugin> plugin) {
     if (!plugin || !IsCompatible(plugin->Descriptor()) || Find(plugin->Descriptor().id)) return false;
+    // Reserve first so push_back cannot throw after Start(): a started plugin
+    // must always be owned by plugins_.
+    plugins_.reserve(plugins_.size() + 1);
     if (!plugin->Start()) return false;
     plugins_.push_back(std::move(plugin));
     return true;

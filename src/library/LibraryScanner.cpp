@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cwctype>
 #include <fstream>
 #include <iterator>
@@ -30,7 +31,8 @@
 namespace rivan::library {
 namespace {
 
-std::wstring FoldCase(const std::filesystem::path& path) {
+// Lowercase sorting key, computed once per element instead of inside comparators.
+std::wstring LowerKey(const std::filesystem::path& path) {
     auto value = path.generic_wstring();
 #ifdef _WIN32
     for (auto& character : value) {
@@ -56,6 +58,15 @@ std::filesystem::path NormalizeRoot(const std::filesystem::path& root) {
         normalized = std::filesystem::absolute(root, ec);
     }
     return (ec ? root : normalized).lexically_normal();
+}
+
+bool IsGenuineDescendant(const std::filesystem::path& candidate,
+                         const std::filesystem::path& ancestor) {
+    std::error_code ec;
+    const auto relative = std::filesystem::relative(candidate, ancestor, ec);
+    if (ec || relative.empty() || relative == L".") return false;
+    const auto first = relative.begin();
+    return first != relative.end() && *first != L"..";
 }
 
 std::wstring LowerExtension(const std::filesystem::path& path) {
@@ -183,6 +194,106 @@ std::wstring DirectoryName(const std::filesystem::path& root,
     return name.empty() ? directory.wstring() : std::move(name);
 }
 
+// Duration cache persisted across runs so unchanged files skip the slow Media
+// Foundation container open on subsequent startup scans. Keyed by path; entries
+// are invalidated by changed modification time or size. Access is serialized by
+// cacheMutex; only the single scan thread reads/writes at run time.
+constexpr std::uint32_t DurationCacheMagic = 0x44524156u;  // "VARD" bytes, arbitrary
+constexpr std::uint32_t DurationCacheVersion = 1u;
+constexpr std::size_t DurationCacheMaxEntries = 100000;
+
+struct DurationCacheEntry {
+    std::filesystem::file_time_type modified{};
+    std::uintmax_t size{};
+    double seconds{};
+};
+
+struct DurationProbeResult {
+    double seconds{};
+    std::uintmax_t fileSize{};
+};
+
+std::mutex gDurationCacheMutex;
+std::map<std::filesystem::path, DurationCacheEntry> gDurationCache;
+bool gDurationCacheLoaded = false;
+std::filesystem::path gDurationCachePath;
+
+// Binary format: magic u32, version u32, count u64, then per entry:
+//   pathCharCount u32 (chars INCLUDING null), wchar_t path[pathCharCount],
+//   modifiedRep i64, size u64, seconds f64.
+// Corrupt/partial/older files are ignored and simply yield an empty cache; the
+// next completed scan rewrites the file.
+void LoadDurationCacheFromDisk() {
+    std::scoped_lock lock(gDurationCacheMutex);
+    if (gDurationCacheLoaded || gDurationCachePath.empty()) return;
+    gDurationCacheLoaded = true;
+    std::ifstream in(gDurationCachePath, std::ios::binary);
+    if (!in) return;
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::uint64_t count = 0;
+    in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    in.read(reinterpret_cast<char*>(&version), sizeof(version));
+    in.read(reinterpret_cast<char*>(&count), sizeof(count));
+    if (!in || magic != DurationCacheMagic || version != DurationCacheVersion) return;
+    if (count > DurationCacheMaxEntries) return;  // guard against garbage files
+    for (std::uint64_t i = 0; i < count; ++i) {
+        std::uint32_t charCount = 0;
+        in.read(reinterpret_cast<char*>(&charCount), sizeof(charCount));
+        if (!in || charCount == 0 || charCount > 65536) return;  // guard against corruption
+        std::wstring pathText(charCount, L'\0');
+        in.read(reinterpret_cast<char*>(pathText.data()), static_cast<std::streamsize>(charCount * sizeof(wchar_t)));
+        if (!in) return;
+        pathText.pop_back();  // remove the null terminator
+        std::int64_t modifiedRep = 0;
+        std::uint64_t size = 0;
+        double seconds = 0.0;
+        in.read(reinterpret_cast<char*>(&modifiedRep), sizeof(modifiedRep));
+        in.read(reinterpret_cast<char*>(&size), sizeof(size));
+        in.read(reinterpret_cast<char*>(&seconds), sizeof(seconds));
+        if (!in) return;
+        gDurationCache.insert_or_assign(
+            std::filesystem::path(std::move(pathText)),
+            DurationCacheEntry{std::filesystem::file_time_type(
+                                   std::filesystem::file_time_type::duration(modifiedRep)),
+                               size, seconds});
+    }
+}
+
+void SaveDurationCacheToDisk() {
+    std::scoped_lock lock(gDurationCacheMutex);
+    if (gDurationCachePath.empty()) return;
+    // Copy under lock so a concurrent probe cannot invalidate iterators, then write
+    // outside the critical section would be ideal, but the scan thread is the only
+    // caller here; a small snapshot under the lock is simplest and safe.
+    std::vector<std::pair<std::filesystem::path, DurationCacheEntry>> snapshot;
+    snapshot.reserve(gDurationCache.size());
+    for (auto& [path, entry] : gDurationCache) snapshot.emplace_back(path, entry);
+    if (snapshot.empty()) return;
+    std::ofstream out(gDurationCachePath, std::ios::binary | std::ios::trunc);
+    if (!out) return;
+    const std::uint32_t magic = DurationCacheMagic;
+    const std::uint32_t version = DurationCacheVersion;
+    const std::uint64_t count = static_cast<std::uint64_t>(snapshot.size());
+    out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+    out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    out.write(reinterpret_cast<const char*>(&count), sizeof(count));
+    for (const auto& [path, entry] : snapshot) {
+        const auto text = path.wstring();
+        const std::uint32_t charCount = static_cast<std::uint32_t>(text.size() + 1);
+        out.write(reinterpret_cast<const char*>(&charCount), sizeof(charCount));
+        out.write(reinterpret_cast<const char*>(text.c_str()),
+                   static_cast<std::streamsize>(charCount * sizeof(wchar_t)));
+        const auto modifiedRep =
+            static_cast<std::int64_t>(entry.modified.time_since_epoch().count());
+        out.write(reinterpret_cast<const char*>(&modifiedRep), sizeof(modifiedRep));
+        const std::uint64_t size = entry.size;
+        out.write(reinterpret_cast<const char*>(&size), sizeof(size));
+        const double seconds = entry.seconds;
+        out.write(reinterpret_cast<const char*>(&seconds), sizeof(seconds));
+    }
+}
+
 #ifdef _WIN32
 // Scoped Media Foundation lifetime for the scan thread. Media Foundation must be
 // started per thread that creates source readers; the audio backend runs on its
@@ -206,33 +317,29 @@ private:
     bool mfOk_{};
 };
 
-// Reads container metadata only (no decode) to recover a track's duration.
-struct DurationCacheEntry {
-    std::filesystem::file_time_type modified{};
-    std::uintmax_t size{};
-    double seconds{};
-};
-
-double ProbeDurationSeconds(const std::filesystem::path& path, std::stop_token stop) noexcept {
-    if (stop.stop_requested()) return 0.0;
+// Reads container metadata only (no decode) to recover a track's duration,
+// reusing the persisted disk cache when the file's size and mtime are unchanged.
+DurationProbeResult ProbeDurationSeconds(const std::filesystem::path& path,
+                                         std::stop_token stop) noexcept {
+    if (stop.stop_requested()) return {};
+    static std::once_flag cacheLoadFlag;
+    std::call_once(cacheLoadFlag, []() { LoadDurationCacheFromDisk(); });
     std::error_code ec;
     const auto modified = std::filesystem::last_write_time(path, ec);
-    if (ec) return 0.0;
+    if (ec) return {};
     const auto size = std::filesystem::file_size(path, ec);
-    if (ec) return 0.0;
-
-    static std::mutex cacheMutex;
-    static std::map<std::filesystem::path, DurationCacheEntry> cache;
+    if (ec) return {};
     {
-        std::scoped_lock lock(cacheMutex);
-        const auto found = cache.find(path);
-        if (found != cache.end() && found->second.modified == modified && found->second.size == size) {
-            return found->second.seconds;
+        std::scoped_lock lock(gDurationCacheMutex);
+        const auto found = gDurationCache.find(path);
+        if (found != gDurationCache.end() && found->second.modified == modified &&
+            found->second.size == size) {
+            return DurationProbeResult{found->second.seconds, found->second.size};
         }
     }
     double seconds = 0.0;
 
-    if (stop.stop_requested()) return 0.0;
+    if (stop.stop_requested()) return {};
     IMFSourceReader* reader = nullptr;
     if (SUCCEEDED(MFCreateSourceReaderFromURL(path.c_str(), nullptr, &reader)) && reader != nullptr) {
         PROPVARIANT value;
@@ -252,18 +359,28 @@ double ProbeDurationSeconds(const std::filesystem::path& path, std::stop_token s
     }
 
     if (seconds <= 0.0) seconds = ProbeOggOpusDurationSeconds(path, size, stop);
-    if (stop.stop_requested()) return 0.0;
+    if (stop.stop_requested()) return {};
     {
-        std::scoped_lock lock(cacheMutex);
+        std::scoped_lock lock(gDurationCacheMutex);
         // Bound retained file metadata across long-running sessions and removable-media scans.
-        if (cache.size() >= 100000) cache.clear();
-        cache.insert_or_assign(path, DurationCacheEntry{modified, size, seconds});
+        if (gDurationCache.size() >= DurationCacheMaxEntries) gDurationCache.clear();
+        gDurationCache.insert_or_assign(path, DurationCacheEntry{modified, size, seconds});
     }
-    return seconds;
+    return DurationProbeResult{seconds, size};
 }
 #endif
 
 } // namespace
+
+void LibraryScanner::SetDurationCachePath(std::filesystem::path path) {
+    std::scoped_lock lock(gDurationCacheMutex);
+    gDurationCachePath = std::move(path);
+    gDurationCacheLoaded = false;
+}
+
+void LibraryScanner::SaveDurationCache() {
+    SaveDurationCacheToDisk();
+}
 
 bool LibraryScanner::IsSupported(const std::filesystem::path& path) noexcept {
     return Track::IsSupportedFile(path);
@@ -283,17 +400,15 @@ LibraryScanResult LibraryScanner::Scan(std::span<const std::filesystem::path> re
     const bool canProbeDurations = mediaFoundation.Ready();
 #endif
 
-    // Normalize roots, dropping empties and duplicates so overlapping settings do not
-    // double-count tracks. First surviving root also serves as the catalog `root`.
+    // Normalize roots, dropping empties and exact duplicates. Descendant filtering below
+    // removes overlapping roots without treating same-drive siblings as descendants.
     std::vector<std::filesystem::path> roots;
     for (const auto& requested : requestedRoots) {
         if (requested.empty()) continue;
         auto normalized = NormalizeRoot(requested);
         auto contained = false;
         for (const auto& accepted : roots) {
-            std::error_code relEc;
-            auto relative = std::filesystem::relative(normalized, accepted, relEc);
-            if (!relEc && !relative.empty() && relative != L".") {
+            if (IsGenuineDescendant(normalized, accepted)) {
                 contained = true;
                 break;
             }
@@ -303,6 +418,21 @@ LibraryScanResult LibraryScanner::Scan(std::span<const std::filesystem::path> re
             roots.push_back(std::move(normalized));
         }
     }
+    // With [child, parent] ordering the acceptance loop keeps both, so the child's
+    // files would be scanned twice. Drop any later, broader root that contains an
+    // earlier accepted one; the earlier (deeper) root already covers its files.
+    std::vector<std::filesystem::path> survivingRoots;
+    for (auto& root : roots) {
+        auto containsEarlier = false;
+        for (const auto& earlier : survivingRoots) {
+            if (IsGenuineDescendant(earlier, root)) {
+                containsEarlier = true;
+                break;
+            }
+        }
+        if (!containsEarlier) survivingRoots.push_back(std::move(root));
+    }
+    roots = std::move(survivingRoots);
     if (!roots.empty()) result.root = roots.front();
 
     // Direct (non-recursive) tracks per directory, and the set of directories that are
@@ -335,15 +465,38 @@ LibraryScanResult LibraryScanner::Scan(std::span<const std::filesystem::path> re
             if (ec) ec.clear();
         }
 
-        std::sort(files.begin(), files.end(), [](const auto& left, const auto& right) {
-            return FoldCase(left) < FoldCase(right);
+        // Fold each path once; sorting then compares precomputed lowercase keys.
+        std::vector<std::pair<std::filesystem::path, std::wstring>> keyedFiles;
+        keyedFiles.reserve(files.size());
+        for (const auto& file : files) {
+            keyedFiles.emplace_back(file, LowerKey(file));
+        }
+        std::sort(keyedFiles.begin(), keyedFiles.end(), [](const auto& left, const auto& right) {
+            return left.second < right.second;
         });
+        files.clear();
+        files.reserve(keyedFiles.size());
+        for (auto& keyed : keyedFiles) {
+            files.push_back(std::move(keyed.first));
+        }
         for (const auto& file : files) {
             if (stop.stop_requested()) return {};
             auto track = Track::FromFile(file);
 #ifdef _WIN32
-            if (canProbeDurations) track.durationSeconds = ProbeDurationSeconds(track.filePath, stop);
+            std::uintmax_t probedBytes = 0;
+            if (canProbeDurations) {
+                const auto probe = ProbeDurationSeconds(track.filePath, stop);
+                track.durationSeconds = probe.seconds;
+                probedBytes = probe.fileSize;
+            }
 #endif
+            if (track.durationSeconds > 0.0 && probedBytes > 0) {
+                const double kbps = static_cast<double>(probedBytes) * 8.0 /
+                                    (track.durationSeconds * 1000.0);
+                if (std::isfinite(kbps) && kbps > 0.0 && kbps <= 100000.0) {
+                    track.bitrateKbps = static_cast<int>(std::lround(kbps));
+                }
+            }
             if (stop.stop_requested()) return {};
             // Parent already normalized via Track::FromFile; create node if walk missed it.
             const auto parent = track.filePath.parent_path();
@@ -353,9 +506,22 @@ LibraryScanResult LibraryScanner::Scan(std::span<const std::filesystem::path> re
         }
     }
 
-    std::sort(result.tracks.begin(), result.tracks.end(), [](const auto& left, const auto& right) {
-        return FoldCase(left.filePath) < FoldCase(right.filePath);
+    // Sort tracks by precomputed lowercase file-path keys (moved back in order).
+    std::vector<std::pair<std::size_t, std::wstring>> keyedTrackOrder;
+    keyedTrackOrder.reserve(result.tracks.size());
+    for (std::size_t index = 0; index < result.tracks.size(); ++index) {
+        keyedTrackOrder.emplace_back(index, LowerKey(result.tracks[index].filePath));
+    }
+    std::sort(keyedTrackOrder.begin(), keyedTrackOrder.end(), [](const auto& left, const auto& right) {
+        return left.second < right.second;
     });
+    std::vector<library::Track> sortedTracks;
+    sortedTracks.reserve(result.tracks.size());
+    for (const auto& [index, key] : keyedTrackOrder) {
+        (void)key;
+        sortedTracks.push_back(std::move(result.tracks[index]));
+    }
+    result.tracks = std::move(sortedTracks);
 
     // All Music: the recursive union across every root.
     playlist::Playlist allMusic;
@@ -403,9 +569,23 @@ LibraryScanResult LibraryScanner::Scan(std::span<const std::filesystem::path> re
         }
         directories.push_back(std::move(folder));
     }
-    std::sort(directories.begin(), directories.end(), [](const auto& left, const auto& right) {
-        return FoldCase(left.directory) < FoldCase(right.directory);
-    });
+    // Sort folder playlists by precomputed lowercase directory keys (moved back in order).
+    std::vector<std::pair<std::size_t, std::wstring>> keyedDirectoryOrder;
+    keyedDirectoryOrder.reserve(directories.size());
+    for (std::size_t index = 0; index < directories.size(); ++index) {
+        keyedDirectoryOrder.emplace_back(index, LowerKey(directories[index].directory));
+    }
+    std::sort(keyedDirectoryOrder.begin(), keyedDirectoryOrder.end(),
+              [](const auto& left, const auto& right) {
+                  return left.second < right.second;
+              });
+    std::vector<playlist::Playlist> sortedDirectories;
+    sortedDirectories.reserve(directories.size());
+    for (const auto& [index, key] : keyedDirectoryOrder) {
+        (void)key;
+        sortedDirectories.push_back(std::move(directories[index]));
+    }
+    directories = std::move(sortedDirectories);
     result.playlists.insert(result.playlists.end(),
                             std::make_move_iterator(directories.begin()),
                             std::make_move_iterator(directories.end()));

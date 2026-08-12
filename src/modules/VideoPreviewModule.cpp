@@ -807,7 +807,7 @@ bool Win32Ui::Impl::IsVideoPreviewModuleVisible() const noexcept {
     const auto* item = model.moduleLayout.Find(ModuleId::VideoPreview);
     if (!item || !item->visible || item->collapsed) return false;
     if (model.moduleLayout.IsTabbed(ModuleId::VideoPreview) &&
-        model.moduleLayout.tabOrder[model.moduleLayout.ActiveTabIndex()] != ModuleId::VideoPreview) {
+        model.moduleLayout.GroupActiveMember(ModuleId::VideoPreview) != ModuleId::VideoPreview) {
         return false;
     }
     return true;

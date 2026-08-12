@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "../ui/SongRowLayout.h"
 #include "../ui/layout/ModuleLayout.h"
 
 namespace rivan::config {
@@ -31,8 +32,8 @@ struct AppSettings final {
     std::vector<std::filesystem::path> additionalMusicRoots;
     int volumePercent = 80;
     std::string skinId = "dark-purple";
-    // Optional small cover thumbnails beside titles in library and playlist rows.
-    bool trackCoverArtEnabled = true;
+    // Shared layout and styling applied to every local-library song row.
+    ui::SongRowLayout songRowLayout{ui::SongRowLayout::Defaults()};
     // Optional current-folder media preview. Off means no preview metadata or media work.
     bool filePreviewEnabled = true;
     // Registers Rivan for the current user's Windows sign-in.

@@ -184,7 +184,7 @@ std::optional<std::uint8_t> HexByte(char high, char low) noexcept {
 Skin Skin::BuiltInDarkPurple() {
     Skin result;
     result.id = BuiltInId;
-    result.name = "red";
+    result.name = "Dark Purple";
     result.author = "Rivan";
     result.version = "1";
     result.colors = {

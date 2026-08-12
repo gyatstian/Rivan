@@ -15,17 +15,10 @@ yes the layout is basically a winamp rip off
 - File-preview panel with expandable video preview
 - Optional YouTube/YouTube Music search and download through `yt-dlp`
 - Optional Discord Rich Presence
-- Less than 1% cpu and ~60 mb of ram when minimized to tray while playing a 2000 kb/s .FLAC file
-- a cute little cover on the right of song titles (˶˃ ᵕ ˂˶) .ᐟ.ᐟ
-- basic file manipulation
+- Less than 1% cpu and ~60 mb of ram when minimized while playing a 2000 kb/s .FLAC file
 
 ## Planned
-- a fuckload more customization
-- possibly more optimazation
-- better downloading (it's slow and restricted)
-- even more customization
-- useful mini-player
-- lyrics + lyrics synchronization with discord rpc
+- more customization
 
 ## Supported media
 

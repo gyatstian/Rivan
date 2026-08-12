@@ -1,4 +1,4 @@
-// DiscordPresence.cpp
+﻿// DiscordPresence.cpp
 // Discord IPC client: connect to discord-ipc-N, HANDSHAKE, SET_ACTIVITY.
 // Failures are silent; reconnect is best-effort so Discord absence never blocks audio.
 #include "DiscordPresence.h"
@@ -218,7 +218,20 @@ void DiscordPresence::DrainIncoming() {
     for (;;) {
         std::uint32_t opcode = 0;
         std::string payload;
-        if (!ReadFrame(opcode, payload, 0)) break;
+        if (!ReadFrame(opcode, payload, 0)) {
+            // ReadFrame(0) fails for both 'nothing buffered' (normal after a publish
+            // or during idle keepalive) and 'pipe broken'. Only drop the handle when
+            // the pipe itself actually failed; otherwise keepalive would disconnect a
+            // healthy connection after every publish and never stabilize.
+            if (pipe_ != nullptr && pipe_ != INVALID_HANDLE_VALUE) {
+                DWORD available = 0;
+                if (PeekNamedPipe(static_cast<HANDLE>(pipe_), nullptr, 0, nullptr,
+                                  &available, nullptr) == FALSE) {
+                    Disconnect();
+                }
+            }
+            break;
+        }
         if (opcode == kOpcodeClose) {
             Disconnect();
             break;

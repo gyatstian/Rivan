@@ -337,6 +337,20 @@ bool IniDocument::SaveAtomic(const std::filesystem::path& path, std::string* err
         return false;
     }
 
+    // Flush the parent directory so the rename survives a power loss. Directory
+    // handles require FILE_FLAG_BACKUP_SEMANTICS; failures on older filesystems,
+    // remote shares, or restricted volumes are non-fatal for correctness of the file.
+    if (!path.parent_path().empty()) {
+        const HANDLE directory = CreateFileW(
+            path.parent_path().c_str(), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (directory != INVALID_HANDLE_VALUE) {
+            (void)FlushFileBuffers(directory);
+            CloseHandle(directory);
+        }
+    }
+
     if (error != nullptr) {
         error->clear();
     }
@@ -355,6 +369,11 @@ std::optional<std::string_view> IniDocument::Get(
         return std::nullopt;
     }
     return valueIt->second;
+}
+
+bool IniDocument::HasMetaFormat(std::string_view expected) const noexcept {
+    const auto format = Get("meta", "format");
+    return format && *format == expected;
 }
 
 void IniDocument::Set(std::string section, std::string key, std::string value) {

@@ -72,15 +72,18 @@ void PlaybackQueue::AppendTracks(std::span<const library::Track> tracks) {
 
 std::size_t PlaybackQueue::AppendDroppedFiles(
     std::span<const std::filesystem::path> paths) {
-    std::vector<std::filesystem::path> files;
+    std::vector<std::pair<std::filesystem::path, std::wstring>> files;
     std::unordered_set<std::wstring> seen;
 
     const auto addFile = [&files, &seen](const std::filesystem::path& path) {
         std::error_code ec;
-        if (library::Track::IsSupportedFile(path) &&
-            std::filesystem::is_regular_file(path, ec) && !ec &&
-            seen.insert(PathKey(path)).second) {
-            files.push_back(path);
+        if (!library::Track::IsSupportedFile(path) ||
+            !std::filesystem::is_regular_file(path, ec) || ec) {
+            return;
+        }
+        const std::wstring key = PathKey(path);
+        if (seen.insert(key).second) {
+            files.emplace_back(path, std::move(key));
         }
     };
 
@@ -100,11 +103,11 @@ std::size_t PlaybackQueue::AppendDroppedFiles(
     }
 
     std::sort(files.begin(), files.end(), [](const auto& left, const auto& right) {
-        return PathKey(left) < PathKey(right);
+        return left.second < right.second;
     });
     std::vector<library::Track> imported;
     imported.reserve(files.size());
-    for (const auto& file : files) {
+    for (const auto& [file, key] : files) {
         imported.push_back(library::Track::FromFile(file));
     }
     AppendTracks(imported);
@@ -122,10 +125,6 @@ void PlaybackQueue::Clear() noexcept {
 
 bool PlaybackQueue::Empty() const noexcept {
     return tracks_.empty();
-}
-
-std::size_t PlaybackQueue::Size() const noexcept {
-    return tracks_.size();
 }
 
 const std::vector<library::Track>& PlaybackQueue::Tracks() const noexcept {
@@ -191,9 +190,10 @@ QueueNavigation PlaybackQueue::Next() {
         }
     }
 
-    if (repeat_ == RepeatMode::All) {
-        const auto stop = orderPosition_ == NoPosition ? order_.size() : orderPosition_ + 1;
-        for (std::size_t position = 0; position < stop; ++position) {
+    if (repeat_ == RepeatMode::All && orderPosition_ != NoPosition) {
+        // The wrap includes the current position so a single playable track (lone
+        // track in the queue, or all others unavailable) loops back onto itself.
+        for (std::size_t position = 0; position <= orderPosition_; ++position) {
             if (IsPlayable(order_[position])) {
                 return Activate(order_[position], QueueNavigationAction::Advanced, true);
             }

@@ -31,6 +31,8 @@ public:
         std::string_view section,
         std::string_view key) const noexcept;
 
+    [[nodiscard]] bool HasMetaFormat(std::string_view expected) const noexcept;
+
     void Set(std::string section, std::string key, std::string value);
 
     [[nodiscard]] const Sections& Data() const noexcept { return sections_; }

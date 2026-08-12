@@ -2,7 +2,9 @@
 // Optional yt-dlp front-end: search, URL probe, and audio download into the library.
 #pragma once
 
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -148,6 +150,8 @@ private:
     void RunInstall(std::stop_token stop, YoutubeTool tool);
     void RunWarm(std::stop_token stop);
     void JoinWorker();
+    void Enqueue(std::function<void()> step);
+    void SupervisorLoop();
     void WriteToolFlagsLocked();
     void StoreSearchCacheLocked(const std::wstring& cacheKey, std::vector<YoutubeEntry> entries);
 
@@ -166,6 +170,12 @@ private:
     std::vector<CachedSearch> searchCache_;
     std::function<void()> notify_;
     std::jthread worker_;
+    // Supervisor-runner members: declared last so runner_ is joined before
+    // other members are destroyed in the destructor.
+    std::deque<std::function<void()>> queue_;
+    std::condition_variable cv_;
+    bool shutdown_{false};
+    std::jthread runner_;
 };
 
 } // namespace rivan::youtube

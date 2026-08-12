@@ -118,18 +118,21 @@ bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone)
             if (!item->collapsed) SyncExpandedGeometry(*item);
         }
     }
+    ScaleCollapsedInsideModules(sourceSnapRoot, sourceBounds, sourceDestination);
     if (auto* item = Find(targetRoot)) {
         setGeometry(*item, targetDestination, ModuleDockState::Snapped);
         if (!item->collapsed) SyncExpandedGeometry(*item);
     }
     if (targetWasTabbed) {
         for (std::size_t index = 0; index < TabCount(); ++index) {
-            if (auto* item = Find(tabOrder[index])) {
+            if (auto* item = Find(tabOrder[index]);
+                item != nullptr && TabRoot(item->id) == targetRoot) {
                 setGeometry(*item, targetDestination, ModuleDockState::Snapped);
                 if (!item->collapsed) SyncExpandedGeometry(*item);
             }
         }
     }
+    ScaleCollapsedInsideTabGroup(targetRoot, Bounds(targetGeometry), targetDestination);
     for (std::size_t index = 0; index < sourceMemberCount; ++index) {
         if (auto* item = Find(sourceMembers[index])) {
             const auto itemIndex = static_cast<std::size_t>(item - items.data());
@@ -155,6 +158,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
     const auto region = ModuleWindowDropBounds(zone);
     ModuleNormalizedRect destination{};
     const ModuleLayout before = *this;
+    const ModuleId sourceSnapRoot = SnapRoot(TabRoot(source));
     const auto fail = [this, &before]() noexcept {
         *this = before;
         return false;
@@ -262,6 +266,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
         item->dockState = ModuleDockState::Snapped;
         if (!item->collapsed) SyncExpandedGeometry(*item);
     }
+    ScaleCollapsedInsideModules(sourceSnapRoot, sourceBounds, destination);
     if (!freeDestination && splitTargetFound) {
         auto* target = Find(targetRoot);
         if (!target || !HasFiniteOrderedRectangle(Bounds(*target))) return fail();
@@ -297,6 +302,7 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
                 if (!tabItem->collapsed) SyncExpandedGeometry(*tabItem);
             }
         }
+        ScaleCollapsedInsideTabGroup(targetRoot, targetBounds, remainder);
         for (std::size_t index = 0; index < movingCount; ++index) {
             auto* moved = Find(moving[index]);
             if (!moved) return fail();

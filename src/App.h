@@ -40,6 +40,7 @@ public:
     [[nodiscard]] int Run();
 
     void SnapshotUiModel(ui::UiModel& out) override;
+    void OnMainWindowClosing() override;
     void Invoke(ui::Command command) override;
     void SelectPlaylist(std::uint64_t id) override;
     void TogglePlaylistExpanded(std::uint64_t id) override;
@@ -49,7 +50,7 @@ public:
     void SetVolume(float normalizedVolume) override;
     void SelectSettingsCategory(ui::SettingCategory category) override;
     void SetMusicFolder(std::size_t index, std::filesystem::path folder) override;
-    void SetTrackCoverArtEnabled(bool enabled) override;
+    void SetSongRowLayout(ui::SongRowLayout layout) override;
     void SetFilePreviewEnabled(bool enabled) override;
     void SetStartAtStartup(bool enabled) override;
     void SetExitToTray(bool enabled) override;
@@ -214,6 +215,9 @@ private:
     ui::UiModel cachedModel_{};
     std::uint64_t cachedModelRevision_{~std::uint64_t{0}};
     bool restored_{};
+    // User playlists restore once, on the first scan application, so the per-track
+    // metadata reads do not delay the initial scan start.
+    bool userPlaylistsLoaded_{};
     bool moduleLayoutWarning_{};
 
     // Youtube browser state mirrored for UI (updated on worker notify).
@@ -225,6 +229,10 @@ private:
     bool pendingYoutubeGrab_{};
     bool youtubeGrabberHotkeyAvailable_{true};
     ui::ModuleLayout moduleLayout_{ui::ModuleLayout::Defaults()};
+    // Throttle layout INI writes during interactive resize; session stays in memory.
+    std::chrono::steady_clock::time_point lastSessionSave_{};
+    // PersistState runs on WM_CLOSE and again in ~App; skip the destructor duplicate.
+    bool persistedOnClose_{};
 };
 
 } // namespace rivan

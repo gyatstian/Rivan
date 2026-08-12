@@ -343,6 +343,12 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
         case HitKind::PlaylistToggle: host.TogglePlaylistExpanded(hit.id); break;
         case HitKind::Refresh: host.RefreshLibrary(); break;
         case HitKind::SettingsAction: HandleSettingsAction(hit.id); return;
+        case HitKind::SongRowField:
+            if (windowKind == WindowKind::Settings && hit.id < kSongRowFieldCount) {
+                BeginSongRowFieldDrag(static_cast<SongRowField>(hit.id), x, y);
+                return;
+            }
+            break;
         case HitKind::LyricsAction: HandleLyricsAction(hit.id); return;
         case HitKind::LyricsVerse: HandleLyricsVerse(static_cast<std::size_t>(hit.id)); return;
         case HitKind::Track:
@@ -402,8 +408,16 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
                 const std::size_t tab = static_cast<std::size_t>(hit.id & 0xffffffffULL);
                 if (tab < layout.TabCount()) {
                     const auto id = static_cast<ModuleId>((hit.id >> 32U) & 0xffffffffULL);
-                    const bool wasActive = tab == layout.activeTab;
-                    layout.activeTab = tab;
+                    if (!layout.IsTabbed(id) || layout.TabIndex(id) != tab) break;
+                    const bool wasActive = layout.GroupActiveMember(id) == id;
+                    std::size_t groupIndex = 0;
+                    const auto groupCount = layout.GroupTabCount(id);
+                    while (groupIndex < groupCount &&
+                           layout.GroupMember(id, groupIndex) != id) {
+                        ++groupIndex;
+                    }
+                    if (groupIndex == groupCount) break;
+                    layout.SetGroupActiveTab(id, groupIndex);
                     try { host.SetModuleLayout(layout); } catch (...) {}
                     // A tab click still behaves like a normal selection when released
                     // without movement. If the pointer moves, the same gesture can
@@ -468,6 +482,10 @@ void Win32Ui::Impl::PointerMove(float x, float y) {
         UpdateLayerDrag(y);
         return;
     }
+    if (songRowDragging) {
+        UpdateSongRowFieldDrag(x, y);
+        return;
+    }
     if (draggingDecor != 0) {
         MoveDecor(x, y);
         return;
@@ -495,7 +513,7 @@ void Win32Ui::Impl::PointerMove(float x, float y) {
     }
 }
 
-void Win32Ui::Impl::PointerUp() noexcept {
+void Win32Ui::Impl::PointerUp(const std::optional<D2D1_POINT_2F> release) noexcept {
     if (pickingScreenColor) {
         // Button that starts the tool also raises WM_LBUTTONUP; ignore that first release.
         if (eyedropperSkipUp) {
@@ -515,6 +533,15 @@ void Win32Ui::Impl::PointerUp() noexcept {
     draggingStudioColor = false;
     draggingStudioHue = false;
     draggingLayer = 0;
+    const bool songRowEdited = songRowDragging;
+    if (release && songRowDragging) {
+        UpdateSongRowFieldDrag(release->x, release->y);
+        if (songRowDragMoved && !songRowResizing) (void)ApplySongRowSnap();
+    }
+    songRowDragging = false;
+    songRowDragMoved = false;
+    songRowResizing = false;
+    if (!release && songRowEdited) songRowSnap.reset();
     if (collapsedArrowPress) {
         const auto id = collapsedArrowPress;
         const bool dragged = collapsedArrowDragStarted;
@@ -555,7 +582,7 @@ void Win32Ui::Impl::PointerUp() noexcept {
                                  static_cast<int>(std::ceil(std::max(resizedWidth, lastCanvas.width))),
                                  static_cast<int>(std::ceil(std::max(resizedHeight, lastCanvas.height) +
                                                             (HasTitlebar() ? kTitlebarHeight : 0.0F))),
-                                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
+                                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOCOPYBITS);
                 } else if (restoringExpansion) {
                     moduleExpansionResizePending = false;
                     moduleExpansionResizeModule.reset();
@@ -564,7 +591,7 @@ void Win32Ui::Impl::PointerUp() noexcept {
                                  moduleExpansionRestoreWidth,
                                  moduleExpansionRestoreHeight +
                                      (HasTitlebar() ? static_cast<int>(kTitlebarHeight) : 0),
-                                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
+                                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOCOPYBITS);
                 }
             }
             if (GetCapture() == window) ReleaseCapture();
@@ -574,6 +601,7 @@ void Win32Ui::Impl::PointerUp() noexcept {
     if (dragKind != DragKind::None) {
         FinishRowDrag();
     }
+    if (songRowEdited) CommitSongRowLayoutEdit();
     if (previewPending) PushPreview();
     if (GetCapture() == window) ReleaseCapture();
 }

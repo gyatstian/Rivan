@@ -493,6 +493,9 @@ void Win32Ui::Impl::SyncMouseFromCursor() {
     POINT cursor{};
     if (!GetCursorPos(&cursor)) return;
     ScreenToClient(window, &cursor);
+    // Match the other input paths: mouse is stored in content coordinates, so a
+    // titlebar window shifts the cursor down by the titlebar height.
+    if (HasTitlebar()) cursor.y -= static_cast<LONG>(kTitlebarHeight);
     mouse = cursor;
 }
 

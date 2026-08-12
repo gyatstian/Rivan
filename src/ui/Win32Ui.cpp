@@ -300,6 +300,10 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         impl_->windowResizeActive = false;
         return 0;
     case WM_SHOWWINDOW:
+        if (impl_->windowKind == WindowKind::Settings && wParam == FALSE) {
+            impl_->songRowEditorVisible = false;
+            impl_->songRowSelectedField.reset();
+        }
         impl_->SyncRefreshTimer();
         return 0;
     case WM_GETMINMAXINFO: {
@@ -348,7 +352,13 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         impl_->PointerMove(static_cast<float>(GET_X_LPARAM(lParam)),
                            static_cast<float>(GET_Y_LPARAM(lParam)));
         return 0;
-    case WM_LBUTTONUP:
+    case WM_LBUTTONUP: {
+        float x = static_cast<float>(GET_X_LPARAM(lParam));
+        float y = static_cast<float>(GET_Y_LPARAM(lParam));
+        if (impl_->HasTitlebar()) y -= kTitlebarHeight;
+        impl_->PointerUp(D2D1::Point2F(x, y));
+        return 0;
+    }
     case WM_CAPTURECHANGED:
         impl_->PointerUp();
         return 0;
@@ -371,8 +381,8 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
-        impl_->KeyDown(wParam);
-        return 0;
+        if (impl_->KeyDown(wParam)) return 0;
+        return DefWindowProcW(impl_->window, message, wParam, lParam);
     case WM_DROPFILES:
         impl_->DropFiles(reinterpret_cast<HDROP>(wParam));
         return 0;
@@ -506,6 +516,9 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 impl_->AddTrayIcon();
                 return 0;
             }
+            // Persist before DefWindowProc destroys the HWND so App reads its final live
+            // size and position instead of relying only on cached resize notifications.
+            try { impl_->host.OnMainWindowClosing(); } catch (...) {}
         }
         break;
     case kTrayCallbackMessage:
