@@ -511,7 +511,13 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (impl_->windowKind == WindowKind::Main) {
             // Pull the latest setting; the toggle may have changed since last paint.
             try { impl_->host.SnapshotUiModel(impl_->model); } catch (...) {}
+            // Preview fullscreen may have resized the window; restore before persisting
+            // so the saved session rect stays the user's normal window size.
+            impl_->RestorePreviewFitWindow();
             if (impl_->model.exitToTray) {
+                // Persist before hiding so the next launch resumes the current song
+                // and position even if the process is later killed (End Task, crash).
+                try { impl_->host.OnMainWindowClosingToTray(); } catch (...) {}
                 ShowWindow(impl_->window, SW_HIDE);
                 impl_->AddTrayIcon();
                 return 0;

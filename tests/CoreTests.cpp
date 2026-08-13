@@ -465,6 +465,7 @@ void TestSongRowLayoutSettingRoundTrip() {
     settings.songRowLayout.Field(rivan::ui::SongRowField::Artist).textColor =
         rivan::ui::SongRowTextColor::Secondary;
     settings.filePreviewEnabled = false;
+    settings.previewFitWindow = true;
     settings.startAtStartup = true;
     settings.exitToTray = true;
     settings.discordShowGithubButton = true;
@@ -524,6 +525,8 @@ void TestSongRowLayoutSettingRoundTrip() {
           "legacy song row width setting is ignored on load and removed on save");
     Check(reader.Settings().startAtStartup,
           "start at startup survives settings round-trip");
+    Check(reader.Settings().previewFitWindow,
+           "preview fit-to-window setting survives settings round-trip");
     Check(reader.Settings().exitToTray,
           "exit to tray survives settings round-trip");
     Check(reader.Settings().discordShowGithubButton,

@@ -146,7 +146,14 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
         y += 29;
         SettingsButton(Rect(left, y, right, y + 24),
                        model.filePreviewEnabled ? L"FILE PREVIEW: ON" : L"FILE PREVIEW: OFF", 14, b);
-        y += 34;
+        y += 26;
+        SettingsButton(Rect(left, y, right, y + 24),
+                       model.previewFitWindow ? L"FIT WINDOW TO VIDEO: ON" : L"FIT WINDOW TO VIDEO: OFF", 25, b);
+        y += 26;
+        DrawText(model.previewFitWindow ? L"Preview fullscreen grows the window to remove black bars."
+                                        : L"Preview fullscreen keeps the current window size.",
+                 Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+        y += 22;
         DrawText(L"PLAYLISTS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
                  DWRITE_TEXT_ALIGNMENT_CENTER);
         y += 29;
@@ -705,6 +712,7 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 6: if (!model.youtubeFfmpegInstalled && !model.youtubeInstallingFfmpeg) host.InstallYoutubeTool(false); break;
         case 7: host.SetLyricsCacheEnabled(!model.lyricsCacheEnabled); break;
         case 14: host.SetFilePreviewEnabled(!model.filePreviewEnabled); break;
+        case 25: host.SetPreviewFitWindow(!model.previewFitWindow); break;
         case 15: host.SetStartAtStartup(!model.startAtStartup); break;
         case 16: host.SetExitToTray(!model.exitToTray); break;
         case 17: host.SetDuplicateAsFile(!model.duplicateAsFile); break;

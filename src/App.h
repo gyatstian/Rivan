@@ -41,6 +41,7 @@ public:
 
     void SnapshotUiModel(ui::UiModel& out) override;
     void OnMainWindowClosing() override;
+    void OnMainWindowClosingToTray() override;
     void Invoke(ui::Command command) override;
     void SelectPlaylist(std::uint64_t id) override;
     void TogglePlaylistExpanded(std::uint64_t id) override;
@@ -52,6 +53,7 @@ public:
     void SetMusicFolder(std::size_t index, std::filesystem::path folder) override;
     void SetSongRowLayout(ui::SongRowLayout layout) override;
     void SetFilePreviewEnabled(bool enabled) override;
+    void SetPreviewFitWindow(bool enabled) override;
     void SetStartAtStartup(bool enabled) override;
     void SetExitToTray(bool enabled) override;
     void SetModuleExpansionBehavior(ui::ModuleExpansionBehavior behavior) override;
@@ -129,6 +131,10 @@ private:
     void PlayNavigation(const playlist::QueueNavigation& navigation, bool startPlayback = true);
     void UpdateDiscordPresence();
     void PersistState();
+    // Copies the current selectedPlaylist_/selectedTrack_ into the in-memory session
+    // so that any SaveSession (SetModuleLayout, Initialize, PersistState) writes the
+    // up-to-date selection. Called from PlayNavigation, SelectPlaylist, and the restore.
+    void SyncPlaybackSession();
     [[nodiscard]] bool SyncStartupRegistration(bool enabled, std::wstring* error = nullptr);
     void ToggleMiniPlayer();
     void ApplyYoutubeSnapshot();

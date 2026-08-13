@@ -211,6 +211,7 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
                  settings.moduleResizeBehavior == ui::ModuleResizeBehavior::Overlap
                      ? "overlap" : "squash");
     document.Set("library", "file_preview_enabled", BoolText(settings.filePreviewEnabled));
+    document.Set("library", "preview_fit_window", BoolText(settings.previewFitWindow));
     document.Set("application", "start_at_startup", BoolText(settings.startAtStartup));
     document.Set("application", "exit_to_tray", BoolText(settings.exitToTray));
     document.Set("youtube", "enabled", BoolText(settings.youtubeEnabled));
@@ -311,6 +312,8 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
                      settings_.volumePercent, warnings);
     ReadBoolField(*document, "library", "file_preview_enabled",
                   settings_.filePreviewEnabled, warnings);
+    ReadBoolField(*document, "library", "preview_fit_window",
+                  settings_.previewFitWindow, warnings);
     ReadBoolField(*document, "library", "duplicate_as_file",
                   settings_.duplicateAsFile, warnings);
     ReadBoolField(*document, "application", "start_at_startup",

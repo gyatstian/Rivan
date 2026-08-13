@@ -136,6 +136,7 @@ void Win32Ui::Impl::Paint() {
                 titlebarControlBounds.clear();
                 Win32Ui::Impl::DrawPreviewFullscreenOverlay(size, brushes);
             } else {
+                RestorePreviewFitWindow();
                 previewFullscreen = false;
                 // The main modules remain usable at the reduced 320x200 window size.
                 // Only explicit mini-player mode switches to the compact renderer.

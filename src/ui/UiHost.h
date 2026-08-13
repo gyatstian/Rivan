@@ -146,6 +146,7 @@ struct UiModel {
     std::vector<std::wstring> musicFolders;
     SongRowLayout songRowLayout{SongRowLayout::Defaults()};
     bool filePreviewEnabled{true};
+    bool previewFitWindow{};
     bool startAtStartup{};
     bool exitToTray{};
     bool youtubeEnabled{};
@@ -217,6 +218,10 @@ public:
     virtual void SnapshotUiModel(UiModel& out) = 0;
     // Main window is about to be destroyed. Persist while its live rectangle is available.
     virtual void OnMainWindowClosing() {}
+    // Main window closes into the notification-area icon instead of exiting. Persist the
+    // current playback selection now so a later hard termination (End Task) still leaves
+    // resumable session state on disk.
+    virtual void OnMainWindowClosingToTray() {}
     virtual void Invoke(Command command) = 0;
     virtual void SelectPlaylist(std::uint64_t id) = 0;
     // Expand/collapse a folder node in the library tree without changing selection.
@@ -236,6 +241,7 @@ public:
     virtual void SetSongRowLayout(SongRowLayout layout) = 0;
     // Off removes preview state and prevents metadata/video work in the view.
     virtual void SetFilePreviewEnabled(bool enabled) = 0;
+    virtual void SetPreviewFitWindow(bool enabled) = 0;
     virtual void SetStartAtStartup(bool enabled) = 0;
     virtual void SetExitToTray(bool enabled) = 0;
     virtual void SetModuleExpansionBehavior(ModuleExpansionBehavior behavior) = 0;

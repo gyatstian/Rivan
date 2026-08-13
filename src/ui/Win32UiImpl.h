@@ -55,13 +55,6 @@
 #include <utility>
 #include <vector>
 
-#pragma comment(lib, "d2d1.lib")
-#pragma comment(lib, "dwrite.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "windowscodecs.lib")
-#pragma comment(lib, "mfplat.lib")
-#pragma comment(lib, "mfreadwrite.lib")
 #pragma comment(lib, "winmm.lib")
 
 namespace rivan::ui {
@@ -242,12 +235,14 @@ void ColorToHsv(skin::Color color, float& hue, float& saturation, float& value) 
     return value;
 }
 
+[[nodiscard]] bool MatchesLowered(const TrackView& track, const std::wstring& loweredQuery) {
+    return loweredQuery.empty() || Lowercase(track.title).find(loweredQuery) != std::wstring::npos ||
+           Lowercase(track.artist).find(loweredQuery) != std::wstring::npos ||
+           Lowercase(track.album).find(loweredQuery) != std::wstring::npos;
+}
+
 [[nodiscard]] bool Matches(const TrackView& track, const std::wstring& query) {
-    if (query.empty()) return true;
-    const std::wstring needle = Lowercase(query);
-    return Lowercase(track.title).find(needle) != std::wstring::npos ||
-           Lowercase(track.artist).find(needle) != std::wstring::npos ||
-           Lowercase(track.album).find(needle) != std::wstring::npos;
+    return query.empty() || MatchesLowered(track, Lowercase(query));
 }
 
 [[nodiscard]] std::string Utf8(std::wstring_view text) {
@@ -405,6 +400,12 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
 
     void EnterPreviewFullscreen() noexcept;
 
+    // previewFitWindow support: grows only the letterboxed window dimension so the
+    // video fills the window with no black bars, then restores the original rect on exit.
+    void ApplyPreviewWindowFit();
+
+    void RestorePreviewFitWindow() noexcept;
+
     void SyncFilePreview(bool advanceVideo = true);
     void SelectStudioSection(StudioSection section);
 
@@ -532,8 +533,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<const TrackView*>& tracks,
                        std::size_t& scroll, std::size_t& visibleRows,
                        ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* greenDim,
-                        ID2D1Brush* selection, ID2D1Brush* white, ID2D1Brush* dim,
-                        bool showArtist = true);
+                        ID2D1Brush* selection, ID2D1Brush* white);
     [[nodiscard]] float TrackRowHeight() const noexcept;
     [[nodiscard]] IDWriteTextFormat* SongRowFormat(int sizeDelta,
                                                     SongRowFontWeight weight,
@@ -553,7 +553,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void DrawSectionedTracks(const D2D1_RECT_F& bounds, std::size_t& scroll,
                              std::size_t& visibleRows,
                              ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* greenDim,
-                             ID2D1Brush* selection, ID2D1Brush* white, ID2D1Brush* dim);
+                             ID2D1Brush* selection, ID2D1Brush* white);
 
     [[nodiscard]] std::wstring SelectedPlaylistName() const;
 

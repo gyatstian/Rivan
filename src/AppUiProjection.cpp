@@ -297,6 +297,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.duplicateAsFile = settings_.Settings().duplicateAsFile;
     out.songRowLayout = settings_.Settings().songRowLayout;
     out.filePreviewEnabled = filePreviewEnabled;
+    out.previewFitWindow = settings_.Settings().previewFitWindow;
     out.startAtStartup = settings_.Settings().startAtStartup;
     out.exitToTray = settings_.Settings().exitToTray;
     out.youtubeEnabled = settings_.Settings().youtubeEnabled;

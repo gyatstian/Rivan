@@ -15,7 +15,7 @@ void Win32Ui::Impl::DrawPlaylistEditor(const D2D1_RECT_F& bounds,
         auto tracks = Filtered(model.tracks, L"");
         // SCREEN: Playlist Editor track list.
         Win32Ui::Impl::DrawTrackRows(playlistListBounds, tracks, playlistScroll, playlistRows, b[5].Get(), b[6].Get(),
-                       b[6].Get(), b[11].Get(), b[12].Get(), b[10].Get(), true);
+                       b[6].Get(), b[11].Get(), b[12].Get());
 
         // ADD imports files into user playlists and library folders. REM removes entries
         // only from user playlists.

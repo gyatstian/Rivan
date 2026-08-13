@@ -334,6 +334,7 @@ void App::SelectPlaylist(std::uint64_t id) {
         if (!YoutubeFeatureOn()) return;
         selectedPlaylist_ = id;
         selectedTrack_ = 0;
+        SyncPlaybackSession();
         youtubeSelectedResult_ = 0;
         if (youtubeView_.entries.empty()) ShowYoutubeLocalLibrary();
         // Prefetch yt-dlp so the first typed search skips cold process load.
@@ -345,6 +346,7 @@ void App::SelectPlaylist(std::uint64_t id) {
     if (playlists_.FindPlaylist(id) == nullptr) return;
     selectedPlaylist_ = id;
     selectedTrack_ = 0;
+    SyncPlaybackSession();
     // Selecting a folder plays everything under it (its loose tracks plus descendants).
     queue_.SetTracks(playlists_.ResolveTracksRecursive(id), std::nullopt);
     // Selecting a folder with subfolders also reveals them, so a single click both
@@ -445,6 +447,17 @@ void App::SetFilePreviewEnabled(bool enabled) {
     auto settings = settings_.Settings();
     if (settings.filePreviewEnabled == enabled) return;
     settings.filePreviewEnabled = enabled;
+    std::string error;
+    if (!settings_.SetSettings(settings, &error)) return;
+    (void)settings_.SaveSettings(&error);
+    ++revision_;
+    if (window_) window_->Refresh();
+}
+
+void App::SetPreviewFitWindow(bool enabled) {
+    auto settings = settings_.Settings();
+    if (settings.previewFitWindow == enabled) return;
+    settings.previewFitWindow = enabled;
     std::string error;
     if (!settings_.SetSettings(settings, &error)) return;
     (void)settings_.SaveSettings(&error);

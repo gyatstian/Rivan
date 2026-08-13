@@ -1,351 +1,342 @@
-Ôªø<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Pliki ≈∫r√≥d≈Çowe">
+    <Filter Include="Pliki ürÛd≥owe">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
-    <Filter Include="Pliki nag≈Ç√≥wkowe">
+    <Filter Include="Pliki nag≥Ûwkowe">
       <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
       <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
     </Filter>
-    <Filter Include="Pliki zasob√≥w">
+    <Filter Include="Pliki zasobÛw">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
-      <Filter Include="Pliki ≈∫r√≥d≈Çowe\Modules">
+      <Filter Include="Pliki ürÛd≥owe\Modules">
       <UniqueIdentifier>{B8A15FC1-77BD-40A6-BB8F-8F2570D5B57D}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <Manifest Include="resources\app.manifest" />
+    <Manifest Include="src\app.manifest" />
     <ResourceCompile Include="Rivan.rc">
-      <Filter>Pliki zasob√≥w</Filter>
+      <Filter>Pliki zasobÛw</Filter>
     </ResourceCompile>
     <Image Include="src\rivan.ico">
-      <Filter>Pliki zasob√≥w</Filter>
+      <Filter>Pliki zasobÛw</Filter>
     </Image>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Main.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\App.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\AppYoutube.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\AppSkins.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\AppPlaylists.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\AppLibrary.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\AppPersistence.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\AudioAnalysisBuffer.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\AudioEngine.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\audio\NativeAudioBackend.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\config\SettingsManager.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\config\SettingsManager.Settings.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\config\SettingsManager.Session.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\AppPlaylistPersistence.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\core\AppPaths.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\core\IniDocument.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\core\IniValueCodec.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\discord\DiscordPresence.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\library\LibraryScanner.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\library\Track.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\playlist\PlaybackQueue.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\playlist\PlaylistManager.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\plugin\PluginHost.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\skin\Skin.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\skin\SkinManager.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.DrawingPrimitives.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.DropInteraction.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.Keyboard.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Actions.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Color.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Input.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Rendering.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.Rendering.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.Resources.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.SkinDecor.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.Paint.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.Pointer.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.YoutubeChooser.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.RowInteraction.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.Settings.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.ModuleRenderer.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.ModuleInteraction.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\layout\ModuleLayout.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\layout\ModuleDropZones.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\layout\ModuleLayoutSnapping.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\layout\ModuleLayoutTabs.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\layout\ModuleLayoutCollapse.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\layout\ModulePixelGeometry.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\modules\RivanModule.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe\Modules</Filter>
+      <Filter>Pliki ürÛd≥owe\Modules</Filter>
     </ClCompile>
     <ClCompile Include="src\modules\AllMusicModule.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe\Modules</Filter>
+      <Filter>Pliki ürÛd≥owe\Modules</Filter>
     </ClCompile>
     <ClCompile Include="src\modules\GraphicEqualizerModule.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe\Modules</Filter>
+      <Filter>Pliki ürÛd≥owe\Modules</Filter>
     </ClCompile>
     <ClCompile Include="src\modules\RivanLibraryModule.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe\Modules</Filter>
+      <Filter>Pliki ürÛd≥owe\Modules</Filter>
     </ClCompile>
     <ClCompile Include="src\modules\VideoPreviewModule.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe\Modules</Filter>
+      <Filter>Pliki ürÛd≥owe\Modules</Filter>
     </ClCompile>
     <ClCompile Include="src\visualization\Visualization.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\visualization\VisualizationRenderer.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\youtube\YoutubeService.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\youtube\YoutubeService.Process.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\youtube\YoutubeService.Search.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\youtube\YoutubeService.Download.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\youtube\YoutubeService.Probe.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
     <ClCompile Include="src\youtube\YoutubeService.Tools.cpp">
-      <Filter>Pliki ≈∫r√≥d≈Çowe</Filter>
+      <Filter>Pliki ürÛd≥owe</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\App.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\AudioAnalysisBuffer.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\AudioEngine.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\AudioTypes.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\NativeAudioBackend.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\audio\PcmRingBuffer.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\config\SettingsManager.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\config\SettingsManager.Persistence.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\core\AppPaths.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\core\FileSystemUtil.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\core\IniDocument.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\core\IniValueCodec.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\core\Text.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\resource.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\discord\DiscordPresence.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\library\LibraryScanner.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\library\Track.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\playlist\PlaybackQueue.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\playlist\Playlist.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\playlist\PlaylistManager.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\plugin\PluginApi.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\plugin\PluginHost.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\skin\Skin.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\skin\SkinManager.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\UiHost.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
-    </ClInclude>
-    <ClInclude Include="src\ui\UiModule.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\layout\ModuleDropZones.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\layout\ModuleLayout.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\layout\ModulePixelGeometry.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\layout\ModuleTypes.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\Win32Ui.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\Win32UiImpl.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\Win32UiModuleState.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\Win32UiPlaylistState.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\Win32UiPreviewState.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\Win32UiRenderState.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\Win32UiSkinStudioState.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\visualization\Visualization.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\visualization\VisualizationRenderer.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\youtube\YoutubeService.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\youtube\YoutubeService.Internal.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
-    </ClInclude>
-    <ClInclude Include="resources\resource.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
-    </ClInclude>
-    <ClInclude Include="resource1.h">
-      <Filter>Pliki nag≈Ç√≥wkowe</Filter>
+      <Filter>Pliki nag≥Ûwkowe</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

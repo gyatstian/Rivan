@@ -16,8 +16,9 @@ void Win32Ui::Impl::ActivateFirstSearchResult() {
         } catch (...) {}
         return;
     }
+    const std::wstring lowerQuery = Lowercase(playlistQuery);
     for (const auto& track : model.tracks) {
-        if (Matches(track, playlistQuery)) {
+        if (MatchesLowered(track, lowerQuery)) {
             try { host.ActivateTrack(track.id); } catch (...) {}
             return;
         }

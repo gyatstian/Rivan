@@ -208,6 +208,7 @@ void App::RestoreSessionAfterScan() {
             activeTrack_ = *queue_.Current();
         }
     }
+    SyncPlaybackSession();
     restored_ = true;
 }
 
@@ -231,6 +232,7 @@ void App::PlayNavigation(const playlist::QueueNavigation& navigation, bool start
     selectedTrack_ = navigation.track->id;
     activeTrack_ = *navigation.track;
     audio_.Load(navigation.track->filePath);
+    SyncPlaybackSession();
     const auto metadata = LyricsMetadata(*navigation.track);
     lyrics_.Request(navigation.track->id, metadata.first, metadata.second,
                     navigation.track->album, navigation.track->durationSeconds);

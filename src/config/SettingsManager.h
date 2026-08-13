@@ -36,6 +36,9 @@ struct AppSettings final {
     ui::SongRowLayout songRowLayout{ui::SongRowLayout::Defaults()};
     // Optional current-folder media preview. Off means no preview metadata or media work.
     bool filePreviewEnabled = true;
+    // When true, entering video preview fullscreen resizes the window to the video's
+    // aspect ratio (growing only the letterboxed dimension) and restores it on exit.
+    bool previewFitWindow = false;
     // Registers Rivan for the current user's Windows sign-in.
     bool startAtStartup = false;
     // Closing the main window keeps Rivan running behind a notification-area icon.

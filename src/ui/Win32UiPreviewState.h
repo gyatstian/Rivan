@@ -21,6 +21,13 @@ namespace rivan::ui {
 
 struct Win32UiPreviewState {
     bool previewFullscreen{};
+    // Original window rectangle captured when preview fullscreen resizes the window to
+    // the video's aspect ratio (previewFitWindow setting); restored on exit.
+    RECT previewFullscreenRestoreRect{};
+    bool previewFullscreenRestoreValid{};
+    // Video aspect ratio the current fitted window size was computed from; re-fit only
+    // when the video's aspect changes (e.g. a new track while still in fullscreen).
+    float previewFullscreenFitAspect{};
     std::wstring previewPath;
     D2D1_RECT_F previewVideoBounds{};
     D2D1_RECT_F previewFullscreenCloseBounds{};

@@ -54,7 +54,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d2d1.lib;dwrite.lib;windowscodecs.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;ole32.lib;shell32.lib;shlwapi.lib;propsys.lib;avrt.lib;uuid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d2d1.lib;dwrite.lib;windowscodecs.lib;mfplat.lib;mfreadwrite.lib;mfuuid.lib;shlwapi.lib;propsys.lib;avrt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
@@ -103,7 +103,6 @@
     <ClInclude Include="src\ui\UiHost.h" />
     <ClInclude Include="src\ui\SongRowLayout.h" />
     <ClInclude Include="src\ui\TrackCoverCache.h" />
-    <ClInclude Include="src\ui\UiModule.h" />
     <ClInclude Include="src\ui\layout\ModuleDropZones.h" />
     <ClInclude Include="src\ui\layout\ModuleLayout.h" />
     <ClInclude Include="src\ui\layout\ModulePixelGeometry.h" />
@@ -120,7 +119,6 @@
     <ClInclude Include="src\visualization\VisualizationRenderer.h" />
     <ClInclude Include="src\youtube\YoutubeService.h" />
     <ClInclude Include="src\youtube\YoutubeService.Internal.h" />
-    <ClInclude Include="resources\resource.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Main.cpp" />
@@ -167,7 +165,6 @@
     <ClCompile Include="src\ui\Win32Ui.YoutubeChooser.cpp" />
     <ClCompile Include="src\ui\Win32Ui.RowInteraction.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Settings.cpp" />
-    <ClCompile Include="src\ui\Win32Ui.SkinStudio.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Actions.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Color.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Input.cpp" />

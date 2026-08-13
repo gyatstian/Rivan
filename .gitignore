@@ -1,4 +1,4 @@
-terms.md
+﻿terms.md
 AGENTS.md
 .vs/
 
@@ -29,3 +29,10 @@ graphify-out/
 *.lastbuildstate
 *.recipe
 *.ipch
+
+# Build log artifacts
+build_log*.txt
+
+# Intermediate build output directories
+Rivan/
+Rivan.Tests/

@@ -18,6 +18,23 @@ void App::OnMainWindowClosing() {
     PersistState();
 }
 
+void App::OnMainWindowClosingToTray() {
+    // exit-to-tray turns WM_CLOSE into a hide; the app keeps running so this is not
+    // the final exit path. Still persist the current playback selection now so a hard
+    // termination later (End Task, crash, forced shutdown) leaves resumable session
+    // state on disk. persistedOnClose_ stays false so a later clean exit (tray menu
+    // "Exit" -> ~App) writes the freshest position again.
+    PersistState();
+}
+
+void App::SyncPlaybackSession() {
+    auto session = settings_.Session();
+    session.selectedPlaylist = std::to_string(selectedPlaylist_);
+    session.selectedTrack = selectedTrack_ == 0 ? std::string{} : std::to_string(selectedTrack_);
+    std::string ignored;
+    (void)settings_.SetSession(std::move(session), &ignored);
+}
+
 void App::PersistState() {
     auto applicationSettings = settings_.Settings();
     const auto status = audio_.Status();

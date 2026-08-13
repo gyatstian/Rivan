@@ -653,6 +653,7 @@ void Win32Ui::Impl::UpdateVideoPreviewFrame() {
         }
         uploadedPreviewFrameVersion = version;
         previewHasPresentedFrame = true;
+        if (previewFullscreen && model.previewFitWindow) ApplyPreviewWindowFit();
     }
 
 void Win32Ui::Impl::DrawPreviewBitmap(const D2D1_RECT_F& bounds) {
@@ -712,6 +713,7 @@ void Win32Ui::Impl::DrawPreviewFullscreenOverlay(const D2D1_SIZE_F size,
 
 void Win32Ui::Impl::LoadFilePreview(const std::wstring& path) {
         const bool keepFullscreen = previewFullscreen && IsVideoPath(path);
+        if (!keepFullscreen) RestorePreviewFitWindow();
         ClearFilePreview();
         if (path.empty() || !IsVideoPreviewModuleVisible()) return;
         previewPath = path;
@@ -737,17 +739,81 @@ void Win32Ui::Impl::ExitPreviewFullscreen() noexcept {
         if (!previewFullscreen) return;
         previewFullscreen = false;
         previewFullscreenCloseBounds = {};
+        RestorePreviewFitWindow();
         InvalidateRect(window, nullptr, FALSE);
     }
 
 void Win32Ui::Impl::EnterPreviewFullscreen() noexcept {
         if (!previewIsVideo || !IsVideoPreviewModuleVisible()) return;
         previewFullscreen = true;
+        if (model.previewFitWindow) ApplyPreviewWindowFit();
         InvalidateRect(window, nullptr, FALSE);
     }
 
+void Win32Ui::Impl::ApplyPreviewWindowFit() {
+    if (!window || !previewFullscreen || !model.previewFitWindow) return;
+    if (!previewBitmap) return;
+    auto sourceRect = previewBitmapSourceRect;
+    if (Width(sourceRect) <= 0.0F || Height(sourceRect) <= 0.0F) {
+        const auto bitmapSize = previewBitmap->GetSize();
+        sourceRect = Rect(0.0F, 0.0F, bitmapSize.width, bitmapSize.height);
+    }
+    if (Width(sourceRect) <= 0.0F || Height(sourceRect) <= 0.0F) return;
+    const float videoAspect = Width(sourceRect) / Height(sourceRect);
+    if (previewFullscreenRestoreValid &&
+        std::abs(videoAspect - previewFullscreenFitAspect) < 0.0005F) {
+        return;
+    }
+    RECT rect{};
+    if (!GetWindowRect(window, &rect)) return;
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) return;
+    if (!previewFullscreenRestoreValid) previewFullscreenRestoreRect = rect;
+
+    const float windowAspect = static_cast<float>(width) / static_cast<float>(height);
+    int newWidth = width;
+    int newHeight = height;
+    if (windowAspect < videoAspect) {
+        // Window taller than the video: grow width only.
+        newWidth = static_cast<int>(std::ceil(static_cast<float>(height) * videoAspect));
+    } else if (windowAspect > videoAspect) {
+        // Window wider than the video: grow height only.
+        newHeight = static_cast<int>(std::ceil(static_cast<float>(width) / videoAspect));
+    }
+    // Clamp to the monitor's work area so the window stays on-screen.
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        newWidth = std::min(newWidth, std::max(width, static_cast<int>(monitor.rcWork.right - rect.left)));
+        newHeight = std::min(newHeight, std::max(height, static_cast<int>(monitor.rcWork.bottom - rect.top)));
+    }
+    newWidth = std::max(newWidth, static_cast<int>(options.minimumWidth));
+    newHeight = std::max(newHeight, static_cast<int>(options.minimumHeight));
+
+    previewFullscreenFitAspect = videoAspect;
+    previewFullscreenRestoreValid = true;
+    if (newWidth == width && newHeight == height) return;
+    internalModuleResize = true;
+    SetWindowPos(window, nullptr, 0, 0, newWidth, newHeight,
+                 SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOCOPYBITS);
+}
+
+void Win32Ui::Impl::RestorePreviewFitWindow() noexcept {
+    if (!previewFullscreenRestoreValid || !window) return;
+    previewFullscreenRestoreValid = false;
+    previewFullscreenFitAspect = 0.0F;
+    internalModuleResize = true;
+    SetWindowPos(window, nullptr, previewFullscreenRestoreRect.left,
+                 previewFullscreenRestoreRect.top,
+                 previewFullscreenRestoreRect.right - previewFullscreenRestoreRect.left,
+                 previewFullscreenRestoreRect.bottom - previewFullscreenRestoreRect.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+}
+
 void Win32Ui::Impl::SyncFilePreview(bool advanceVideo) {
         if (!IsVideoPreviewModuleVisible()) {
+            RestorePreviewFitWindow();
             previewFullscreen = false;
             if (!previewPath.empty() || previewBitmap) ClearFilePreview();
             return;
@@ -760,13 +826,17 @@ void Win32Ui::Impl::SyncFilePreview(bool advanceVideo) {
             // A decoder failure is terminal for this preview request. Keep the worker
             // from being recreated on every paint and fall back to static artwork.
             previewIsVideo = false;
+            RestorePreviewFitWindow();
             previewFullscreen = false;
             previewBitmap.Reset();
             previewBitmapSourceRect = {};
             (void)LoadCoverArt(active);
         }
         else if (advanceVideo && previewIsVideo) UpdateVideoPreviewFrame();
-        if (!previewIsVideo) previewFullscreen = false;
+        if (!previewIsVideo) {
+            RestorePreviewFitWindow();
+            previewFullscreen = false;
+        }
     }
 
 void Win32Ui::Impl::DrawVideoPreview(

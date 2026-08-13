@@ -3,30 +3,6 @@
 
 namespace rivan::ui {
 
-
-
-
-
-
-
-// Pulls embedded album art from ID3v2 APIC frames when Shell thumbnails fail.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 [[nodiscard]] const std::vector<const TrackView*>& Win32Ui::Impl::Filtered(const std::vector<TrackView>& source,
                                                                   const std::wstring& query) {
         if (cachedTrackRowsRevision == model.revision && cachedTrackRowsQuery == query) {
@@ -36,8 +12,9 @@ namespace rivan::ui {
         cachedTrackRowsQuery = query;
         cachedTrackRows.clear();
         cachedTrackRows.reserve(source.size());
+        const std::wstring lowerQuery = Lowercase(query);
         for (const auto& track : source) {
-            if (Matches(track, query)) cachedTrackRows.push_back(&track);
+            if (MatchesLowered(track, lowerQuery)) cachedTrackRows.push_back(&track);
         }
         return cachedTrackRows;
     }
@@ -330,9 +307,7 @@ void Win32Ui::Impl::DrawSongRow(
 void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<const TrackView*>& tracks,
                        std::size_t& scroll, std::size_t& visibleRows,
                        ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* greenDim,
-                       ID2D1Brush* selection, ID2D1Brush* white, ID2D1Brush* dim,
-                         bool showArtist) {
-        (void)dim;
+                       ID2D1Brush* selection, ID2D1Brush* white) {
         // SCREEN: Track list, including the < NO MATCHING TRACKS > state.
         if (screen == currentBrushes[5]) screenBounds.push_back(bounds);
         target->FillRectangle(bounds, screen);
@@ -373,8 +348,7 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
             Win32Ui::Impl::DrawText(L"< NO MATCHING TRACKS >", bounds, greenDim, regularFormat.Get(),
                      DWRITE_TEXT_ALIGNMENT_CENTER);
         }
-        (void)showArtist;
-    }
+        }
 
 // Renders the current folder view: the selected folder's loose tracks first (no
     // header) followed by one separator header per subfolder section. Falls back to a
@@ -383,11 +357,11 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
     void Win32Ui::Impl::DrawSectionedTracks(const D2D1_RECT_F& bounds, std::size_t& scroll,
                              std::size_t& visibleRows,
                              ID2D1Brush* screen, ID2D1Brush* green, ID2D1Brush* greenDim,
-                             ID2D1Brush* selection, ID2D1Brush* white, ID2D1Brush* dim) {
+                             ID2D1Brush* selection, ID2D1Brush* white) {
         if (model.trackSections.empty()) {
             const auto& filtered = Filtered(model.tracks, playlistQuery);
             Win32Ui::Impl::DrawTrackRows(bounds, filtered, scroll, visibleRows, screen, green, greenDim,
-                          selection, white, dim, true);
+                          selection, white);
             return;
         }
         // Flatten into a header/track row stream, honoring the active search filter.
@@ -399,8 +373,9 @@ void Win32Ui::Impl::DrawTrackRows(const D2D1_RECT_F& bounds, const std::vector<c
             for (const auto& section : model.trackSections) {
                 const std::size_t first = cachedSectionRows.size();
                 const std::size_t last = std::min(section.first + section.count, model.tracks.size());
+                const std::wstring lowerQuery = Lowercase(playlistQuery);
                 for (std::size_t i = section.first; i < last; ++i) {
-                    if (Matches(model.tracks[i], playlistQuery)) {
+                    if (MatchesLowered(model.tracks[i], lowerQuery)) {
                         cachedSectionRows.push_back({false, {}, &model.tracks[i]});
                     }
                 }

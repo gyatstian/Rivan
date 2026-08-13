@@ -479,7 +479,7 @@ void Win32Ui::Impl::DrawLibrary(const D2D1_RECT_F& bounds,
         playlistSearchBounds = Rect(right.left, localSearch.bottom + 3, right.right, right.bottom);
         // SCREEN: Current-folder track list with per-subfolder section headers.
         Win32Ui::Impl::DrawSectionedTracks(playlistSearchBounds, playlistSearchScroll, playlistSearchRows,
-                            b[5].Get(), b[6].Get(), b[6].Get(), b[11].Get(), b[12].Get(), b[10].Get());
+                            b[5].Get(), b[6].Get(), b[6].Get(), b[11].Get(), b[12].Get());
     }
 
 } // namespace rivan::ui
