@@ -19,13 +19,15 @@
 
 namespace rivan::ui {
 
+enum class TrackMetadataField : std::uint8_t;
 enum class PlaybackState : std::uint8_t { Stopped, Playing, Paused };
 enum class RepeatMode : std::uint8_t { Off, All, One };
 enum class SettingCategory : std::uint8_t {
     General,
+    Library,
+    Modules,
     Appearance,
-    Discord,
-    Online,
+    Integrations,
     SkinManager,
 };
 enum class SkinAssetKind : std::uint8_t { BackgroundImage, Font };
@@ -326,6 +328,10 @@ public:
     virtual void RenameTrackAt(std::size_t index, std::wstring name) = 0;
     // Lets Windows' media property handler embed selected image art in audio files.
     virtual void ChangeTracksCover(std::span<const std::size_t> indices) = 0;
+    // Writes a text metadata property on the selected audio files.
+    virtual void ChangeTrackMetadata(std::span<const std::size_t> indices,
+                                     ui::TrackMetadataField field,
+                                     const std::wstring& value) = 0;
     // Duplicates the entries at the given positions in the selected user playlist. When
     // the duplicate-as-file setting is on, copies the underlying files on disk instead of
     // adding a second reference.

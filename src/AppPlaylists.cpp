@@ -1,6 +1,7 @@
 // AppPlaylists.cpp
 // Playlist and track editing, filesystem operations, and file-selection dialogs.
 #include "App.h"
+#include "ui/Win32Ui.MetadataEditor.h"
 
 #include "core/FileSystemUtil.h"
 
@@ -14,36 +15,51 @@
 #pragma comment(lib, "shlwapi.lib")
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <span>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace rivan {
 namespace {
 
+struct AudioReleaseGuard {
+    bool released{};
+    std::filesystem::path filePath;
+    std::chrono::nanoseconds position{};
+    bool wasPlaying{};
+};
+
 HRESULT WriteCoverArt(const std::filesystem::path& track, const std::filesystem::path& image) {
-    Microsoft::WRL::ComPtr<IPropertyStore> properties;
-    HRESULT result = SHGetPropertyStoreFromParsingName(
-        track.c_str(), nullptr, GPS_READWRITE, IID_PPV_ARGS(properties.GetAddressOf()));
-    if (FAILED(result)) return result;
+    // Only try IPropertyStore for formats Windows handles natively.
+    if (ui::HandledByWindowsPropertyStore(track.wstring())) {
+        Microsoft::WRL::ComPtr<IPropertyStore> properties;
+        HRESULT result = SHGetPropertyStoreFromParsingName(
+            track.c_str(), nullptr, GPS_READWRITE, IID_PPV_ARGS(properties.GetAddressOf()));
+        if (SUCCEEDED(result)) {
+            Microsoft::WRL::ComPtr<IStream> stream;
+            result = SHCreateStreamOnFileEx(image.c_str(), STGM_READ | STGM_SHARE_DENY_WRITE,
+                                            FILE_ATTRIBUTE_NORMAL, FALSE, nullptr,
+                                            stream.GetAddressOf());
+            if (SUCCEEDED(result)) {
+                PROPVARIANT value{};
+                value.vt = VT_UNKNOWN;
+                value.punkVal = stream.Get();
+                value.punkVal->AddRef();
+                result = properties->SetValue(PKEY_ThumbnailStream, value);
+                if (SUCCEEDED(result)) result = properties->Commit();
+                PropVariantClear(&value);
+                if (SUCCEEDED(result)) return S_OK;
+            }
+        }
+    }
 
-    Microsoft::WRL::ComPtr<IStream> stream;
-    result = SHCreateStreamOnFileEx(image.c_str(), STGM_READ | STGM_SHARE_DENY_WRITE,
-                                    FILE_ATTRIBUTE_NORMAL, FALSE, nullptr,
-                                    stream.GetAddressOf());
-    if (FAILED(result)) return result;
-
-    PROPVARIANT value{};
-    value.vt = VT_UNKNOWN;
-    value.punkVal = stream.Get();
-    value.punkVal->AddRef();
-    result = properties->SetValue(PKEY_ThumbnailStream, value);
-    if (SUCCEEDED(result)) result = properties->Commit();
-    PropVariantClear(&value);
-    return result;
+    // IPropertyStore unavailable or failed – try ffmpeg fallback.
+    return ui::WriteCoverArtFfmpeg(track.wstring(), image.wstring()) ? S_OK : E_FAIL;
 }
 
 } // namespace
@@ -306,13 +322,49 @@ void App::ChangeTracksCover(std::span<const std::size_t> indices) {
     const auto image = PickCoverImage();
     if (image.empty()) return;
 
+    // --- Audio release for playing track ---
+    AudioReleaseGuard guard;
+    if (activeTrack_ && audio_.Live().hasMedia) {
+        for (const auto index : indices) {
+            const auto id = TrackIdAtIndex(index);
+            if (id && activeTrack_->id == *id) {
+                const auto live = audio_.Live();
+                guard.wasPlaying = live.state == audio::PlaybackState::Playing;
+                guard.position = live.position;
+                guard.filePath = activeTrack_->filePath;
+                audio_.Pause();
+                audio_.Load(L"__RIVAN_EDIT__");
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    const auto status = audio_.Status();
+                    if (!status.hasMedia && status.state == audio::PlaybackState::Error) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                guard.released = true;
+                break;
+            }
+        }
+    }
+    // --- End audio release ---
+
     bool changed = false;
     for (const auto index : indices) {
         const auto id = TrackIdAtIndex(index);
         const auto* track = id ? playlists_.FindTrack(*id) : nullptr;
         if (track == nullptr || !library::Track::IsAudioFile(track->filePath)) continue;
-        changed = SUCCEEDED(WriteCoverArt(track->filePath, image)) || changed;
+        if (!SUCCEEDED(WriteCoverArt(track->filePath, image))) continue;
+        changed = true;
+        // Cover art is not stored in the Track model — no in-memory update needed.
     }
+
+    // --- Restore audio after edit ---
+    if (guard.released) {
+        audio_.Load(guard.filePath);
+        audio_.Seek(guard.position);
+        if (guard.wasPlaying) audio_.Play();
+    }
+    // --- End restore ---
+
     if (!changed) {
         if (window_ && window_->WindowHandle()) {
             MessageBoxW(window_->WindowHandle(),
@@ -321,6 +373,79 @@ void App::ChangeTracksCover(std::span<const std::size_t> indices) {
         }
         return;
     }
+    // No need to ReseedSelectedUserQueue/SaveUserPlaylists — Track model unchanged.
+    ++revision_;
+    if (window_) window_->Refresh();
+}
+
+void App::ChangeTrackMetadata(std::span<const std::size_t> indices,
+                              ui::TrackMetadataField field,
+                              const std::wstring& value) {
+    // --- Audio release for playing track ---
+    AudioReleaseGuard guard;
+    if (activeTrack_ && audio_.Live().hasMedia) {
+        for (const auto index : indices) {
+            const auto id = TrackIdAtIndex(index);
+            if (id && activeTrack_->id == *id) {
+                const auto live = audio_.Live();
+                guard.wasPlaying = live.state == audio::PlaybackState::Playing;
+                guard.position = live.position;
+                guard.filePath = activeTrack_->filePath;
+                audio_.Pause();
+                audio_.Load(L"__RIVAN_EDIT__");
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    const auto status = audio_.Status();
+                    if (!status.hasMedia && status.state == audio::PlaybackState::Error) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                guard.released = true;
+                break;
+            }
+        }
+    }
+    // --- End audio release ---
+
+    bool changed = false;
+    for (const auto index : indices) {
+        const auto id = TrackIdAtIndex(index);
+        const auto* track = id ? playlists_.FindTrack(*id) : nullptr;
+        if (track == nullptr || !library::Track::IsAudioFile(track->filePath)) continue;
+        if (!ui::WriteTrackMetadataValue(track->filePath.wstring(), field, value)) continue;
+        changed = true;
+
+        // Update in-memory track: copy original, patch edited field, preserve duration/bitrate
+        auto replacement = *track;
+        switch (field) {
+        case ui::TrackMetadataField::Author: replacement.artist = value; break;
+        case ui::TrackMetadataField::Album:  replacement.album = value; break;
+        default: break; // Genre/Year not stored in Track model
+        }
+        (void)playlists_.ReplaceTrack(*id, replacement);
+        if (activeTrack_ && activeTrack_->id == *id) {
+            activeTrack_ = replacement;
+            selectedTrack_ = replacement.id;
+        }
+    }
+
+    // --- Restore audio after edit ---
+    if (guard.released) {
+        audio_.Load(guard.filePath);
+        audio_.Seek(guard.position);
+        if (guard.wasPlaying) audio_.Play();
+    }
+    // --- End restore ---
+
+    if (!changed) {
+        if (window_ && window_->WindowHandle()) {
+            MessageBoxW(window_->WindowHandle(),
+                        L"Could not update metadata for selected audio file(s).",
+                        L"Rivan", MB_OK | MB_ICONWARNING);
+        }
+        return;
+    }
+    ReseedSelectedUserQueue();
+    SaveUserPlaylists();
     ++revision_;
     if (window_) window_->Refresh();
 }

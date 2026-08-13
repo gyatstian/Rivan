@@ -113,6 +113,9 @@ public:
                               std::span<const std::size_t> indices) override;
     void RenameTrackAt(std::size_t index, std::wstring name) override;
     void ChangeTracksCover(std::span<const std::size_t> indices) override;
+    void ChangeTrackMetadata(std::span<const std::size_t> indices,
+                             ui::TrackMetadataField field,
+                             const std::wstring& value) override;
     void DuplicateTracksAt(std::span<const std::size_t> indices) override;
     void ReorderUserPlaylist(std::uint64_t id, std::uint64_t beforeId) override;
     void MovePlaylistInto(std::uint64_t id, std::uint64_t parentId) override;

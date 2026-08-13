@@ -337,8 +337,18 @@ public:
             Check(attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, FALSE),
                   "IMFAttributes::SetUINT32(MF_READWRITE_DISABLE_CONVERTERS)");
 
-            Check(MFCreateSourceReaderFromURL(file.c_str(), attributes.Get(), &reader_),
-                  "MFCreateSourceReaderFromURL");
+            // Open byte stream with write-sharing so metadata/cover edits can
+            // replace the file while playing (copy overwrite works; rename
+            // still needs delete-share, so callers fall back to copy).
+            ComPtr<IMFByteStream> stream;
+            Check(MFCreateFile(MF_ACCESSMODE_READ,
+                               MF_OPENMODE_FAIL_IF_NOT_EXIST,
+                               MF_FILEFLAGS_ALLOW_WRITE_SHARING,
+                               file.c_str(),
+                               stream.GetAddressOf()),
+                  "MFCreateFile");
+            Check(MFCreateSourceReaderFromByteStream(stream.Get(), attributes.Get(), &reader_),
+                  "MFCreateSourceReaderFromByteStream");
             Check(reader_->SetStreamSelection(kAllStreams, FALSE),
                   "IMFSourceReader::SetStreamSelection(all)");
             Check(reader_->SetStreamSelection(kFirstAudioStream, TRUE),

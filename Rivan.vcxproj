@@ -169,6 +169,7 @@
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Color.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Input.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Rendering.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.MetadataEditor.cpp" />
     <ClCompile Include="src\ui\layout\ModuleLayout.cpp" />
     <ClCompile Include="src\ui\layout\ModuleDropZones.cpp" />
     <ClCompile Include="src\ui\layout\ModuleLayoutSnapping.cpp" />

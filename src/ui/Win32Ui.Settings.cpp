@@ -5,6 +5,10 @@
 namespace rivan::ui {
 namespace {
 
+constexpr float kSettingsCategoryGap = 7.0F;
+constexpr float kSettingsSectionGap = 10.0F;
+constexpr float kSettingsSectionPadding = 6.0F;
+
 std::wstring YoutubeGrabberHotkeyLabel(std::uint32_t modifiers,
                                        std::uint32_t virtualKey) {
     std::wstring label;
@@ -39,27 +43,31 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
     const auto navigation = Rect(content.left + 3, content.top + 31,
                                  content.left + navigationWidth, content.bottom - 3);
     DrawBevel(navigation, b[5].Get(), b[3].Get(), b[4].Get(), true);
-    const std::array categories{SettingCategory::General, SettingCategory::Appearance,
-                                SettingCategory::Discord, SettingCategory::Online,
-                                SettingCategory::SkinManager};
-    float top = navigation.top + 5;
+    const std::array categories{SettingCategory::General, SettingCategory::Library,
+                                SettingCategory::Modules, SettingCategory::Appearance,
+                                SettingCategory::Integrations, SettingCategory::SkinManager};
+    const float categoryLeft = navigation.left;
+    const float categoryRight = navigation.right;
+    const float categoryTop = navigation.top + 5;
+    float top = categoryTop;
     for (const auto category : categories) {
-        const auto row = Rect(navigation.left + 4, top, navigation.right - 4, top + 25);
+        if (top > categoryTop) {
+            target->FillRectangle(Rect(categoryLeft, top - kSettingsCategoryGap,
+                                       categoryRight, top), b[0].Get());
+        }
+        const auto row = Rect(categoryLeft, top, categoryRight, top + 25);
         const bool selected = category == model.settingsCategory;
         if (selected) target->FillRectangle(row, b[11].Get());
         DrawText(CategoryName(category), Rect(row.left + 6, row.top, row.right - 4, row.bottom),
                  selected ? b[12].Get() : b[6].Get(), regularFormat.Get());
         AddSettingHit(row, category);
-        top += 27;
+        top += 25 + kSettingsCategoryGap;
     }
     const auto details = Rect(navigation.right + 7, navigation.top, content.right - 3, content.bottom - 3);
     settingsDetailsBounds = details;
     DrawBevel(details, b[5].Get(), b[3].Get(), b[4].Get(), true);
-    const bool integrationCategory = model.settingsCategory == SettingCategory::General ||
-                                     model.settingsCategory == SettingCategory::Appearance ||
-                                     model.settingsCategory == SettingCategory::Discord ||
-                                     model.settingsCategory == SettingCategory::Online;
-    if (!integrationCategory) {
+    const bool isSkinManager = model.settingsCategory == SettingCategory::SkinManager;
+    if (isSkinManager) {
         DrawText(CategoryName(model.settingsCategory), Rect(details.left + 15, details.top + 13,
                  details.right - 15, details.top + 42), b[6].Get(), headingFormat.Get());
     }
@@ -69,27 +77,11 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
     }
     settingsSkinListBounds = {};
     settingsSkinRows = 0;
-    if (integrationCategory) {
-        DrawGeneralPane(details, b);
-        return;
-    }
-    settingsScrollY = 0.0F;
-    settingsContentHeight = 0.0F;
-    DrawText(L"Settings values and persistence are owned by the application core.",
-             Rect(details.left + 15, details.top + 53, details.right - 15, details.top + 78),
-             b[9].Get(), regularFormat.Get());
-    DrawText(L"This classic control surface keeps the existing validated callback seam.",
-             Rect(details.left + 15, details.top + 79, details.right - 15, details.top + 105),
-             b[10].Get(), smallFormat.Get());
-    DrawBevel(Rect(details.left + 15, details.bottom - 48, details.right - 15, details.bottom - 16),
-              b[1].Get(), b[3].Get(), b[4].Get());
-    DrawText(L"CALLBACK INTERFACE: ONLINE", Rect(details.left + 20, details.bottom - 48,
-             details.right - 20, details.bottom - 16), b[8].Get(), regularFormat.Get(),
-             DWRITE_TEXT_ALIGNMENT_CENTER);
+    DrawSettingsPane(details, b);
 }
 
-void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
-                                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+void Win32Ui::Impl::DrawSettingsPane(const D2D1_RECT_F& details,
+                                     std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
     const float left = details.left + 15;
     const float right = details.right - 15;
     const float contentTop = details.top + 15;
@@ -97,196 +89,31 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
     const float viewportHeight = std::max(0.0F, viewportBottom - contentTop);
     const float maxScroll = std::max(0.0F, settingsContentHeight - viewportHeight);
     settingsScrollY = std::clamp(settingsScrollY, 0.0F, maxScroll);
-    target->PushAxisAlignedClip(Rect(details.left + 2, contentTop, details.right - 2, viewportBottom),
+    target->PushAxisAlignedClip(Rect(details.left, contentTop, details.right, viewportBottom),
                                 D2D1_ANTIALIAS_MODE_ALIASED);
-    float y = contentTop - settingsScrollY;
+    float y = contentTop - settingsScrollY + kSettingsSectionPadding;
 
-    if (model.settingsCategory == SettingCategory::General) {
-        DrawText(L"WINDOWS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
-                 DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        const float optionWidth = (right - left - 8) * 0.5F;
-        SettingsButton(Rect(left, y, left + optionWidth, y + 24),
-                       model.startAtStartup ? L"START AT STARTUP: ON" : L"START AT STARTUP: OFF", 15, b);
-        SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24),
-                       model.exitToTray ? L"EXIT TO TRAY: ON" : L"EXIT TO TRAY: OFF", 16, b);
-        y += 34;
-
-        const auto field = [&](const wchar_t* caption, const std::wstring& value,
-                               std::size_t index, bool allowClear) {
-            if (caption && *caption) {
-                DrawText(caption, Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
-                         DWRITE_TEXT_ALIGNMENT_CENTER);
-                y += 29;
-            } else {
-                y += 4;
-            }
-            const float browseWidth = 78.0F;
-            const float clearWidth = allowClear ? 60.0F : 0.0F;
-            const auto box = Rect(left, y, right - browseWidth - clearWidth - 8, y + 24);
-            DrawBevel(box, b[5].Get(), b[3].Get(), b[4].Get(), true, 2.0F);
-            DrawText(value.empty() ? L"(not set)" : value, Rect(box.left + 5, box.top, box.right - 4, box.bottom),
-                     value.empty() ? b[10].Get() : b[6].Get(), regularFormat.Get());
-            SettingsButton(Rect(right - browseWidth - clearWidth - 4, y,
-                                right - clearWidth - 4, y + 24), L"BROWSE...", 100 + index, b);
-            if (allowClear) SettingsButton(Rect(right - clearWidth, y, right, y + 24), L"CLEAR", 200 + index, b);
-            y += 28;
-        };
-        const std::wstring primary = model.musicFolders.empty() ? std::wstring{} : model.musicFolders[0];
-        field(L"MUSIC FOLDER", primary, 0, false);
-        if (!primary.empty()) {
-            for (std::size_t i = 1; i < model.musicFolders.size(); ++i) {
-                field(L"", model.musicFolders[i], i, true);
-            }
-            field(L"", L"", model.musicFolders.size(), false);
-        }
-        y += 10;
-        DrawText(L"FILE PREVIEW", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
-                 DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        SettingsButton(Rect(left, y, right, y + 24),
-                       model.filePreviewEnabled ? L"FILE PREVIEW: ON" : L"FILE PREVIEW: OFF", 14, b);
-        y += 26;
-        SettingsButton(Rect(left, y, right, y + 24),
-                       model.previewFitWindow ? L"FIT WINDOW TO VIDEO: ON" : L"FIT WINDOW TO VIDEO: OFF", 25, b);
-        y += 26;
-        DrawText(model.previewFitWindow ? L"Preview fullscreen grows the window to remove black bars."
-                                        : L"Preview fullscreen keeps the current window size.",
-                 Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 22;
-        DrawText(L"PLAYLISTS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
-                 DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        SettingsButton(Rect(left, y, right, y + 24),
-                       model.duplicateAsFile ? L"DUPLICATE: COPY FILE ON DISK" : L"DUPLICATE: ADD SECOND ENTRY", 17, b);
-        y += 26;
-        DrawText(model.duplicateAsFile ? L"Right-click > Duplicate copies the audio file and adds the copy."
-                                      : L"Right-click > Duplicate adds another reference to the same track.",
-                 Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 22;
-    }
-
-    if (model.settingsCategory == SettingCategory::Appearance) {
-        DrawText(L"MODULE VISIBILITY", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
-                 DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        const auto moduleLabel = [this](ModuleId id) {
-            const auto* item = model.moduleLayout.Find(id);
-            std::wstring label(UiModuleRegistry::Get(id).Title());
-            label += item && item->visible ? L": ON" : L": OFF";
-            return label;
-        };
-        constexpr std::array moduleIds{ModuleId::Rivan, ModuleId::AllMusic,
-                                        ModuleId::GraphicEqualizer, ModuleId::RivanLibrary,
-                                        ModuleId::VideoPreview, ModuleId::Lyrics};
-        for (std::size_t i = 0; i < moduleIds.size(); i += 2) {
-            const float optionWidth = (right - left - 8.0F) * 0.5F;
-            SettingsButton(Rect(left, y, left + optionWidth, y + 24), moduleLabel(moduleIds[i]), 60 + i, b);
-            if (i + 1 < moduleIds.size()) {
-                SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24), moduleLabel(moduleIds[i + 1]), 60 + i + 1, b);
-            }
-            y += 30;
-        }
-        SettingsButton(Rect(left, y, right, y + 24), L"RESET MODULE LAYOUT", 66, b);
-        y += 34;
-        DrawText(L"Drag a title to move. Center drops create tabs; side drops snap.", Rect(left, y, right, y + 28), b[6].Get(), tinyFormat.Get());
-        y += 36;
-        DrawText(L"EXPANDING BEHAVIOR ON NO SPACE", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        SettingsButton(Rect(left, y, right, y + 24),
-                       model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash ? L"ON EXPAND: SQUASH" : L"ON EXPAND: RESIZE", 67, b);
-        y += 26;
-        DrawText(model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
-                     ? L"Shrinks other modules to make room."
-                     : L"Grows window, then restores size after collapse.",
-                  Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 22;
-        DrawText(L"WINDOW RESIZE BEHAVIOR", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
-                 DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        SettingsButton(Rect(left, y, right, y + 24),
-                       model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
-                           ? L"RESIZE: SCALE ALL" : L"RESIZE: GROW TRAILING MODULE", 68, b);
-        y += 26;
-        DrawText(model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
-                     ? L"All modules keep their proportions as the window changes."
-                     : L"The module touching the resized edge absorbs available space.",
-                  Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 22;
-        DrawText(L"MODULE RESIZE COLLISIONS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
-                 DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        SettingsButton(Rect(left, y, right, y + 24),
-                       model.moduleResizeBehavior == ModuleResizeBehavior::Squash
-                           ? L"RESIZE: SQUASH OCCUPIED" : L"RESIZE: ALLOW OVERLAP", 69, b);
-        y += 26;
-        DrawText(model.moduleResizeBehavior == ModuleResizeBehavior::Squash
-                     ? L"The resized module takes space from modules in its path."
-                     : L"The resized module may overlap other modules.",
-                 Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 22;
-        DrawSongRowLayoutEditor(left, right, y, b);
-    }
-
-    if (model.settingsCategory == SettingCategory::Discord) {
-        DrawText(L"DISCORD", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        SettingsButton(Rect(left, y, right, y + 24), model.discordEnabled ? L"RICH PRESENCE: ON" : L"RICH PRESENCE: OFF", 18, b);
-        y += 26;
-        DrawText(L"Shows the playing track in Discord. Needs Discord desktop running.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 20;
-        const float optionWidth = (right - left - 8) * 0.5F;
-        SettingsButton(Rect(left, y, left + optionWidth, y + 24), model.discordShowArtist ? L"SHOW ARTIST: ON" : L"SHOW ARTIST: OFF", 20, b);
-        SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24), model.discordShowImageText ? L"IMAGE TEXT: RIVAN" : L"IMAGE TEXT: OFF", 21, b);
-        y += 34;
-        SettingsButton(Rect(left, y, right, y + 24), model.discordShowGithubButton ? L"GITHUB BUTTON: ON" : L"GITHUB BUTTON: OFF", 23, b);
-        y += 26;
-        DrawText(L"Visible to other users only; links to https://github.com/gyatstian/Rivan.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 22;
-    }
-
-    if (model.settingsCategory == SettingCategory::Online) {
-        DrawText(L"LYRICS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        SettingsButton(Rect(left, y, right, y + 24),
-                       model.lyricsCacheEnabled ? L"SAVE FETCHED LYRICS: ON" : L"SAVE FETCHED LYRICS: OFF", 7, b);
-        y += 26;
-        DrawText(L"Stores fetched lyrics locally for offline retrieval.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 28;
-        DrawText(L"YOUTUBE", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
-        y += 29;
-        SettingsButton(Rect(left, y, right, y + 24), model.youtubeEnabled ? L"YOUTUBE DOWNLOADER: ON" : L"YOUTUBE DOWNLOADER: OFF", 4, b);
-        y += 30;
-        std::wstring hotkeyLabel = youtubeGrabberHotkeyCapture
-            ? (youtubeGrabberHotkeyCaptureFailed ? L"HOTKEY UNAVAILABLE — TRY ANOTHER" : L"PRESS A SHORTCUT...")
-            : L"LINK GRABBER HOTKEY: " +
-                  YoutubeGrabberHotkeyLabel(model.youtubeGrabberHotkeyModifiers,
-                                            model.youtubeGrabberHotkeyVirtualKey);
-        if (!youtubeGrabberHotkeyCapture && model.youtubeEnabled &&
-            !model.youtubeGrabberHotkeyAvailable) {
-            hotkeyLabel += L" (UNAVAILABLE)";
-        }
-        SettingsButton(Rect(left, y, right, y + 24), hotkeyLabel, 24, b);
-        y += 26;
-        DrawText(model.youtubeGrabberHotkeyAvailable || !model.youtubeEnabled
-                     ? L"Uses the active browser address. Works while Rivan is minimized or in tray."
-                     : L"Click to choose an available global shortcut.",
-                 Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
-        y += 22;
-        const bool showYtInstall = !model.youtubeYtDlpInstalled || model.youtubeInstallingYtDlp;
-        const bool showFfInstall = !model.youtubeFfmpegInstalled || model.youtubeInstallingFfmpeg;
-        if (showYtInstall || showFfInstall) {
-            const wchar_t* yt = model.youtubeInstallingYtDlp ? L"INSTALLING YT-DLP..." : L"INSTALL YT-DLP";
-            const wchar_t* ff = model.youtubeInstallingFfmpeg ? L"INSTALLING FFMPEG..." : L"INSTALL FFMPEG";
-            if (showYtInstall && showFfInstall) {
-                const float width = (right - left - 8) * 0.5F;
-                SettingsButton(Rect(left, y, left + width, y + 24), yt, 5, b);
-                SettingsButton(Rect(left + width + 8, y, right, y + 24), ff, 6, b);
-            } else SettingsButton(Rect(left, y, right, y + 24), showYtInstall ? yt : ff, showYtInstall ? 5 : 6, b);
-            y += 28;
-        }
+    switch (model.settingsCategory) {
+    case SettingCategory::General:
+        DrawWindowsSection(left, right, y, b);
+        break;
+    case SettingCategory::Library:
+        DrawLibrarySection(left, right, y, b);
+        break;
+    case SettingCategory::Modules:
+        DrawModulesSection(left, right, y, b);
+        break;
+    case SettingCategory::Appearance:
+        DrawAppearanceSection(left, right, y, b);
+        break;
+    case SettingCategory::Integrations:
+        DrawIntegrationsSection(left, right, y, b);
+        break;
+    case SettingCategory::SkinManager:
+        break;
     }
     target->PopAxisAlignedClip();
+    y += kSettingsSectionPadding;
     settingsContentHeight = (y + settingsScrollY) - contentTop + 8.0F;
     const float contentMax = std::max(0.0F, settingsContentHeight - viewportHeight);
     settingsScrollY = std::clamp(settingsScrollY, 0.0F, contentMax);
@@ -300,6 +127,221 @@ void Win32Ui::Impl::DrawGeneralPane(const D2D1_RECT_F& details,
         const float thumbY = trackTop + (settingsScrollY / contentMax) * (trackHeight - thumbHeight);
         target->FillRectangle(Rect(trackLeft + 1.0F, thumbY, details.right - 4.0F, thumbY + thumbHeight), b[8].Get());
     }
+}
+
+void Win32Ui::Impl::DrawSettingsSectionGap(float& y,
+                                           std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    y += kSettingsSectionPadding;
+    target->FillRectangle(Rect(settingsDetailsBounds.left, y,
+                               settingsDetailsBounds.right,
+                               y + kSettingsSectionGap), b[0].Get());
+    y += kSettingsSectionGap + kSettingsSectionPadding;
+}
+
+void Win32Ui::Impl::DrawWindowsSection(const float left, const float right, float& y,
+                                       std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    DrawText(L"WINDOWS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+             DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    const float optionWidth = (right - left - 8) * 0.5F;
+    SettingsButton(Rect(left, y, left + optionWidth, y + 24),
+                   model.startAtStartup ? L"START AT STARTUP: ON" : L"START AT STARTUP: OFF", 15, b);
+    SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24),
+                   model.exitToTray ? L"EXIT TO TRAY: ON" : L"EXIT TO TRAY: OFF", 16, b);
+    y += 34;
+}
+
+void Win32Ui::Impl::DrawLibrarySection(const float left, const float right, float& y,
+                                       std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    // Music folder list. Show every configured root, then one empty slot so the next
+    // folder can be chosen. After each choice another empty slot appears (no limit).
+    // Subfolders of all roots become playlists.
+    DrawText(L"MUSIC FOLDER(S)", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+             DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    const auto field = [&](const wchar_t* caption, const std::wstring& value,
+                           std::size_t index, bool allowClear) {
+        if (caption && *caption) {
+            DrawText(caption, Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+                     DWRITE_TEXT_ALIGNMENT_CENTER);
+            y += 29;
+        } else {
+            y += 4;
+        }
+        const float browseWidth = 78.0F;
+        const float clearWidth = allowClear ? 60.0F : 0.0F;
+        const auto box = Rect(left, y, right - browseWidth - clearWidth - 8, y + 24);
+        DrawBevel(box, b[5].Get(), b[3].Get(), b[4].Get(), true, 2.0F);
+        DrawText(value.empty() ? L"(not set)" : value, Rect(box.left + 5, box.top, box.right - 4, box.bottom),
+                 value.empty() ? b[10].Get() : b[6].Get(), regularFormat.Get());
+        SettingsButton(Rect(right - browseWidth - clearWidth - 4, y,
+                            right - clearWidth - 4, y + 24), L"BROWSE...", 100 + index, b);
+        if (allowClear) SettingsButton(Rect(right - clearWidth, y, right, y + 24), L"CLEAR", 200 + index, b);
+        y += 28;
+    };
+    const std::wstring primary = model.musicFolders.empty() ? std::wstring{} : model.musicFolders[0];
+    field(nullptr, primary, 0, false);
+    if (!primary.empty()) {
+        for (std::size_t i = 1; i < model.musicFolders.size(); ++i) {
+            field(nullptr, model.musicFolders[i], i, true);
+        }
+        field(nullptr, L"", model.musicFolders.size(), false);
+    }
+    y += 4;
+    DrawSettingsSectionGap(y, b);
+    DrawText(L"FILE PREVIEW", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+             DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.filePreviewEnabled ? L"FILE PREVIEW: ON" : L"FILE PREVIEW: OFF", 14, b);
+    y += 26;
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.previewFitWindow ? L"FIT WINDOW TO VIDEO: ON" : L"FIT WINDOW TO VIDEO: OFF", 25, b);
+    y += 26;
+    DrawText(model.previewFitWindow ? L"Preview fullscreen grows the window to remove black bars."
+                                    : L"Preview fullscreen keeps the current window size.",
+             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 16;
+    DrawSettingsSectionGap(y, b);
+    DrawText(L"PLAYLIST DUPLICATE", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+             DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.duplicateAsFile ? L"DUPLICATE: COPY FILE ON DISK" : L"DUPLICATE: ADD SECOND ENTRY", 17, b);
+    y += 26;
+    DrawText(model.duplicateAsFile ? L"Right-click > Duplicate copies the audio file and adds the copy."
+                                  : L"Right-click > Duplicate adds another reference to the same track.",
+             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 22;
+}
+
+void Win32Ui::Impl::DrawModulesSection(const float left, const float right, float& y,
+                                       std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    DrawText(L"MODULE VISIBILITY", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+             DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    const auto moduleLabel = [this](ModuleId id) {
+        const auto* item = model.moduleLayout.Find(id);
+        std::wstring label(UiModuleRegistry::Get(id).Title());
+        label += item && item->visible ? L": ON" : L": OFF";
+        return label;
+    };
+    constexpr std::array moduleIds{ModuleId::Rivan, ModuleId::AllMusic,
+                                    ModuleId::GraphicEqualizer, ModuleId::RivanLibrary,
+                                    ModuleId::VideoPreview, ModuleId::Lyrics};
+    for (std::size_t i = 0; i < moduleIds.size(); i += 2) {
+        const float optionWidth = (right - left - 8.0F) * 0.5F;
+        SettingsButton(Rect(left, y, left + optionWidth, y + 24), moduleLabel(moduleIds[i]), 60 + i, b);
+        if (i + 1 < moduleIds.size()) {
+            SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24), moduleLabel(moduleIds[i + 1]), 60 + i + 1, b);
+        }
+        y += 30;
+    }
+    SettingsButton(Rect(left, y, right, y + 24), L"RESET MODULE LAYOUT", 66, b);
+    y += 34;
+    DrawText(L"Drag a title to move. Center drops create tabs; side drops snap.", Rect(left, y, right, y + 28), b[6].Get(), tinyFormat.Get());
+    y += 30;
+    DrawSettingsSectionGap(y, b);
+    DrawText(L"EXPANDING BEHAVIOR ON NO SPACE", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash ? L"ON EXPAND: SQUASH" : L"ON EXPAND: RESIZE", 67, b);
+    y += 26;
+    DrawText(model.moduleExpansionBehavior == ModuleExpansionBehavior::Squash
+                 ? L"Shrinks other modules to make room."
+                 : L"Grows window, then restores size after collapse.",
+              Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 16;
+    DrawSettingsSectionGap(y, b);
+    DrawText(L"MODULE RESIZE COLLISIONS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+             DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.moduleResizeBehavior == ModuleResizeBehavior::Squash
+                       ? L"RESIZE: SQUASH OCCUPIED" : L"RESIZE: ALLOW OVERLAP", 69, b);
+    y += 26;
+    DrawText(model.moduleResizeBehavior == ModuleResizeBehavior::Squash
+                 ? L"The resized module takes space from modules in its path."
+                 : L"The resized module may overlap other modules.",
+             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 22;
+}
+
+void Win32Ui::Impl::DrawAppearanceSection(const float left, const float right, float& y,
+                                          std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    DrawText(L"WINDOW RESIZE BEHAVIOR", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(),
+             DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
+                       ? L"RESIZE: SCALE ALL" : L"RESIZE: GROW TRAILING MODULE", 68, b);
+    y += 26;
+    DrawText(model.windowResizeBehavior == WindowResizeBehavior::ScaleAll
+                 ? L"All modules keep their proportions as the window changes."
+                 : L"The module touching the resized edge absorbs available space.",
+             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 16;
+    DrawSettingsSectionGap(y, b);
+    DrawSongRowLayoutEditor(left, right, y, b);
+}
+
+void Win32Ui::Impl::DrawIntegrationsSection(const float left, const float right, float& y,
+                                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    DrawText(L"DISCORD", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24), model.discordEnabled ? L"RICH PRESENCE: ON" : L"RICH PRESENCE: OFF", 18, b);
+    y += 26;
+    DrawText(L"Shows the playing track in Discord. Needs Discord desktop running.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 20;
+    const float optionWidth = (right - left - 8) * 0.5F;
+    SettingsButton(Rect(left, y, left + optionWidth, y + 24), model.discordShowArtist ? L"SHOW ARTIST: ON" : L"SHOW ARTIST: OFF", 20, b);
+    SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24), model.discordShowImageText ? L"IMAGE TEXT: RIVAN" : L"IMAGE TEXT: OFF", 21, b);
+    y += 34;
+    SettingsButton(Rect(left, y, right, y + 24), model.discordShowGithubButton ? L"GITHUB BUTTON: ON" : L"GITHUB BUTTON: OFF", 23, b);
+    y += 26;
+    DrawText(L"Visible to other users only; links to https://github.com/gyatstian/Rivan.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 16;
+    DrawSettingsSectionGap(y, b);
+    DrawText(L"YOUTUBE", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24), model.youtubeEnabled ? L"YOUTUBE DOWNLOADER: ON" : L"YOUTUBE DOWNLOADER: OFF", 4, b);
+    y += 30;
+    std::wstring hotkeyLabel = youtubeGrabberHotkeyCapture
+        ? (youtubeGrabberHotkeyCaptureFailed ? L"HOTKEY UNAVAILABLE — TRY ANOTHER" : L"PRESS A SHORTCUT...")
+        : L"LINK GRABBER HOTKEY: " +
+              YoutubeGrabberHotkeyLabel(model.youtubeGrabberHotkeyModifiers,
+                                        model.youtubeGrabberHotkeyVirtualKey);
+    if (!youtubeGrabberHotkeyCapture && model.youtubeEnabled &&
+        !model.youtubeGrabberHotkeyAvailable) {
+        hotkeyLabel += L" (UNAVAILABLE)";
+    }
+    SettingsButton(Rect(left, y, right, y + 24), hotkeyLabel, 24, b);
+    y += 26;
+    DrawText(model.youtubeGrabberHotkeyAvailable || !model.youtubeEnabled
+                 ? L"Uses the active browser address. Works while Rivan is minimized or in tray."
+                 : L"Click to choose an available global shortcut.",
+             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 22;
+    const bool showYtInstall = !model.youtubeYtDlpInstalled || model.youtubeInstallingYtDlp;
+    const bool showFfInstall = !model.youtubeFfmpegInstalled || model.youtubeInstallingFfmpeg;
+    if (showYtInstall || showFfInstall) {
+        const wchar_t* yt = model.youtubeInstallingYtDlp ? L"INSTALLING YT-DLP..." : L"INSTALL YT-DLP";
+        const wchar_t* ff = model.youtubeInstallingFfmpeg ? L"INSTALLING FFMPEG..." : L"INSTALL FFMPEG";
+        if (showYtInstall && showFfInstall) {
+            const float width = (right - left - 8) * 0.5F;
+            SettingsButton(Rect(left, y, left + width, y + 24), yt, 5, b);
+            SettingsButton(Rect(left + width + 8, y, right, y + 24), ff, 6, b);
+        } else SettingsButton(Rect(left, y, right, y + 24), showYtInstall ? yt : ff, showYtInstall ? 5 : 6, b);
+        y += 28;
+    }
+    DrawSettingsSectionGap(y, b);
+    DrawText(L"LYRICS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.lyricsCacheEnabled ? L"SAVE FETCHED LYRICS: ON" : L"SAVE FETCHED LYRICS: OFF", 7, b);
+    y += 26;
+    DrawText(L"Stores fetched lyrics locally for offline retrieval.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 22;
 }
 
 void Win32Ui::Impl::DrawSongRowLayoutEditor(
@@ -667,11 +709,8 @@ void Win32Ui::Impl::DrawSkinManagerPane(const D2D1_RECT_F& details,
 void Win32Ui::Impl::SettingsButton(const D2D1_RECT_F& bounds, const std::wstring& label,
                                    std::uint64_t action,
                                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
-    const bool integrationCategory = model.settingsCategory == SettingCategory::General ||
-                                     model.settingsCategory == SettingCategory::Appearance ||
-                                     model.settingsCategory == SettingCategory::Discord ||
-                                     model.settingsCategory == SettingCategory::Online;
-    const float clipTop = settingsDetailsBounds.top + (integrationCategory ? 15.0F : 50.0F);
+    const bool isSkinManager = model.settingsCategory == SettingCategory::SkinManager;
+    const float clipTop = settingsDetailsBounds.top + (isSkinManager ? 50.0F : 15.0F);
     const float clipBottom = settingsDetailsBounds.bottom - 4.0F;
     const bool inViewport = windowKind != WindowKind::Settings ||
                             (bounds.bottom > clipTop && bounds.top < clipBottom);

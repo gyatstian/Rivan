@@ -1,6 +1,7 @@
 // Win32Ui.RowInteraction.cpp
 // Row and list scrolling for Win32Ui::Impl.
 #include "Win32UiImpl.h"
+#include "Win32Ui.MetadataEditor.h"
 
 #include <cmath>
 
@@ -540,10 +541,15 @@ void Win32Ui::Impl::ShowTrackContextMenu(std::size_t modelIndex) {
     AppendMenuW(menu, MF_STRING | (editable ? 0U : MF_GRAYED), 4, L"Duplicate");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 5, L"Rename");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     const bool hasAudio = std::any_of(trackSelection.begin(), trackSelection.end(), [this](std::size_t index) {
         return index < model.tracks.size() && model.tracks[index].audioFile;
     });
     AppendMenuW(menu, MF_STRING | (hasAudio ? 0U : MF_GRAYED), 6, L"Change cover");
+    AppendMenuW(menu, MF_STRING | (hasAudio ? 0U : MF_GRAYED), 8, L"Change author");
+    AppendMenuW(menu, MF_STRING | (hasAudio ? 0U : MF_GRAYED), 9, L"Change album");
+    AppendMenuW(menu, MF_STRING | (hasAudio ? 0U : MF_GRAYED), 10, L"Change genre");
+    AppendMenuW(menu, MF_STRING | (hasAudio ? 0U : MF_GRAYED), 11, L"Change year");
     const bool hasPath = modelIndex < model.tracks.size() && !model.tracks[modelIndex].filePath.empty();
     AppendMenuW(menu, MF_STRING | (hasPath ? 0U : MF_GRAYED), 7, L"Reveal in Explorer");
 
@@ -577,6 +583,14 @@ void Win32Ui::Impl::ShowTrackContextMenu(std::size_t modelIndex) {
                 trackCoverCache.clear();
                 trackCoverUseCounter = 0;
                 nextTrackCoverLookup = {};
+            }
+        } else if (command >= 8 && command <= 11) {
+            if (!indices.empty()) {
+                const auto field = static_cast<ui::TrackMetadataField>(command - 8);
+                std::wstring value;
+                if (ui::PromptTrackMetadataValue(window, field, value)) {
+                    host.ChangeTrackMetadata(indices, field, value);
+                }
             }
         } else if (command == 7 && hasPath) {
             const std::wstring arguments = L"/select,\"" + model.tracks[modelIndex].filePath + L"\"";

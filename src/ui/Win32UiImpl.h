@@ -211,9 +211,10 @@ void ColorToHsv(skin::Color color, float& hue, float& saturation, float& value) 
 [[nodiscard]] const wchar_t* CategoryName(SettingCategory category) noexcept {
     switch (category) {
     case SettingCategory::General: return L"GENERAL";
+    case SettingCategory::Library: return L"LIBRARY";
+    case SettingCategory::Modules: return L"MODULES";
     case SettingCategory::Appearance: return L"APPEARANCE";
-    case SettingCategory::Discord: return L"DISCORD";
-    case SettingCategory::Online: return L"ONLINE";
+    case SettingCategory::Integrations: return L"INTEGRATIONS";
     case SettingCategory::SkinManager: return L"SKIN MANAGER";
     }
     return L"SETTINGS";
@@ -606,11 +607,22 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void DrawYoutubeChooser(const D2D1_SIZE_F size,
                             std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
 
-    // General pane: music folder list. Show every configured root, then one empty
-    // slot so the next folder can be chosen. After each choice another empty slot
-    // appears (no limit). Subfolders of all roots become playlists.
-    void DrawGeneralPane(const D2D1_RECT_F& details,
-                         std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    // Settings detail pane: category-name heading when the pane has no per-section header.
+    void DrawSettingsPane(const D2D1_RECT_F& details,
+                          std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawSettingsSectionGap(float& y,
+                                std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    // Per-category section drawers (called from DrawSettingsPane).
+    void DrawWindowsSection(float left, float right, float& y,
+                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawLibrarySection(float left, float right, float& y,
+                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawModulesSection(float left, float right, float& y,
+                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawAppearanceSection(float left, float right, float& y,
+                               std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawIntegrationsSection(float left, float right, float& y,
+                                 std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
 
     // Skin Manager pane: two side-by-side actions on top (open the skin studio / open the
     // skins folder), and a scrollable-ish list of saved and built-in skins below. Clicking
