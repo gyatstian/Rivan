@@ -5,6 +5,7 @@
 #include "../visualization/Visualization.h"
 #include "../youtube/YoutubeService.h"
 #include "../lyrics/LyricsService.h"
+#include "../stats/StatsDashboard.h"
 #include "layout/ModuleLayout.h"
 #include "SongRowLayout.h"
 
@@ -28,6 +29,7 @@ enum class SettingCategory : std::uint8_t {
     Modules,
     Appearance,
     Integrations,
+    Statistics,
     SkinManager,
 };
 enum class SkinAssetKind : std::uint8_t { BackgroundImage, Font };
@@ -119,6 +121,42 @@ struct SkinSummary {
     bool active{};
 };
 
+struct StatisticsTrackView {
+    std::uint64_t id{};
+    std::wstring title;
+    std::wstring artist;
+    // Current catalog path used exclusively for cover-art lookup. Empty means a
+    // historical/missing track, which the view renders with its no-cover fallback.
+    std::wstring filePath;
+    std::uint64_t plays{};
+    std::uint64_t seconds{};
+};
+
+struct StatisticsArtistView {
+    std::wstring name;
+    std::uint64_t plays{};
+    std::uint64_t seconds{};
+    std::size_t trackCount{};
+};
+
+struct StatisticsDashboardView {
+    stats::DashboardPeriod period{stats::DashboardPeriod::Week};
+    std::uint64_t plays{};
+    std::uint64_t seconds{};
+    std::size_t differentTracks{};
+    std::vector<StatisticsTrackView> tracks;
+    std::vector<StatisticsArtistView> artists;
+    bool tracksExpanded{};
+    bool artistsExpanded{};
+    std::size_t tracksPage{};
+    std::size_t artistsPage{};
+    bool tracksCanPagePrevious{};
+    bool tracksCanPageNext{};
+    bool artistsCanPagePrevious{};
+    bool artistsCanPageNext{};
+    std::uint64_t generation{};
+};
+
 struct UiModel {
     std::vector<PlaylistView> playlists;
     // Tracks shown in the current folder / playlist pane.
@@ -156,6 +194,8 @@ struct UiModel {
     std::uint32_t youtubeGrabberHotkeyModifiers{};
     std::uint32_t youtubeGrabberHotkeyVirtualKey{};
     bool lyricsCacheEnabled{};
+    bool statsEnabled{true};
+    StatisticsDashboardView statistics;
     lyrics::LyricsSnapshot lyrics;
     // Discord Rich Presence preference (IPC worker runs only when true).
     bool discordEnabled{};
@@ -183,6 +223,10 @@ struct UiModel {
     std::uint64_t youtubeChooserEntryId{};
     std::optional<youtube::YoutubeProbe> youtubeProbe;
     youtube::YoutubeDownloadSelection youtubeDownloadSelection;
+    // Transient state for the separate GitHub release update notifier window.
+    bool updateNotifierVisible{};
+    std::wstring updateCurrentVersion;
+    std::wstring updateLatestVersion;
     std::vector<SkinSummary> skins;
     skin::Skin activeSkin{skin::Skin::BuiltInDarkPurple()};
     visualization::VisualizationSnapshot visualization;
@@ -241,6 +285,9 @@ public:
     virtual void SetMusicFolder(std::size_t index, std::filesystem::path folder) = 0;
     // Persists normalized song-row geometry and field styling shared by library rows.
     virtual void SetSongRowLayout(SongRowLayout layout) = 0;
+    // Live-updates song-row layout without persisting; used while dragging fields
+    // in the layout editor. Final drag release persists via SetSongRowLayout.
+    virtual void PreviewSongRowLayout(SongRowLayout layout) = 0;
     // Off removes preview state and prevents metadata/video work in the view.
     virtual void SetFilePreviewEnabled(bool enabled) = 0;
     virtual void SetPreviewFitWindow(bool enabled) = 0;
@@ -255,6 +302,13 @@ public:
     [[nodiscard]] virtual bool SetYoutubeGrabberHotkey(std::uint32_t modifiers,
                                                        std::uint32_t virtualKey) = 0;
     virtual void SetLyricsCacheEnabled(bool enabled) = 0;
+    // Enables/disables local listen statistics (plays + listened seconds).
+    virtual void SetStatsEnabled(bool enabled) = 0;
+    virtual void SetStatisticsPeriod(stats::DashboardPeriod period) = 0;
+    virtual void SetStatisticsTracksExpanded(bool expanded) = 0;
+    virtual void SetStatisticsArtistsExpanded(bool expanded) = 0;
+    virtual void SetStatisticsTracksPage(std::size_t page) = 0;
+    virtual void SetStatisticsArtistsPage(std::size_t page) = 0;
     // Applies the normalized geometry, visibility, and tab state of the main modules.
     virtual void SetModuleLayout(ModuleLayout layout) = 0;
     // Enables/disables Discord Rich Presence. Off = clear activity and stop IPC.
@@ -271,6 +325,8 @@ public:
     virtual void ActivateYoutubeResult(std::uint64_t id) = 0;
     // Controls the transient format chooser.
     virtual void SetYoutubeChooserVisible(bool visible) = 0;
+    virtual void SetUpdateNotifierVisible(bool visible) = 0;
+    virtual void OpenUpdateRelease() = 0;
     virtual void SetYoutubeDownloadKind(youtube::YoutubeDownloadKind kind) = 0;
     virtual void CycleYoutubeVideoFormat(int direction) = 0;
     virtual void CycleYoutubeVideoQuality(int direction) = 0;

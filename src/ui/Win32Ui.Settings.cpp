@@ -37,15 +37,25 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
     hits.clear();
     const auto panel = Rect(10.0F, 10.0F, size.width - 10.0F, size.height - 10.0F);
     target->FillRectangle(Rect(0, 0, size.width, size.height), b[0].Get());
-    auto content = DrawPanel(panel, L"RIVAN PREFERENCES", b[1].Get(), b[2].Get(), b[3].Get(),
+    auto content = DrawPanel(panel, L"RIVAN SETTINGS", b[1].Get(), b[2].Get(), b[3].Get(),
                              b[4].Get(), b[13].Get(), b[7].Get());
+    // The panel title bar doubles as the window caption: the whole strip drags the
+    // borderless window (see HitTestNonClient) and hosts the close button.
+    const auto panelBar = Rect(panel.left + 4, panel.top + 4, panel.right - 4, panel.top + 22);
+    captionRect = panelBar;
+    titlebarControlBounds.clear();
+    const auto closeButton = Rect(panelBar.right - kTitlebarButtonSize - 2.0F,
+                                  panelBar.top + 1.0F, panelBar.right - 2.0F,
+                                  panelBar.bottom - 1.0F);
+    DrawWindowButton(closeButton, L"X", 3, b[2].Get(), b[3].Get(), b[4].Get(), b[13].Get());
+    titlebarControlBounds.push_back(closeButton);
     const float navigationWidth = std::clamp(Width(content) * 0.24F, 145.0F, 230.0F);
     const auto navigation = Rect(content.left + 3, content.top + 31,
                                  content.left + navigationWidth, content.bottom - 3);
     DrawBevel(navigation, b[5].Get(), b[3].Get(), b[4].Get(), true);
     const std::array categories{SettingCategory::General, SettingCategory::Library,
                                 SettingCategory::Modules, SettingCategory::Appearance,
-                                SettingCategory::Integrations, SettingCategory::SkinManager};
+                                SettingCategory::Integrations};
     const float categoryLeft = navigation.left;
     const float categoryRight = navigation.right;
     const float categoryTop = navigation.top + 5;
@@ -62,6 +72,33 @@ void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
                  selected ? b[12].Get() : b[6].Get(), regularFormat.Get());
         AddSettingHit(row, category);
         top += 25 + kSettingsCategoryGap;
+    }
+    if (model.statsEnabled) {
+        if (top > categoryTop) {
+            target->FillRectangle(Rect(categoryLeft, top - kSettingsCategoryGap,
+                                       categoryRight, top), b[0].Get());
+        }
+        const auto row = Rect(categoryLeft, top, categoryRight, top + 25);
+        const bool selected = SettingCategory::Statistics == model.settingsCategory;
+        if (selected) target->FillRectangle(row, b[11].Get());
+        DrawText(CategoryName(SettingCategory::Statistics),
+                 Rect(row.left + 6, row.top, row.right - 4, row.bottom),
+                 selected ? b[12].Get() : b[6].Get(), regularFormat.Get());
+        AddSettingHit(row, SettingCategory::Statistics);
+        top += 25 + kSettingsCategoryGap;
+    }
+    if (top > categoryTop) {
+        target->FillRectangle(Rect(categoryLeft, top - kSettingsCategoryGap,
+                                   categoryRight, top), b[0].Get());
+    }
+    {
+        const auto row = Rect(categoryLeft, top, categoryRight, top + 25);
+        const bool selected = SettingCategory::SkinManager == model.settingsCategory;
+        if (selected) target->FillRectangle(row, b[11].Get());
+        DrawText(CategoryName(SettingCategory::SkinManager),
+                 Rect(row.left + 6, row.top, row.right - 4, row.bottom),
+                 selected ? b[12].Get() : b[6].Get(), regularFormat.Get());
+        AddSettingHit(row, SettingCategory::SkinManager);
     }
     const auto details = Rect(navigation.right + 7, navigation.top, content.right - 3, content.bottom - 3);
     settingsDetailsBounds = details;
@@ -108,6 +145,9 @@ void Win32Ui::Impl::DrawSettingsPane(const D2D1_RECT_F& details,
         break;
     case SettingCategory::Integrations:
         DrawIntegrationsSection(left, right, y, b);
+        break;
+    case SettingCategory::Statistics:
+        DrawStatisticsSection(left, right, y, b);
         break;
     case SettingCategory::SkinManager:
         break;
@@ -295,7 +335,7 @@ void Win32Ui::Impl::DrawIntegrationsSection(const float left, const float right,
     y += 20;
     const float optionWidth = (right - left - 8) * 0.5F;
     SettingsButton(Rect(left, y, left + optionWidth, y + 24), model.discordShowArtist ? L"SHOW ARTIST: ON" : L"SHOW ARTIST: OFF", 20, b);
-    SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24), model.discordShowImageText ? L"IMAGE TEXT: RIVAN" : L"IMAGE TEXT: OFF", 21, b);
+    SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24), model.discordShowImageText ? L"SYNC LYRICS: ON" : L"SYNC LYRICS: OFF", 21, b);
     y += 34;
     SettingsButton(Rect(left, y, right, y + 24), model.discordShowGithubButton ? L"GITHUB BUTTON: ON" : L"GITHUB BUTTON: OFF", 23, b);
     y += 26;
@@ -342,6 +382,196 @@ void Win32Ui::Impl::DrawIntegrationsSection(const float left, const float right,
     y += 26;
     DrawText(L"Stores fetched lyrics locally for offline retrieval.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
     y += 22;
+    DrawSettingsSectionGap(y, b);
+    DrawText(L"STATISTICS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+    y += 29;
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.statsEnabled ? L"LISTEN STATISTICS: ON" : L"LISTEN STATISTICS: OFF", 26, b);
+    y += 26;
+    DrawText(L"Tracks plays and listening time per song (weekly, monthly, yearly, and lifetime).", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 22;
+}
+
+void Win32Ui::Impl::DrawStatisticsSection(const float left, const float right, float& y,
+                                          std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    const auto& dashboard = model.statistics;
+    const auto periodName = [](const stats::DashboardPeriod period) -> const wchar_t* {
+        switch (period) {
+        case stats::DashboardPeriod::Week: return L"WEEK";
+        case stats::DashboardPeriod::Month: return L"MONTH";
+        case stats::DashboardPeriod::Year: return L"YEAR";
+        case stats::DashboardPeriod::AllTime: return L"ALL TIME";
+        }
+        return L"WEEK";
+    };
+    const auto number = [](const std::uint64_t value) { return std::to_wstring(value); };
+    const auto minutes = [&number](const std::uint64_t seconds) {
+        return number(seconds / 60);
+    };
+    const auto hours = [&number](const std::uint64_t seconds) {
+        return number(seconds / 3600);
+    };
+
+    const float periodControlWidth = std::clamp((right - left) * 0.32F, 104.0F, 130.0F);
+    DrawText(L"PERIOD", Rect(left, y, right - periodControlWidth - 7.0F, y + 23),
+             b[8].Get(), headingFormat.Get());
+    SettingsButton(Rect(right - periodControlWidth, y, right, y + 24),
+                    std::wstring(periodName(dashboard.period)) + L" \u25be", 27, b);
+    y += 34;
+
+    constexpr float metricGap = 7.0F;
+    constexpr float minimumMetricWidth = 96.0F;
+    constexpr float maximumMetricWidth = 100.0F;
+    constexpr float metricHeight = 58.0F;
+    constexpr std::size_t metricCount = 4;
+    const float metricAreaWidth = std::max(0.0F, right - left);
+    const std::size_t metricColumns = std::min<std::size_t>(metricCount,
+        std::max<std::size_t>(1, static_cast<std::size_t>(
+            (metricAreaWidth + metricGap) / (minimumMetricWidth + metricGap))));
+    const float metricWidth = std::min(
+        maximumMetricWidth,
+        (metricAreaWidth - metricGap * static_cast<float>(metricColumns - 1)) /
+            static_cast<float>(metricColumns));
+    const float metricGridWidth = metricWidth * static_cast<float>(metricColumns) +
+                                  metricGap * static_cast<float>(metricColumns - 1);
+    const float metricLeft = left + std::max(0.0F, (metricAreaWidth - metricGridWidth) * 0.5F);
+    const auto metric = [&](const std::size_t index, const std::wstring& value,
+                            const wchar_t* label) {
+        const std::size_t column = index % metricColumns;
+        const std::size_t row = index / metricColumns;
+        const auto card = Rect(metricLeft + static_cast<float>(column) * (metricWidth + metricGap),
+                               y + static_cast<float>(row) * (metricHeight + metricGap),
+                               metricLeft + static_cast<float>(column) * (metricWidth + metricGap) + metricWidth,
+                               y + static_cast<float>(row) * (metricHeight + metricGap) + metricHeight);
+        DrawBevel(card, b[1].Get(), b[3].Get(), b[4].Get(), true);
+        DrawText(value, Rect(card.left + 2, card.top + 3, card.right - 2, card.top + 32),
+                 b[12].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+        DrawText(label, Rect(card.left + 2, card.top + 34, card.right - 2, card.bottom - 3),
+                 b[6].Get(), tinyFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+    };
+    metric(0, number(dashboard.plays), L"PLAY COUNT");
+    metric(1, minutes(dashboard.seconds), L"MINUTES STREAMED");
+    metric(2, hours(dashboard.seconds), L"HOURS STREAMED");
+    metric(3, number(static_cast<std::uint64_t>(dashboard.differentTracks)), L"DIFFERENT TRACKS");
+    y += static_cast<float>((metricCount + metricColumns - 1) / metricColumns) * metricHeight +
+         static_cast<float>((metricCount - 1) / metricColumns) * metricGap + 10.0F;
+
+    const auto drawList = [&](const wchar_t* title, const bool expanded, const std::size_t page,
+                               const bool canPagePrevious, const bool canPageNext,
+                               const std::uint64_t expandAction, const std::uint64_t previousAction,
+                               const std::uint64_t nextAction, const auto& rows,
+                               const auto& primaryFor, const auto& secondaryFor,
+                               const bool showCoverArt, const auto& coverPathFor) {
+        const std::size_t begin = expanded ? 0 : std::min(page * 7, rows.size());
+        const std::size_t end = expanded ? rows.size() : std::min(begin + 7, rows.size());
+        DrawText(title, Rect(left, y, right - 108.0F, y + 25), b[8].Get(), headingFormat.Get());
+        const float buttonWidth = 30.0F;
+        const auto control = [&](const D2D1_RECT_F& bounds, const wchar_t* label,
+                                 const std::uint64_t action, const bool enabled) {
+            if (enabled) {
+                SettingsButton(bounds, label, action, b);
+                return;
+            }
+            DrawBevel(bounds, b[1].Get(), b[3].Get(), b[4].Get(), true);
+            DrawText(label, bounds, b[10].Get(), smallFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+        };
+        control(Rect(right - buttonWidth, y, right, y + 24), L"\u25a6", expandAction,
+                !rows.empty());
+        control(Rect(right - buttonWidth * 3.0F - 6.0F, y,
+                     right - buttonWidth * 2.0F - 6.0F, y + 24), L"\u25c0", previousAction,
+                canPagePrevious);
+        control(Rect(right - buttonWidth * 2.0F - 3.0F, y,
+                     right - buttonWidth - 3.0F, y + 24), L"\u25b6", nextAction,
+                canPageNext);
+        y += 31;
+
+        constexpr float gap = 7.0F;
+        const float cardAreaWidth = std::max(0.0F, right - left);
+        const float maximumCardWidth = showCoverArt ? 110.0F : 132.0F;
+        // Keep the established Top Artists column calculation unchanged. Track cards
+        // use smaller cells so their cover art fits without widening the dashboard.
+        const std::size_t columns = showCoverArt
+            ? std::min<std::size_t>(4, std::max<std::size_t>(1, static_cast<std::size_t>(
+                  (cardAreaWidth + gap) / (96.0F + gap))))
+            : std::max<std::size_t>(1, std::min<std::size_t>(
+                  4, static_cast<std::size_t>((cardAreaWidth + gap) / 150.0F)));
+        const float availableCardWidth =
+            (cardAreaWidth - gap * static_cast<float>(columns - 1)) /
+            static_cast<float>(columns);
+        const float cardWidth = showCoverArt ? std::min(maximumCardWidth, availableCardWidth)
+                                             : availableCardWidth;
+        const float gridWidth = cardWidth * static_cast<float>(columns) +
+                                gap * static_cast<float>(columns - 1);
+        const float gridLeft = left + std::max(0.0F, (cardAreaWidth - gridWidth) * 0.5F);
+        const float cardHeight = showCoverArt ? 118.0F : 51.0F;
+        if (begin == end) {
+            DrawText(L"< NO LISTENING DATA FOR THIS PERIOD >", Rect(left, y, right, y + 24),
+                     b[10].Get(), regularFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+            y += 29;
+            return;
+        }
+        for (std::size_t index = begin; index < end; ++index) {
+            const std::size_t position = index - begin;
+            const std::size_t column = position % columns;
+            const std::size_t row = position / columns;
+            const auto card = Rect(gridLeft + static_cast<float>(column) * (cardWidth + gap),
+                                    y + static_cast<float>(row) * (cardHeight + gap),
+                                    gridLeft + static_cast<float>(column) * (cardWidth + gap) + cardWidth,
+                                    y + static_cast<float>(row) * (cardHeight + gap) + cardHeight);
+            DrawBevel(card, b[1].Get(), b[3].Get(), b[4].Get(), true);
+            const auto& item = rows[index];
+            const std::wstring primary = primaryFor(item);
+            const std::wstring secondary = secondaryFor(item);
+            const std::wstring details = minutes(item.seconds) + L" min";
+            float textTop = card.top + 3.0F;
+            if (showCoverArt) {
+                const float coverSize = std::clamp(cardWidth - 22.0F, 44.0F, 66.0F);
+                const auto cover = Rect(card.left + (cardWidth - coverSize) * 0.5F, card.top + 5.0F,
+                                        card.left + (cardWidth + coverSize) * 0.5F,
+                                        card.top + 5.0F + coverSize);
+                DrawBevel(cover, b[1].Get(), b[3].Get(), b[4].Get(), true);
+                if (!DrawTrackCover(coverPathFor(item), cover)) {
+                    DrawText(L"NO COVER", cover, b[10].Get(), tinyFormat.Get(),
+                             DWRITE_TEXT_ALIGNMENT_CENTER);
+                }
+                textTop = cover.bottom + 2.0F;
+            }
+            DrawText(primary, Rect(card.left + 5, textTop, card.right - 5, textTop + 17.0F),
+                      b[9].Get(), smallFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                      D2D1_DRAW_TEXT_OPTIONS_CLIP, nullptr, true);
+            DrawText(secondary, Rect(card.left + 5, textTop + 17.0F, card.right - 5, textTop + 32.0F),
+                      b[6].Get(), tinyFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER,
+                      DWRITE_PARAGRAPH_ALIGNMENT_CENTER, D2D1_DRAW_TEXT_OPTIONS_CLIP, nullptr, true);
+            DrawText(details, Rect(card.left + 5, textTop + 32.0F, card.right - 5, card.bottom - 3),
+                      b[10].Get(), tinyFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+        y += static_cast<float>((end - begin + columns - 1) / columns) * (cardHeight + gap);
+    };
+
+    drawList(L"TOP TRACKS", dashboard.tracksExpanded, dashboard.tracksPage,
+              dashboard.tracksCanPagePrevious, dashboard.tracksCanPageNext,
+              300, 301, 302, dashboard.tracks,
+              [](const StatisticsTrackView& track) { return track.title; },
+              [](const StatisticsTrackView& track) { return track.artist; },
+              true,
+              [](const StatisticsTrackView& track) -> const std::wstring& {
+                  return track.filePath;
+              });
+    y += 8;
+    drawList(L"TOP ARTISTS", dashboard.artistsExpanded, dashboard.artistsPage,
+             dashboard.artistsCanPagePrevious, dashboard.artistsCanPageNext,
+              310, 311, 312, dashboard.artists,
+              [](const StatisticsArtistView& artist) { return artist.name; },
+              [](const StatisticsArtistView& artist) {
+                  return std::to_wstring(artist.trackCount) + L" track" +
+                         (artist.trackCount == 1 ? L"" : L"s");
+              },
+              false,
+              [](const StatisticsArtistView&) -> const std::wstring& {
+                  static const std::wstring empty;
+                  return empty;
+              });
+    y += 4;
 }
 
 void Win32Ui::Impl::DrawSongRowLayoutEditor(
@@ -601,6 +831,7 @@ void Win32Ui::Impl::UpdateSongRowFieldDrag(const float x, const float y) {
         else songRowSnap.reset();
     }
     field = candidate;
+    try { host.PreviewSongRowLayout(songRowDraft); } catch (...) {}
     InvalidateRect(window, nullptr, FALSE);
 }
 
@@ -750,6 +981,14 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 5: if (!model.youtubeYtDlpInstalled && !model.youtubeInstallingYtDlp) host.InstallYoutubeTool(true); break;
         case 6: if (!model.youtubeFfmpegInstalled && !model.youtubeInstallingFfmpeg) host.InstallYoutubeTool(false); break;
         case 7: host.SetLyricsCacheEnabled(!model.lyricsCacheEnabled); break;
+        case 26: host.SetStatsEnabled(!model.statsEnabled); break;
+        case 27: host.SetStatisticsPeriod(stats::NextDashboardPeriod(model.statistics.period)); break;
+        case 300: host.SetStatisticsTracksExpanded(!model.statistics.tracksExpanded); break;
+        case 301: if (!model.statistics.tracksExpanded && model.statistics.tracksPage > 0) host.SetStatisticsTracksPage(model.statistics.tracksPage - 1); break;
+        case 302: if (!model.statistics.tracksExpanded) host.SetStatisticsTracksPage(model.statistics.tracksPage + 1); break;
+        case 310: host.SetStatisticsArtistsExpanded(!model.statistics.artistsExpanded); break;
+        case 311: if (!model.statistics.artistsExpanded && model.statistics.artistsPage > 0) host.SetStatisticsArtistsPage(model.statistics.artistsPage - 1); break;
+        case 312: if (!model.statistics.artistsExpanded) host.SetStatisticsArtistsPage(model.statistics.artistsPage + 1); break;
         case 14: host.SetFilePreviewEnabled(!model.filePreviewEnabled); break;
         case 25: host.SetPreviewFitWindow(!model.previewFitWindow); break;
         case 15: host.SetStartAtStartup(!model.startAtStartup); break;

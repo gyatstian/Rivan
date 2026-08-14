@@ -44,6 +44,9 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     if (lyricsDirty_.exchange(false, std::memory_order_acq_rel)) {
         OnLyricsServiceUpdated();
     }
+    if (updateDirty_.exchange(false, std::memory_order_acq_rel)) {
+        OnUpdateServiceUpdated();
+    }
 
     // Paint path uses lock-free transport; full Status() only when catalog rebuilds.
     const auto live = audio_.Live();
@@ -79,8 +82,71 @@ void App::SnapshotUiModel(ui::UiModel& out) {
             lyricsRevisionCache_ = lyricsRevision;
             lyricsSnapshotCache_ = lyrics_.Snapshot();
         }
+        // Presence verse follows playback: republish (deduped inside) when the current
+        // synced line changes. Paint runs at 30 Hz while playing, so a verse transition
+        // is caught within a frame without a dedicated timer.
+        if (live.state == audio::PlaybackState::Playing) UpdateDiscordPresence();
         model.lyrics = lyricsSnapshotCache_;
         model.lyricsCacheEnabled = settings_.Settings().lyricsCacheEnabled;
+        model.statsEnabled = settings_.Settings().statsEnabled;
+        if (statisticsCatalogCacheRevision_ != revision_) {
+            statisticsCatalogCache_ = stats::BuildDashboardCatalog(playlists_.AllTracks());
+            statisticsCatalogCacheRevision_ = revision_;
+        }
+        const auto statsSnapshot = stats_.Snapshot();
+        if (statsSnapshot != statisticsSnapshotCache_ ||
+            statisticsDashboardCache_.period != statisticsPeriod_ ||
+            statisticsDashboardCatalogRevision_ != revision_) {
+            statisticsSnapshotCache_ = statsSnapshot;
+            statisticsDashboardCache_ = statsSnapshot
+                ? stats::BuildDashboard(*statsSnapshot, statisticsCatalogCache_, statisticsPeriod_)
+                : stats::DashboardData{.period = statisticsPeriod_};
+            statisticsDashboardCatalogRevision_ = statisticsCatalogCacheRevision_;
+            ++statisticsDashboardGeneration_;
+        }
+
+        auto& dashboard = model.statistics;
+        if (dashboard.generation != statisticsDashboardGeneration_) {
+            dashboard.period = statisticsDashboardCache_.period;
+            dashboard.plays = statisticsDashboardCache_.totals.plays;
+            dashboard.seconds = statisticsDashboardCache_.totals.seconds;
+            dashboard.differentTracks = statisticsDashboardCache_.differentTracks;
+            dashboard.tracks.clear();
+            dashboard.tracks.reserve(statisticsDashboardCache_.topTracks.size());
+            for (const auto& track : statisticsDashboardCache_.topTracks) {
+                dashboard.tracks.push_back({track.id,
+                                             core::Utf8ToWide(track.title, L"Unknown track"),
+                                             core::Utf8ToWide(track.artist, L"Unknown artist"),
+                                             track.filePath.wstring(),
+                                             track.activity.plays, track.activity.seconds});
+            }
+            dashboard.artists.clear();
+            dashboard.artists.reserve(statisticsDashboardCache_.topArtists.size());
+            for (const auto& artist : statisticsDashboardCache_.topArtists) {
+                dashboard.artists.push_back({core::Utf8ToWide(artist.name, L"Unknown artist"),
+                                             artist.activity.plays, artist.activity.seconds,
+                                             artist.trackCount});
+            }
+            dashboard.generation = statisticsDashboardGeneration_;
+        }
+        dashboard.tracksExpanded = statisticsTracksExpanded_;
+        dashboard.artistsExpanded = statisticsArtistsExpanded_;
+        constexpr std::size_t pageSize = 7;
+        const auto maxPage = [](const std::size_t count) {
+            return count == 0 ? 0 : (count - 1) / pageSize;
+        };
+        statisticsTracksPage_ = std::min(statisticsTracksPage_,
+                                         maxPage(statisticsDashboardCache_.topTracks.size()));
+        statisticsArtistsPage_ = std::min(statisticsArtistsPage_,
+                                          maxPage(statisticsDashboardCache_.topArtists.size()));
+        dashboard.tracksPage = statisticsTracksPage_;
+        dashboard.artistsPage = statisticsArtistsPage_;
+        dashboard.tracksCanPagePrevious = !statisticsTracksExpanded_ && statisticsTracksPage_ > 0;
+        dashboard.tracksCanPageNext = !statisticsTracksExpanded_ &&
+            (statisticsTracksPage_ + 1) * pageSize < dashboard.tracks.size();
+        dashboard.artistsCanPagePrevious = !statisticsArtistsExpanded_ && statisticsArtistsPage_ > 0;
+        dashboard.artistsCanPageNext = !statisticsArtistsExpanded_ &&
+            (statisticsArtistsPage_ + 1) * pageSize < dashboard.artists.size();
     };
 
     // Library/catalog work is expensive; reuse last snapshot when only transport/viz moved.
@@ -323,6 +389,10 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.youtubeChooserEntryId = youtubeChooserEntryId_;
     out.youtubeProbe = youtubeView_.probe;
     out.youtubeDownloadSelection = youtubeDownloadSelection_;
+    out.updateNotifierVisible = updateNotifierVisible_ && updateSnapshot_ &&
+                                updateSnapshot_->updateAvailable;
+    out.updateCurrentVersion = std::wstring(update::kCurrentVersion);
+    out.updateLatestVersion = updateSnapshot_ ? updateSnapshot_->latestVersion : std::wstring{};
     out.skins.reserve(skins_.Skins().size());
     for (const auto& skin : skins_.Skins()) {
         out.skins.push_back({core::Utf8ToWide(skin.id, L"Unable to decode error text"),

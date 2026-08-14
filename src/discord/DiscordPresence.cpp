@@ -269,7 +269,11 @@ bool DiscordPresence::PublishActivity(const PresenceActivity& activity) {
         }
         // Use the uploaded application asset; Discord does not reliably resolve external image URLs.
         payload += R"(,"assets":{"large_image":"rivan")";
-        if (activity.showImageText) payload += R"(,"large_text":"Rivan")";
+        if (!activity.imageText.empty()) {
+            payload += R"(,"large_text":")";
+            payload += EscapeJson(TruncateUtf8(activity.imageText, 128));
+            payload += '"';
+        }
         payload += '}';
         if (activity.playing && activity.startUnix > 0) {
             payload += R"(,"timestamps":{"start":)";

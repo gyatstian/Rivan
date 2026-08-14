@@ -41,6 +41,9 @@ void Win32Ui::Impl::CaptureWindowRect() noexcept {
 }
 
 [[nodiscard]] bool Win32Ui::Impl::HasTitlebar() const noexcept {
+    // The Settings window draws its caption as the panel title bar inside the
+    // client area (see DrawSettings), so it keeps no top strip of its own.
+    if (windowKind == WindowKind::Settings) return false;
     return !(windowKind == WindowKind::Main && previewFullscreen &&
              previewIsVideo && IsVideoPreviewModuleVisible());
 }
@@ -70,15 +73,13 @@ void Win32Ui::Impl::Paint() {
         target->BeginDraw();
         const auto size = target->GetSize();
         const bool fullscreen = previewFullscreen && previewIsVideo && IsVideoPreviewModuleVisible();
-        const bool hasTitlebar = !fullscreen;
+        const bool hasTitlebar = !fullscreen && windowKind != WindowKind::Settings;
         const D2D1_SIZE_F canvasSize{
             size.width, std::max(1.0F, size.height - (hasTitlebar ? kTitlebarHeight : 0.0F))};
         lastCanvas = canvasSize;
         if (windowKind == WindowKind::Settings) {
-            target->SetTransform(D2D1::Matrix3x2F::Translation(0.0F, kTitlebarHeight));
+            // No top strip: the panel title bar is the caption (drag + close button).
             Win32Ui::Impl::DrawSettings(canvasSize, brushes);
-            target->SetTransform(D2D1::Matrix3x2F::Identity());
-            Win32Ui::Impl::DrawTitlebar(size, brushes);
         } else if (windowKind == WindowKind::SkinStudio) {
             if (studioSection == StudioSection::Colors &&
                 model.skinColorFocusRevision != seenColorFocusRevision) {
@@ -115,6 +116,11 @@ void Win32Ui::Impl::Paint() {
         } else if (windowKind == WindowKind::YoutubeChooser) {
             target->SetTransform(D2D1::Matrix3x2F::Translation(0.0F, kTitlebarHeight));
             DrawYoutubeChooser(canvasSize, brushes);
+            target->SetTransform(D2D1::Matrix3x2F::Identity());
+            Win32Ui::Impl::DrawTitlebar(size, brushes);
+        } else if (windowKind == WindowKind::UpdateNotifier) {
+            target->SetTransform(D2D1::Matrix3x2F::Translation(0.0F, kTitlebarHeight));
+            DrawUpdateNotifier(canvasSize, brushes);
             target->SetTransform(D2D1::Matrix3x2F::Identity());
             Win32Ui::Impl::DrawTitlebar(size, brushes);
         } else {

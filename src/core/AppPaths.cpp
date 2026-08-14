@@ -130,6 +130,13 @@ bool AppPaths::EnsureDirectories(std::wstring* error) {
         return false;
     }
 
+    std::filesystem::create_directories(LocalDataRoot() / L"Stats", ec);
+    if (ec) {
+        SetError(error, L"Unable to create statistics directory: " +
+                            std::filesystem::path(ec.message()).wstring());
+        return false;
+    }
+
     if (error != nullptr) {
         error->clear();
     }

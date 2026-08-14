@@ -168,9 +168,9 @@ void App::SetYoutubeEnabled(bool enabled) {
         youtube_.RefreshToolStatus();
         youtubeView_ = youtube_.Snapshot();
         if (!grabberHotkeyAvailable) {
-            youtubeView_.status = L"YouTube grabber hotkey unavailable — choose another in Preferences → Online";
+            youtubeView_.status = L"YouTube grabber hotkey unavailable — choose another in Settings → Online";
         } else if (!youtubeView_.ytDlpInstalled) {
-            youtubeView_.status = L"Install yt-dlp in Preferences → Online";
+            youtubeView_.status = L"Install yt-dlp in Settings → Online";
         } else {
             youtubeView_.status = L"Ready — search or paste a YouTube URL";
         }
@@ -551,7 +551,7 @@ void App::ShowYoutubeLocalLibrary() {
     if (youtubeView_.entries.empty()) {
         youtubeView_.status = youtubeView_.ytDlpInstalled
                                   ? L"Search YouTube or paste a URL"
-                                  : L"Install yt-dlp in Preferences → Online";
+                                  : L"Install yt-dlp in Settings → Online";
     } else {
         youtubeView_.status =
             std::to_wstring(youtubeView_.entries.size()) + L" downloaded track(s)";

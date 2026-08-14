@@ -14,6 +14,10 @@ namespace rivan {
 void App::OnMainWindowClosing() {
     // WM_CLOSE is the real exit path; persist here (window rect still live) and let
     // ~App skip its duplicate PersistState for the same degenerate write.
+    // Stop the update worker while its notification target is still alive. This prevents
+    // a late worker callback from posting to the main HWND after window destruction.
+    updateNotificationWindow_.store(nullptr, std::memory_order_release);
+    update_.Shutdown();
     persistedOnClose_ = true;
     PersistState();
 }
@@ -36,6 +40,7 @@ void App::SyncPlaybackSession() {
 }
 
 void App::PersistState() {
+    stats_.Flush();
     auto applicationSettings = settings_.Settings();
     const auto status = audio_.Status();
     applicationSettings.volumePercent = static_cast<int>(std::lround(

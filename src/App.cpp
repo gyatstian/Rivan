@@ -82,7 +82,10 @@ void ClampWindowToWorkArea(RECT& rectangle) {
 } // namespace
 
 App::App(HINSTANCE instance)
-    : instance_(instance), lyrics_(core::AppPaths::LocalDataRoot() / L"lyrics") {
+    : instance_(instance),
+      lyrics_(core::AppPaths::LocalDataRoot() / L"lyrics"),
+      stats_([this] { return audio_.Live(); },
+             core::AppPaths::LocalDataRoot() / L"Stats") {
     youtube_.SetNotify([this]() {
         youtubeDirty_.store(true, std::memory_order_release);
         if (window_ && window_->WindowHandle()) {
@@ -95,9 +98,20 @@ App::App(HINSTANCE instance)
             PostMessageW(window_->WindowHandle(), WM_APP + 42, 0, 0);
         }
     });
+    update_.SetNotify([this]() {
+        updateDirty_.store(true, std::memory_order_release);
+        const HWND window = updateNotificationWindow_.load(std::memory_order_acquire);
+        if (window && PostMessageW(window, ui::kUpdateServiceMessage, 0, 0)) return;
+        if (uiThreadId_ != 0) {
+            (void)PostThreadMessageW(uiThreadId_, ui::kUpdateServiceMessage, 0, 0);
+        }
+    });
 }
 
 App::~App() {
+    updateNotificationWindow_.store(nullptr, std::memory_order_release);
+    update_.Shutdown();
+    stats_.Flush();
     audioNotificationWindow_.store(nullptr, std::memory_order_release);
     youtube_.Reset();
     lyrics_.Reset();
@@ -110,6 +124,7 @@ App::~App() {
 }
 
 bool App::Initialize() {
+    uiThreadId_ = GetCurrentThreadId();
     std::wstring pathError;
     if (!core::AppPaths::EnsureDirectories(&pathError)) return false;
 
@@ -141,6 +156,7 @@ bool App::Initialize() {
     }
     (void)settings_.SetSettings(applicationSettings, &error);
     lyrics_.SetCacheEnabled(applicationSettings.lyricsCacheEnabled);
+    stats_.SetEnabled(applicationSettings.statsEnabled);
     std::wstring startupError;
     if (!SyncStartupRegistration(applicationSettings.startAtStartup, &startupError)) {
         applicationSettings.startAtStartup = false;
@@ -198,6 +214,7 @@ bool App::Initialize() {
             applicationSettings.youtubeGrabberHotkeyVirtualKey);
     }
     audioNotificationWindow_.store(window_->WindowHandle(), std::memory_order_release);
+    updateNotificationWindow_.store(window_->WindowHandle(), std::memory_order_release);
 
     if (!miniPlayer_) {
         const auto& rectangle = settings_.Session().window;
@@ -211,6 +228,9 @@ bool App::Initialize() {
     // ApplyCompletedScan) so per-track metadata reads do not delay the scan start.
     library::LibraryScanner::SetDurationCachePath(core::AppPaths::LocalDataRoot() / L"library-durations.cache");
     StartLibraryScan();
+    // Start only after the window exists: worker notifications are always marshalled to
+    // the UI thread and never delay startup or first paint.
+    update_.StartCheck();
     return true;
 }
 
@@ -224,6 +244,9 @@ int App::Run() {
         }
         if (lyricsDirty_.exchange(false, std::memory_order_acq_rel)) {
             OnLyricsServiceUpdated();
+        }
+        if (updateDirty_.exchange(false, std::memory_order_acq_rel)) {
+            OnUpdateServiceUpdated();
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
@@ -413,6 +436,10 @@ void App::SetVolume(float normalizedVolume) {
 }
 
 void App::SelectSettingsCategory(ui::SettingCategory category) {
+    if (category == ui::SettingCategory::Statistics && !settings_.Settings().statsEnabled) {
+        category = ui::SettingCategory::Integrations;
+    }
+    if (settingsCategory_ == category) return;
     settingsCategory_ = category;
     ++revision_;
     if (window_) window_->Refresh();
@@ -473,6 +500,17 @@ void App::SetSongRowLayout(ui::SongRowLayout layout) {
     std::string error;
     if (!settings_.SetSettings(settings, &error)) return;
     (void)settings_.SaveSettings(&error);
+    ++revision_;
+    if (window_) window_->Refresh();
+}
+
+void App::PreviewSongRowLayout(ui::SongRowLayout layout) {
+    auto settings = settings_.Settings();
+    if (settings.songRowLayout.rowHeight == layout.rowHeight &&
+        settings.songRowLayout.fields == layout.fields) return;
+    settings.songRowLayout = layout;
+    std::string error;
+    if (!settings_.SetSettings(settings, &error)) return;
     ++revision_;
     if (window_) window_->Refresh();
 }

@@ -15,6 +15,8 @@
 #include "discord/DiscordPresence.h"
 #include "youtube/YoutubeService.h"
 #include "lyrics/LyricsService.h"
+#include "stats/StatsService.h"
+#include "update/UpdateService.h"
 
 #include <atomic>
 #include <chrono>
@@ -52,6 +54,7 @@ public:
     void SelectSettingsCategory(ui::SettingCategory category) override;
     void SetMusicFolder(std::size_t index, std::filesystem::path folder) override;
     void SetSongRowLayout(ui::SongRowLayout layout) override;
+    void PreviewSongRowLayout(ui::SongRowLayout layout) override;
     void SetFilePreviewEnabled(bool enabled) override;
     void SetPreviewFitWindow(bool enabled) override;
     void SetStartAtStartup(bool enabled) override;
@@ -64,6 +67,12 @@ public:
     [[nodiscard]] bool SetYoutubeGrabberHotkey(std::uint32_t modifiers,
                                                std::uint32_t virtualKey) override;
     void SetLyricsCacheEnabled(bool enabled) override;
+    void SetStatsEnabled(bool enabled) override;
+    void SetStatisticsPeriod(stats::DashboardPeriod period) override;
+    void SetStatisticsTracksExpanded(bool expanded) override;
+    void SetStatisticsArtistsExpanded(bool expanded) override;
+    void SetStatisticsTracksPage(std::size_t page) override;
+    void SetStatisticsArtistsPage(std::size_t page) override;
     void SetModuleLayout(ui::ModuleLayout layout) override;
     void SetDiscordEnabled(bool enabled) override;
     void SetDiscordShowArtist(bool enabled) override;
@@ -73,6 +82,8 @@ public:
     void SubmitYoutubeQuery(std::wstring query) override;
     void ActivateYoutubeResult(std::uint64_t id) override;
     void SetYoutubeChooserVisible(bool visible) override;
+    void SetUpdateNotifierVisible(bool visible) override;
+    void OpenUpdateRelease() override;
     void SetYoutubeDownloadKind(youtube::YoutubeDownloadKind kind) override;
     void CycleYoutubeVideoFormat(int direction) override;
     void CycleYoutubeVideoQuality(int direction) override;
@@ -124,6 +135,8 @@ public:
     // Called from YoutubeService notify (may be worker thread) via PostMessage.
     void OnYoutubeServiceUpdated();
     void OnLyricsServiceUpdated();
+    // Called from UpdateService notify (may be worker thread) via PostMessage.
+    void OnUpdateServiceUpdated();
 
 private:
     void StartLibraryScan();
@@ -141,6 +154,7 @@ private:
     [[nodiscard]] bool SyncStartupRegistration(bool enabled, std::wstring* error = nullptr);
     void ToggleMiniPlayer();
     void ApplyYoutubeSnapshot();
+    void SetUpdateNotifierVisibleInternal(bool visible);
     void PersistYoutubeChooserSelection();
     void ShowYoutubeLocalLibrary();
     // User playlists persist to their own file so they survive restarts and rescans.
@@ -183,11 +197,17 @@ private:
     std::atomic<HWND> audioNotificationWindow_{nullptr};
     std::atomic_bool youtubeDirty_{false};
     std::atomic_bool lyricsDirty_{false};
+    std::atomic_bool updateDirty_{false};
+    std::atomic<HWND> updateNotificationWindow_{nullptr};
+    DWORD uiThreadId_{};
     audio::AudioEngine audio_;
+    // Constructed after audio_ (transport source) and destroyed before it.
+    stats::StatsService stats_;
     // 512-point FFT is enough for spectrum bars; halves FFT cost vs 1024.
     visualization::FloatSnapshotAnalyzer analyzer_{512};
     youtube::YoutubeService youtube_;
     lyrics::LyricsService lyrics_;
+    update::UpdateService update_;
     discord::DiscordPresence discord_;
     std::unique_ptr<ui::Win32Ui> window_;
 
@@ -212,17 +232,33 @@ private:
     std::uint64_t skinElementFocusRevision_{};
     RECT normalWindowRect_{};
     std::uint64_t revision_{};
+    stats::DashboardPeriod statisticsPeriod_{stats::DashboardPeriod::Week};
+    bool statisticsTracksExpanded_{};
+    bool statisticsArtistsExpanded_{};
+    std::size_t statisticsTracksPage_{};
+    std::size_t statisticsArtistsPage_{};
     std::uint64_t analysisGeneration_{};
     // Reused across paints so AnalysisInto does not allocate every generation.
     audio::AudioAnalysisSnapshot analysisScratch_{};
     // Lyrics snapshot is copied only when the service revision advances.
     std::uint64_t lyricsRevisionCache_{~std::uint64_t{0}};
     lyrics::LyricsSnapshot lyricsSnapshotCache_;
+    // Last published Discord presence key; republished only when it changes (verse
+    // transition, track change, settings) so the 30 Hz playback repaint never spams
+    // the Discord IPC pipe.
+    bool discordPresencePublished_{};
+    std::string discordPresenceStateKey_;
     // Cap FFT to ~20 Hz even if analysis generation advances every WASAPI period.
     std::chrono::steady_clock::time_point lastAnalysisSubmit_{};
     // Last fully built library/UI snapshot. Live playback fields refresh in place.
     ui::UiModel cachedModel_{};
     std::uint64_t cachedModelRevision_{~std::uint64_t{0}};
+    std::shared_ptr<const stats::ListenStatsModel> statisticsSnapshotCache_;
+    stats::DashboardCatalog statisticsCatalogCache_;
+    std::uint64_t statisticsCatalogCacheRevision_{~std::uint64_t{0}};
+    stats::DashboardData statisticsDashboardCache_{};
+    std::uint64_t statisticsDashboardCatalogRevision_{~std::uint64_t{0}};
+    std::uint64_t statisticsDashboardGeneration_{};
     bool restored_{};
     // User playlists restore once, on the first scan application, so the per-track
     // metadata reads do not delay the initial scan start.
@@ -237,6 +273,8 @@ private:
     youtube::YoutubeDownloadSelection youtubeDownloadSelection_{};
     bool pendingYoutubeGrab_{};
     bool youtubeGrabberHotkeyAvailable_{true};
+    std::shared_ptr<const update::UpdateSnapshot> updateSnapshot_;
+    bool updateNotifierVisible_{};
     ui::ModuleLayout moduleLayout_{ui::ModuleLayout::Defaults()};
     // Throttle layout INI writes during interactive resize; session stays in memory.
     std::chrono::steady_clock::time_point lastSessionSave_{};

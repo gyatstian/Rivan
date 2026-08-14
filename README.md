@@ -42,11 +42,11 @@ Build output: `x64\Release\Rivan.exe`.
 
 ## Library
 
-On first launch, Rivan creates `%USERPROFILE%\Music\Rivan` unless configured library root already exists. Preferences can add any number of extra roots.
+On first launch, Rivan creates `%USERPROFILE%\Music\Rivan` unless configured library root already exists. Settings can add any number of extra roots.
 
 Each scanned directory becomes folder playlist named after its path relative to root. Files immediately in folder belong to that playlist; **All Music** contains recursive union across every configured root. Overlapping roots and duplicate paths are normalized so track is not counted twice.
 
-Rivan reads files in place. It never moves or copies music during library scans or drag-and-drop. Optional file duplication behavior is configured separately in Preferences.
+Rivan reads files in place. It never moves or copies music during library scans or drag-and-drop. Optional file duplication behavior is configured separately in Settings.
 
 ## Controls
 
@@ -62,7 +62,7 @@ Rivan reads files in place. It never moves or copies music during library scans 
 | R | Cycle repeat |
 | Ctrl+S | Settings |
 | M | Mini-player |
-| Escape | Close Preferences |
+| Escape | Close Settings |
 | Mouse wheel | Scroll tracks |
 | Drag files/folders | Add to queue |
 

@@ -99,7 +99,7 @@ void YoutubeService::RunSearch(std::stop_token stop, std::wstring query) {
             std::scoped_lock lock(mutex_);
             state_.busy = false;
             state_.job = YoutubeJobKind::Idle;
-            state_.status = L"yt-dlp not installed — use Preferences → Online";
+            state_.status = L"yt-dlp not installed — use Settings → Online";
             WriteToolFlagsLocked();
             ++state_.generation;
         }

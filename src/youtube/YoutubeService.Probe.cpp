@@ -392,7 +392,7 @@ void YoutubeService::RunProbe(std::stop_token stop, std::uint64_t entryId) {
         if (stop.stop_requested()) {
             state_.status = L"Cancelled";
         } else if (!ytDlp) {
-            state_.status = L"yt-dlp not installed — use Preferences → Online";
+            state_.status = L"yt-dlp not installed — use Settings → Online";
         } else if (result) {
             state_.probe = std::move(result);
             state_.probeEntryId = entryId;

@@ -44,13 +44,16 @@ void Win32Ui::Impl::Scroll(float x, float y, int direction) {
         settingsScrollY = std::clamp(
             settingsScrollY + static_cast<float>(direction) * 24.0F, 0.0F, maxScroll);
     } else if (windowKind == WindowKind::Main && Contains(lyricsContentBounds, x, y)) {
+        const auto& lines = model.lyrics.document.lines;
         const auto visibleHeight = std::max(0.0F, lyricsContentBounds.bottom - lyricsContentBounds.top);
         float contentHeight = 0.0F;
+        std::vector<float> lineTops(lines.size(), 0.0F);
         const float textWidth = std::max(1.0F, lyricsContentBounds.right - lyricsContentBounds.left - 12.0F);
-        for (const auto& line : model.lyrics.document.lines) {
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            lineTops[i] = contentHeight;
             ComPtr<IDWriteTextLayout> layout;
-            if (SUCCEEDED(writeFactory->CreateTextLayout(line.text.data(),
-                                                          static_cast<UINT32>(line.text.size()),
+            if (SUCCEEDED(writeFactory->CreateTextLayout(lines[i].text.data(),
+                                                          static_cast<UINT32>(lines[i].text.size()),
                                                           regularFormat.Get(), textWidth, 10000.0F,
                                                           layout.ReleaseAndGetAddressOf()))) {
                 layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
@@ -65,6 +68,25 @@ void Win32Ui::Impl::Scroll(float x, float y, int direction) {
         const auto maxScroll = std::max(0.0F, contentHeight - visibleHeight);
         lyricsScrollY = std::clamp(lyricsScrollY + static_cast<float>(direction) * 40.0F,
                                      0.0F, maxScroll);
+        // Manual wheel scrolling suspends the synced auto-follow so the user can read
+        // earlier or later lines. Following resumes only when the user scrolls back to
+        // the line currently playing (or via the SYNC button / a verse click); the old
+        // "resume at the absolute bottom" approach snapped the view back to the active
+        // line and made scrolling down look broken.
+        lyricsUserScrolling_ = false;
+        if (lyricsSyncedMode_ && model.lyrics.document.synced && maxScroll > 0.0F) {
+            std::size_t activeLine = 0;
+            for (std::size_t i = 0; i < lines.size(); ++i) {
+                if (lines[i].timestampSeconds >= 0.0 &&
+                    lines[i].timestampSeconds <= model.positionSeconds) activeLine = i;
+            }
+            const float followPosition = std::clamp(
+                lineTops[activeLine] - (visibleHeight - 4.0F) * 0.42F, 0.0F, maxScroll);
+            // A wheel notch moves by 40.0F * direction (120px), so the resume band is
+            // half a notch wide: scrolling back onto the playing line re-engages the
+            // follow, while any position clearly above or below it stays suspended.
+            lyricsUserScrolling_ = std::fabs(lyricsScrollY - followPosition) > 60.0F;
+        }
     }
     InvalidateRect(window, nullptr, FALSE);
 }

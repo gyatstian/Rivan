@@ -3,6 +3,10 @@
 namespace rivan {
 
 void App::OnLyricsServiceUpdated() {
+    // Lyrics can arrive mid-track; republish presence so the artwork tooltip shows
+    // the current synced verse as soon as timed lyrics are available (deduped inside;
+    // no-op when presence is disabled or nothing is playing).
+    UpdateDiscordPresence();
     ++revision_;
     if (window_) window_->Refresh();
 }

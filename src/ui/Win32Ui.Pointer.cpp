@@ -220,6 +220,15 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
         }
         return;
     }
+    if (windowKind == WindowKind::Settings) {
+        // The settings caption lives on the panel title bar; its close button is a
+        // WindowControl hit that content hit-testing skips, so handle it here.
+        if (const HitRegion* windowHit = HitTest(x, y);
+            windowHit && windowHit->kind == HitKind::WindowControl) {
+            if (windowHit->id == 3) PostMessageW(window, WM_CLOSE, 0, 0);
+            return;
+        }
+    }
     if (HasTitlebar()) y -= kTitlebarHeight;
     if (previewFullscreen && windowKind == WindowKind::Main) {
         if (Contains(previewFullscreenCloseBounds, x, y)) {
@@ -366,6 +375,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
             break;
         case HitKind::YoutubeResult: host.ActivateYoutubeResult(hit.id); break;
         case HitKind::YoutubeChooserAction: HandleYoutubeChooserAction(hit.id); return;
+        case HitKind::UpdateNotifierAction: HandleUpdateNotifierAction(hit.id); return;
         case HitKind::FilePreviewFullscreen:
             EnterPreviewFullscreen();
             break;

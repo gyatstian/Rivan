@@ -93,7 +93,7 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
             std::scoped_lock lock(mutex_);
             state_.busy = false;
             state_.job = YoutubeJobKind::Idle;
-            state_.status = L"yt-dlp not installed — use Preferences → Online";
+            state_.status = L"yt-dlp not installed — use Settings → Online";
             WriteToolFlagsLocked();
             for (auto& entry : state_.entries) {
                 if (entry.id == entryId) {
@@ -113,8 +113,8 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
             std::scoped_lock lock(mutex_);
             state_.busy = false;
             state_.job = YoutubeJobKind::Idle;
-            state_.status = isVideo ? L"ffmpeg required to merge video and audio — install in Preferences → Online"
-                                    : L"ffmpeg required for audio conversion — install in Preferences → Online";
+            state_.status = isVideo ? L"ffmpeg required to merge video and audio — install in Settings → Online"
+                                    : L"ffmpeg required for audio conversion — install in Settings → Online";
             WriteToolFlagsLocked();
             for (auto& entry : state_.entries) {
                 if (entry.id == entryId) {

@@ -13,9 +13,11 @@
 namespace rivan::discord {
 
 struct PresenceActivity final {
-    std::string details; // track title (UTF-8)
-    std::string state;   // optional artist (UTF-8); empty = omit
-    bool showImageText = true;
+    std::string details;    // track title (UTF-8)
+    std::string state;      // optional artist (UTF-8); empty = omit
+    // Artwork tooltip (UTF-8); empty = omit. Carries the current synced verse while
+    // verse syncing is active; empty otherwise (no placeholder text).
+    std::string imageText;
     bool showGithubButton = false;
     bool playing = false;
     bool hasTrack = false;

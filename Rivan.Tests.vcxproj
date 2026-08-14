@@ -25,7 +25,7 @@
       <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/permissive- /Zc:__cplusplus /utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
-    <Link><SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation><AdditionalDependencies>winhttp.lib;propsys.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation><AdditionalDependencies>propsys.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="tests\CoreTests.cpp" />
@@ -48,6 +48,9 @@
     <ClCompile Include="src\skin\Skin.cpp" />
     <ClCompile Include="src\visualization\Visualization.cpp" />
     <ClCompile Include="src\lyrics\LyricsService.cpp" />
+    <ClCompile Include="src\stats\ListenStats.cpp" />
+    <ClCompile Include="src\stats\StatsDashboard.cpp" />
+    <ClCompile Include="src\update\UpdateService.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\ui\layout\ModuleDropZones.h" />
@@ -58,6 +61,10 @@
     <ClInclude Include="src\ui\TrackCoverCache.h" />
     <ClInclude Include="src\config\SettingsManager.Persistence.h" />
     <ClInclude Include="src\lyrics\LyricsService.h" />
+    <ClInclude Include="src\stats\ListenStats.h" />
+    <ClInclude Include="src\stats\StatsService.h" />
+    <ClInclude Include="src\stats\StatsDashboard.h" />
+    <ClInclude Include="src\update\UpdateService.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

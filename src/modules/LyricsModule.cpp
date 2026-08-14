@@ -52,6 +52,7 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
         lyricsRevision_ = model.lyrics.revision;
         lyricsScrollY = 0.0F;
         lyricsSyncedMode_ = true;
+        lyricsUserScrolling_ = false;
     }
     if (model.lyrics.loading || !model.lyrics.available || lines.empty()) {
         const auto status = model.lyrics.status.empty()
@@ -91,10 +92,14 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
             if (lines[i].timestampSeconds >= 0.0 &&
                 lines[i].timestampSeconds <= model.positionSeconds) activeLine = i;
         }
-        const float viewportHeight = Height(lyricsContentBounds) - 4.0F;
-        const float desired = std::max(0.0F, lineTops[activeLine] - viewportHeight * 0.42F);
-        const float maxScroll = std::max(0.0F, contentHeight - viewportHeight);
-        lyricsScrollY = std::clamp(desired, 0.0F, maxScroll);
+        // Manual scrolling holds the view; auto-follow resumes once the user scrolls
+        // back to the bottom (lyricsUserScrolling_ cleared by Scroll) or re-enables SYNC.
+        if (!lyricsUserScrolling_) {
+            const float viewportHeight = Height(lyricsContentBounds) - 4.0F;
+            const float desired = std::max(0.0F, lineTops[activeLine] - viewportHeight * 0.42F);
+            const float maxScroll = std::max(0.0F, contentHeight - viewportHeight);
+            lyricsScrollY = std::clamp(desired, 0.0F, maxScroll);
+        }
     }
     target->PushAxisAlignedClip(lyricsContentBounds, D2D1_ANTIALIAS_MODE_ALIASED);
     const float firstTop = lyricsContentBounds.top + 2.0F - lyricsScrollY;
@@ -108,6 +113,12 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
         }
         if (!layouts[i] || top + lineHeights[i] < lyricsContentBounds.top || top > lyricsContentBounds.bottom) continue;
         const bool active = synced && i == activeLine;
+        if (active) {
+            // Highlight the current lyric with the skin's panel background color.
+            target->FillRectangle(Rect(lyricsContentBounds.left + 4.0F, top,
+                                       lyricsContentBounds.right - 4.0F, top + lineHeights[i]),
+                                  b[1].Get());
+        }
         const auto origin = D2D1::Point2F(lyricsContentBounds.left + 6.0F, top);
         ID2D1Brush* brush = active ? b[12].Get() : b[9].Get();
         if (deferTexts) {
@@ -123,9 +134,16 @@ void Win32Ui::Impl::HandleLyricsAction(std::uint64_t action) {
     switch (action) {
     case 1:
         lyricsSyncedMode_ = true;
+        lyricsUserScrolling_ = false;
         break;
     case 2:
         lyricsSyncedMode_ = false;
+        // The synced auto-follow can leave the view pinned at the bottom or mid-document
+        // (e.g. near the end of the song), which makes the plain text look frozen and
+        // unscrollable. A plain-only song starts at the top and scrolls freely, so restart
+        // the plain view at the beginning of the text on switch.
+        lyricsScrollY = 0.0F;
+        lyricsUserScrolling_ = false;
         break;
     case 3:
         lyricsAlignment_ = DWRITE_TEXT_ALIGNMENT_LEADING;
@@ -171,6 +189,8 @@ void Win32Ui::Impl::HandleLyricsVerse(std::size_t index) {
     try {
         host.Seek(std::clamp(timestamp / model.durationSeconds, 0.0, 1.0));
     } catch (...) {}
+    // Jumping to a verse implies returning to synced following.
+    lyricsUserScrolling_ = false;
     InvalidateRect(window, nullptr, FALSE);
 }
 

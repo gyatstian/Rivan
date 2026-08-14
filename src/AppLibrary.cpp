@@ -194,6 +194,7 @@ void App::RestoreSessionAfterScan() {
             // Startup session restore: re-establish playback state and seek position.
             selectedTrack_ = queue_.Current()->id;
             activeTrack_ = *queue_.Current();
+            stats_.SetActiveTrack(activeTrack_);
             const auto metadata = LyricsMetadata(*activeTrack_);
             lyrics_.Request(activeTrack_->id, metadata.first, metadata.second,
                             activeTrack_->album, activeTrack_->durationSeconds);
@@ -206,6 +207,7 @@ void App::RestoreSessionAfterScan() {
             // reloading audio (it is already playing and must not restart).
             selectedTrack_ = queue_.Current()->id;
             activeTrack_ = *queue_.Current();
+            stats_.SetActiveTrack(activeTrack_);
         }
     }
     SyncPlaybackSession();
@@ -229,8 +231,14 @@ void App::NotifyAudioSignal() {
 
 void App::PlayNavigation(const playlist::QueueNavigation& navigation, bool startPlayback) {
     if (!navigation || navigation.track == nullptr) return;
+    // Same-track restart (repeat-one via OnEndOfStream, or PlayPause restart from
+    // stopped) must earn a fresh listening session; the 500ms state sampler cannot see
+    // the EndOfStream -> Loading -> Playing collapse. Different-track Advanced
+    // navigation is handled by the sampler's path comparison.
+    if (navigation.action == playlist::QueueNavigationAction::Restarted) stats_.OnPlaybackRestarted();
     selectedTrack_ = navigation.track->id;
     activeTrack_ = *navigation.track;
+    stats_.SetActiveTrack(activeTrack_);
     audio_.Load(navigation.track->filePath);
     SyncPlaybackSession();
     const auto metadata = LyricsMetadata(*navigation.track);
@@ -247,20 +255,68 @@ void App::UpdateDiscordPresence() {
     const auto live = audio_.Live();
     discord::PresenceActivity activity;
     if (track == nullptr || live.state != audio::PlaybackState::Playing) {
+        // Idle/paused presence; dedupe so the 30 Hz paint does not clear repeatedly.
+        constexpr std::string_view kClearKey = "clear";
+        if (discordPresencePublished_ && discordPresenceStateKey_ == kClearKey) return;
+        discordPresencePublished_ = true;
+        discordPresenceStateKey_ = std::string(kClearKey);
         discord_.SetActivity(activity);
         return;
+    }
+    // Cache may be stale when lyrics arrive mid-track from the message loop before the
+    // next paint; refresh here so the verse appears immediately.
+    const auto lyricsRevision = lyrics_.Revision();
+    if (lyricsRevision != lyricsRevisionCache_) {
+        lyricsRevisionCache_ = lyricsRevision;
+        lyricsSnapshotCache_ = lyrics_.Snapshot();
     }
     activity.hasTrack = true;
     activity.playing = true;
     activity.details = core::WideToUtf8(track->title.empty() ? track->filePath.stem().wstring() : track->title);
-    if (settings_.Settings().discordShowArtist) activity.state = core::WideToUtf8(track->artist.empty() ? L"Unknown artist" : track->artist);
-    activity.showImageText = settings_.Settings().discordShowImageText;
+    const bool showImageText = settings_.Settings().discordShowImageText;
+    const bool showArtist = settings_.Settings().discordShowArtist;
+    std::string stateLine;
+    if (showArtist) {
+        stateLine = core::WideToUtf8(track->artist.empty() ? L"Unknown artist" : track->artist);
+    }
+    // Verse syncing is controlled by the IMAGE TEXT toggle: ON shows the current verse
+    // as the artwork tooltip (replacing "Rivan"); OFF disables the verse entirely.
+    std::string verse;
+    if (showImageText && !lyricsSnapshotCache_.loading && lyricsSnapshotCache_.available &&
+        lyricsSnapshotCache_.trackId == track->id && lyricsSnapshotCache_.document.synced) {
+        const double positionSec = std::chrono::duration<double>(live.position).count();
+        const auto& lines = lyricsSnapshotCache_.document.lines;
+        std::size_t activeLine = 0;
+        bool found = false;
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            if (lines[i].timestampSeconds >= 0.0 && lines[i].timestampSeconds <= positionSec) {
+                activeLine = i;
+                found = true;
+            }
+        }
+        if (found && !lines[activeLine].text.empty()) {
+            verse = core::WideToUtf8(lines[activeLine].text);
+        }
+    }
+    activity.state = std::move(stateLine);
+    // The artwork tooltip (image text) carries only the current synced verse; no
+    // placeholder text when the track has no timed lyrics or syncing is off.
+    activity.imageText = showImageText ? verse : "";
     activity.showGithubButton = settings_.Settings().discordShowGithubButton;
     const auto nowUnix = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     const auto positionSec = std::chrono::duration_cast<std::chrono::seconds>(live.position).count();
     const auto durationSec = std::chrono::duration_cast<std::chrono::seconds>(live.duration).count();
     activity.startUnix = nowUnix - std::max<std::int64_t>(0, positionSec);
     if (durationSec > 0) activity.endUnix = activity.startUnix + durationSec;
+    // Republish only when the visible surface changed; timestamps are intentionally
+    // excluded so the 30 Hz playback repaint does not hammer the Discord pipe and
+    // Discord's own progress bar continues from the previously published start.
+    const std::string key = activity.details + "\x1f" + activity.state + "\x1f" +
+                            activity.imageText + "\x1f" +
+                            (activity.showGithubButton ? "1" : "0");
+    if (discordPresencePublished_ && discordPresenceStateKey_ == key) return;
+    discordPresencePublished_ = true;
+    discordPresenceStateKey_ = key;
     discord_.SetActivity(std::move(activity));
 }
 

@@ -216,14 +216,15 @@ void Win32Ui::Impl::TrimTrackCoverCache() {
         return inserted->second.bitmap.Get();
     }
 
-void Win32Ui::Impl::DrawTrackCover(const TrackView& track, const D2D1_RECT_F& bounds) {
+[[nodiscard]] bool Win32Ui::Impl::DrawTrackCover(const std::wstring& path,
+                                                   const D2D1_RECT_F& bounds) {
         const auto width = static_cast<UINT>(std::max(1.0F, std::ceil(Width(bounds))));
         const auto height = static_cast<UINT>(std::max(1.0F, std::ceil(Height(bounds))));
-        if (auto* bitmap = TrackCoverBitmap(track.filePath, std::max(width, height))) {
+        if (auto* bitmap = TrackCoverBitmap(path, std::max(width, height))) {
             const auto bitmapSize = bitmap->GetSize();
-            if (bitmapSize.width <= 0.0F || bitmapSize.height <= 0.0F) return;
+            if (bitmapSize.width <= 0.0F || bitmapSize.height <= 0.0F) return false;
             const float scale = std::min(Width(bounds) / bitmapSize.width,
-                                         Height(bounds) / bitmapSize.height);
+                                          Height(bounds) / bitmapSize.height);
             const float drawWidth = bitmapSize.width * scale;
             const float drawHeight = bitmapSize.height * scale;
             const auto targetBounds = Rect(bounds.left + (Width(bounds) - drawWidth) * 0.5F,
@@ -232,7 +233,13 @@ void Win32Ui::Impl::DrawTrackCover(const TrackView& track, const D2D1_RECT_F& bo
                                            bounds.top + (Height(bounds) + drawHeight) * 0.5F);
             target->DrawBitmap(bitmap, targetBounds, 1.0F,
                                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            return true;
         }
+        return false;
+    }
+
+void Win32Ui::Impl::DrawTrackCover(const TrackView& track, const D2D1_RECT_F& bounds) {
+        (void)DrawTrackCover(track.filePath, bounds);
     }
 
 [[nodiscard]] std::wstring Win32Ui::Impl::SelectedPlaylistName() const {

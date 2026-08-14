@@ -67,6 +67,8 @@ struct AppSettings final {
     bool discordShowArtist = true;
     bool discordShowImageText = true;
     bool discordShowGithubButton = false;
+    // Local listen-statistics tracking (plays + seconds per song, week/month/year/lifetime).
+    bool statsEnabled = true;
     ui::ModuleExpansionBehavior moduleExpansionBehavior =
         ui::ModuleExpansionBehavior::Squash;
     ui::WindowResizeBehavior windowResizeBehavior = ui::WindowResizeBehavior::ScaleAll;

@@ -144,7 +144,7 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
 
     if (impl_->windowKind == WindowKind::Main) {
         WindowOptions settingsOptions;
-        settingsOptions.title = L"Rivan Preferences";
+        settingsOptions.title = L"Rivan Settings";
         settingsOptions.initialWidth = 690;
         settingsOptions.initialHeight = 500;
         settingsOptions.minimumWidth = 420;
@@ -182,6 +182,22 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
             new Win32Ui(impl_->host, WindowKind::YoutubeChooser));
         if (!impl_->youtubeWindow->Create(instance, youtubeOptions)) return false;
         PositionToolWindow(impl_->youtubeWindow->WindowHandle(), impl_->window, 110);
+
+        WindowOptions updateOptions;
+        updateOptions.title = L"Update available!";
+        updateOptions.initialWidth = 360;
+        updateOptions.initialHeight = 180;
+        updateOptions.minimumWidth = 300;
+        updateOptions.minimumHeight = 150;
+        updateOptions.acceptFileDrops = false;
+        // Like the YouTube chooser, this remains independently reachable instead of
+        // becoming disabled behind its owner.
+        updateOptions.owner = nullptr;
+        updateOptions.initiallyVisible = false;
+        impl_->updateWindow = std::unique_ptr<Win32Ui>(
+            new Win32Ui(impl_->host, WindowKind::UpdateNotifier));
+        if (!impl_->updateWindow->Create(instance, updateOptions)) return false;
+        PositionToolWindow(impl_->updateWindow->WindowHandle(), impl_->window, 150);
     }
     return true;
 }
@@ -254,8 +270,13 @@ void Win32Ui::Refresh() noexcept {
     }
     if (impl_->youtubeWindow && impl_->youtubeWindow->WindowHandle()) {
         ShowWindow(impl_->youtubeWindow->WindowHandle(),
-                   current.youtubeChooserVisible ? SW_SHOWNORMAL : SW_HIDE);
+                    current.youtubeChooserVisible ? SW_SHOWNORMAL : SW_HIDE);
         if (current.youtubeChooserVisible) impl_->youtubeWindow->Refresh();
+    }
+    if (impl_->updateWindow && impl_->updateWindow->WindowHandle()) {
+        ShowWindow(impl_->updateWindow->WindowHandle(),
+                   current.updateNotifierVisible ? SW_SHOWNORMAL : SW_HIDE);
+        if (current.updateNotifierVisible) impl_->updateWindow->Refresh();
     }
 }
 
@@ -475,6 +496,13 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case kAudioSignalMessage:
         InvalidateRect(impl_->window, nullptr, FALSE);
         return 0;
+    case kUpdateServiceMessage:
+        if (impl_->windowKind == WindowKind::Main) {
+            // App consumes its dirty flag from the message loop; request a repaint too
+            // so the tool-window visibility projection runs immediately afterward.
+            InvalidateRect(impl_->window, nullptr, FALSE);
+        }
+        return 0;
     case WM_SETCURSOR:
         if (LOWORD(lParam) == HTCLIENT) {
             if (impl_->pickingScreenColor) {
@@ -506,6 +534,10 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         if (impl_->windowKind == WindowKind::YoutubeChooser) {
             try { impl_->host.SetYoutubeChooserVisible(false); } catch (...) {}
+            return 0;
+        }
+        if (impl_->windowKind == WindowKind::UpdateNotifier) {
+            try { impl_->host.SetUpdateNotifierVisible(false); } catch (...) {}
             return 0;
         }
         if (impl_->windowKind == WindowKind::Main) {

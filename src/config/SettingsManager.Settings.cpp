@@ -233,6 +233,7 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     document.Set("discord", "show_artist", BoolText(settings.discordShowArtist));
     document.Set("discord", "show_image_text", BoolText(settings.discordShowImageText));
     document.Set("discord", "show_github_button", BoolText(settings.discordShowGithubButton));
+    document.Set("stats", "enabled", BoolText(settings.statsEnabled));
     return document;
 }
 
@@ -392,6 +393,7 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
     ReadBoolField(*document, "discord", "show_artist", settings_.discordShowArtist, warnings);
     ReadBoolField(*document, "discord", "show_image_text", settings_.discordShowImageText, warnings);
     ReadBoolField(*document, "discord", "show_github_button", settings_.discordShowGithubButton, warnings);
+    ReadBoolField(*document, "stats", "enabled", settings_.statsEnabled, warnings);
 
     if (error != nullptr) error->clear();
     return true;

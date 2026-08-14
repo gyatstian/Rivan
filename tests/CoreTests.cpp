@@ -9,6 +9,9 @@
 #include "../src/playlist/PlaybackQueue.h"
 #include "../src/playlist/PlaylistManager.h"
 #include "../src/skin/Skin.h"
+#include "../src/stats/ListenStats.h"
+#include "../src/stats/StatsDashboard.h"
+#include "../src/update/UpdateService.h"
 #include "../src/visualization/Visualization.h"
 #include "../src/lyrics/LyricsService.h"
 #include "../src/ui/TrackCoverCache.h"
@@ -3090,6 +3093,469 @@ void TestTabStripProportionalWidths() {
           "the last tab stays reachable and maps to its group member");
 }
 
+void TestListenStatsPeriodKeys() {
+    using rivan::stats::CurrentPeriodKeys;
+    using rivan::stats::MonthlySnapshotName;
+    using rivan::stats::WeeklySnapshotName;
+    using rivan::stats::YearlySnapshotName;
+
+    std::tm t{};
+    t.tm_year = 2026 - 1900;
+    t.tm_mon = 8 - 1;
+    t.tm_mday = 17;
+    auto keys = CurrentPeriodKeys(t);
+    Check(keys.weekMonday == "17082026", "a Monday labels its own date as the week start");
+    Check(keys.month == "082026", "August labels its month as 082026");
+    Check(keys.year == "2026", "the year key is yyyy");
+    Check(WeeklySnapshotName("17082026") == "17082026-23082026",
+          "weekly snapshot spans Monday to Sunday");
+    Check(MonthlySnapshotName("082026") == "082026-092026",
+          "monthly snapshot runs to the first of the next month");
+    Check(YearlySnapshotName("2026") == "2026-2027",
+          "yearly snapshot runs into the next year");
+
+    t.tm_mday = 20;
+    keys = CurrentPeriodKeys(t);
+    Check(keys.weekMonday == "17082026", "a Thursday keeps the Monday label");
+
+    t.tm_mon = 8 - 1;
+    t.tm_mday = 1;
+    keys = CurrentPeriodKeys(t);
+    Check(keys.weekMonday == "27072026", "the first of August labels the prior Monday");
+
+    t.tm_mon = 12 - 1;
+    t.tm_mday = 31;
+    keys = CurrentPeriodKeys(t);
+    Check(keys.weekMonday == "28122026", "New Year's Eve labels its Monday");
+    Check(WeeklySnapshotName("28122026") == "28122026-03012027",
+          "weekly snapshot crosses the year boundary");
+    Check(keys.month == "122026", "December labels its month as 122026");
+    Check(MonthlySnapshotName("122026") == "122026-012027",
+          "December monthly snapshot wraps into January");
+    Check(keys.year == "2026", "December keeps the current year key");
+    Check(YearlySnapshotName("2026") == "2026-2027",
+          "yearly snapshot spans into the next year");
+
+    t.tm_mon = 1 - 1;
+    t.tm_mday = 1;
+    keys = CurrentPeriodKeys(t);
+    Check(keys.weekMonday == "29122025", "New Year's Day labels the prior Monday");
+    Check(keys.month == "012026" && keys.year == "2026",
+          "January labels month and year correctly");
+    Check(MonthlySnapshotName("012026") == "012026-022026",
+          "January monthly snapshot runs into February");
+
+    Check(WeeklySnapshotName("").empty() && WeeklySnapshotName("123").empty() &&
+              MonthlySnapshotName("bad").empty() && MonthlySnapshotName("13a026").empty() &&
+              YearlySnapshotName("20").empty() && YearlySnapshotName("abcd").empty(),
+          "malformed snapshot labels produce no snapshot name");
+}
+
+void TestListenStatsSectionNames() {
+    using namespace rivan::stats;
+
+    const auto song = SongSectionName(0x1234ABCull);
+    Check(song == "song:1234abc", "song sections are lowercase hex track ids");
+    const auto songKey = DecodeSectionName(song);
+    Check(songKey && *songKey == "1234abc",
+          "song section decodes back to its track id hex");
+    Check(DecodeSectionName(SongSectionName(0)) &&
+              *DecodeSectionName(SongSectionName(0)) == "0",
+          "the zero track id decodes as hex zero");
+    Check(!DecodeSectionName("meta").has_value(), "the meta section is not an entity");
+    Check(!DecodeSectionName("genre:Rock").has_value() &&
+              !DecodeSectionName("author:Queen").has_value(),
+          "legacy genre and author sections are not decoded as entities");
+}
+
+void TestListenStatsModelRoundTrip() {
+    using namespace rivan::stats;
+
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanStatsTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    const auto file = root / L"stats.ini";
+
+    ListenStatsModel model;
+    model.periods.weekMonday = "17082026";
+    model.periods.month = "082026";
+    model.periods.year = "2026";
+    const std::string song = SongSectionName(0x1A2B);
+    model.SetSongPath(song, "C:\\Music\\track.flac");
+    model.AddPlay(song);
+    model.AddSeconds(song, 90);
+
+    std::string error;
+    Check(SaveMainStatsFile(file, model, &error), "listen stats main file saves");
+
+    ListenStatsModel loaded;
+    Check(LoadMainStatsFile(file, loaded, &error), "listen stats main file loads");
+    Check(loaded.periods.weekMonday == "17082026" && loaded.periods.month == "082026" &&
+              loaded.periods.year == "2026",
+          "loaded model keeps the stored periods");
+    const auto* songData = loaded.Find(song);
+    Check(songData != nullptr && songData->week.plays == 1 && songData->month.plays == 1 &&
+              songData->year.plays == 1 && songData->week.seconds == 90 &&
+              songData->month.seconds == 90 && songData->year.seconds == 90 &&
+              songData->lifetime.plays == 1 && songData->lifetime.seconds == 90 &&
+              songData->songPath == "C:\\Music\\track.flac",
+          "song counters, lifetime, and path round-trip");
+
+    // Core regression for the deletion-of-period-files requirement: a song whose
+    // w/m/y are ALL zero but whose lifetime is nonzero must still be written to the
+    // main file and load back, because only lifetime survives the user deleting the
+    // period snapshot files.
+    const std::string onlyLifetime = SongSectionName(0x5EED);
+    ListenStatsModel onlyLifetimeModel;
+    onlyLifetimeModel.periods.weekMonday = "17082026";
+    onlyLifetimeModel.periods.month = "082026";
+    onlyLifetimeModel.periods.year = "2026";
+    onlyLifetimeModel.AddPlay(onlyLifetime);
+    onlyLifetimeModel.AddSeconds(onlyLifetime, 321);
+    onlyLifetimeModel.AddPlay(onlyLifetime);
+    auto* onlyLifetimeData = onlyLifetimeModel.Find(onlyLifetime);
+    onlyLifetimeData->ClearWeek();
+    onlyLifetimeData->ClearMonth();
+    onlyLifetimeData->ClearYear();
+    const auto onlyLifetimeFile = root / L"only-lifetime.ini";
+    Check(SaveMainStatsFile(onlyLifetimeFile, onlyLifetimeModel, &error),
+          "a song with only lifetime data still saves");
+    ListenStatsModel onlyLifetimeLoaded;
+    Check(LoadMainStatsFile(onlyLifetimeFile, onlyLifetimeLoaded, &error),
+          "a song with only lifetime data loads back");
+    const auto* onlyLifetimeLoadedData = onlyLifetimeLoaded.Find(onlyLifetime);
+    Check(onlyLifetimeLoadedData != nullptr && onlyLifetimeLoadedData->week.Empty() &&
+              onlyLifetimeLoadedData->month.Empty() && onlyLifetimeLoadedData->year.Empty() &&
+              onlyLifetimeLoadedData->lifetime.plays == 2 &&
+              onlyLifetimeLoadedData->lifetime.seconds == 321,
+          "only-lifetime song survives save/load with period counters zero");
+
+    // Backward compatibility: files written before lifetime existed have no "l" key
+    // and must load with lifetime zero (not fail).
+    rivan::core::IniDocument legacyDoc;
+    legacyDoc.Set("meta", "format", "rivan-stats");
+    legacyDoc.Set("meta", "week", "17082026");
+    legacyDoc.Set("meta", "month", "082026");
+    legacyDoc.Set("meta", "year", "2026");
+    legacyDoc.Set(song, "w", "3|10");
+    legacyDoc.Set(song, "m", "3|10");
+    legacyDoc.Set(song, "y", "3|10");
+    const auto legacyFile = root / L"legacy.ini";
+    Check(legacyDoc.SaveAtomic(legacyFile, &error), "legacy fixture saves");
+    ListenStatsModel legacyLoaded;
+    Check(LoadMainStatsFile(legacyFile, legacyLoaded, &error), "legacy file loads");
+    const auto* legacyData = legacyLoaded.Find(song);
+    Check(legacyData != nullptr && legacyData->lifetime.Empty() && legacyData->week.plays == 3,
+          "missing lifetime key loads as zero");
+
+    ListenStatsModel missing;
+    Check(LoadMainStatsFile(root / L"missing.ini", missing, &error) &&
+              missing.entities.empty() && missing.periods.weekMonday.empty(),
+          "missing main stats file loads as an empty success");
+
+    std::filesystem::remove_all(root, ec);
+}
+
+void TestListenStatsRollover() {
+    using namespace rivan::stats;
+
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanStatsTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+
+    ListenStatsModel model;
+    model.periods.weekMonday = "17082026";
+    model.periods.month = "082026";
+    model.periods.year = "2026";
+    const std::string song = SongSectionName(0xCAFE);
+    model.SetSongPath(song, "C:\\music\\song.flac");
+    model.AddPlay(song);
+    model.AddSeconds(song, 120);
+
+    PeriodKeys current;
+    current.weekMonday = "24082026";
+    current.month = "092026";
+    current.year = "2027";
+    const auto written = RolloverPeriods(root, model, current);
+    Check(written.size() == 3, "rollover writes one snapshot per advanced period");
+
+    const auto weekFile = root / L"17082026-23082026.ini";
+    const auto monthFile = root / L"082026-092026.ini";
+    const auto yearFile = root / L"2026-2027.ini";
+    Check(std::filesystem::exists(weekFile), "weekly snapshot file exists");
+    Check(std::filesystem::exists(monthFile), "monthly snapshot file exists");
+    Check(std::filesystem::exists(yearFile), "yearly snapshot file exists");
+
+    std::string error;
+    const auto weekDoc = rivan::core::IniDocument::Load(weekFile, &error);
+    Check(weekDoc.has_value() && weekDoc->HasMetaFormat("rivan-stats-weekly"),
+          "weekly snapshot marks its format");
+    if (weekDoc) {
+        const auto period = weekDoc->Get("meta", "period");
+        Check(period && *period == "17082026-23082026", "weekly snapshot records its period");
+        const auto songValue = weekDoc->Get(song, "p");
+        Check(songValue && *songValue == "1|120", "weekly snapshot keeps song plays|seconds");
+        const auto pathValue = weekDoc->Get(song, "path");
+        Check(pathValue && *pathValue == "C:\\music\\song.flac", "weekly snapshot keeps the song path");
+    }
+    const auto monthDoc = rivan::core::IniDocument::Load(monthFile, &error);
+    Check(monthDoc.has_value() && monthDoc->HasMetaFormat("rivan-stats-monthly"),
+          "monthly snapshot marks its format");
+    if (monthDoc) {
+        const auto period = monthDoc->Get("meta", "period");
+        Check(period && *period == "082026-092026", "monthly snapshot records its period");
+        const auto songValue = monthDoc->Get(song, "p");
+        Check(songValue && *songValue == "1|120", "monthly snapshot keeps song plays|seconds");
+    }
+    const auto yearDoc = rivan::core::IniDocument::Load(yearFile, &error);
+    Check(yearDoc.has_value() && yearDoc->HasMetaFormat("rivan-stats-yearly"),
+          "yearly snapshot marks its format");
+    if (yearDoc) {
+        const auto period = yearDoc->Get("meta", "period");
+        Check(period && *period == "2026-2027", "yearly snapshot records its period");
+        const auto songValue = yearDoc->Get(song, "p");
+        Check(songValue && *songValue == "1|120", "yearly snapshot keeps song plays|seconds");
+    }
+
+    Check(model.periods.weekMonday == "24082026" && model.periods.month == "092026" &&
+              model.periods.year == "2027",
+          "rollover adopts the current period labels");
+    const auto* songData = model.Find(song);
+    Check(songData != nullptr && songData->week.Empty() && songData->month.Empty() &&
+              songData->year.Empty() && songData->lifetime.plays == 1 &&
+              songData->lifetime.seconds == 120 && songData->songPath == "C:\\music\\song.flac",
+          "rollover clears the period counters but keeps the lifetime and song path");
+
+    const auto second = RolloverPeriods(root, model, current);
+    Check(second.empty(), "a second rollover with the same labels writes nothing");
+
+    std::filesystem::remove_all(root, ec);
+}
+
+void TestListenStatsRolloverPartial() {
+    using namespace rivan::stats;
+
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanStatsTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+
+    ListenStatsModel model;
+    model.periods.weekMonday = "17082026";
+    model.periods.month = "082026";
+    model.periods.year = "2026";
+    const std::string song = SongSectionName(7);
+    model.AddPlay(song);
+    model.AddSeconds(song, 100);
+
+    PeriodKeys current;
+    current.weekMonday = "24082026";
+    current.month = "082026";  // unchanged
+    current.year = "2026";     // unchanged
+    const auto written = RolloverPeriods(root, model, current);
+    Check(written.size() == 1, "only the advanced week period rolls over");
+    Check(std::filesystem::exists(root / L"17082026-23082026.ini"),
+          "the weekly snapshot is written");
+    Check(!std::filesystem::exists(root / L"082026-092026.ini") &&
+              !std::filesystem::exists(root / L"2026-2027.ini"),
+          "unchanged month and year periods write no snapshots");
+    const auto* songData = model.Find(song);
+    Check(songData != nullptr && songData->week.Empty() && songData->month.plays == 1 &&
+              songData->month.seconds == 100 && songData->year.plays == 1 &&
+              songData->year.seconds == 100 && songData->lifetime.plays == 1 &&
+              songData->lifetime.seconds == 100,
+          "partial rollover clears only the week counters");
+    Check(model.periods.weekMonday == "24082026" && model.periods.month == "082026" &&
+              model.periods.year == "2026",
+          "partial rollover advances only the week label");
+
+    std::filesystem::remove_all(root, ec);
+}
+
+void TestListenStatsStartupRollover() {
+    using namespace rivan::stats;
+
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanStatsTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    const auto file = root / L"rivan-stats.ini";
+
+    // Persist a model whose stored week is behind the current one, then emulate
+    // startup: load the main file and let the first rollover snapshot the closed week.
+    ListenStatsModel model;
+    model.periods.weekMonday = "17082026";
+    model.periods.month = "082026";
+    model.periods.year = "2026";
+    const std::string song = SongSectionName(0xBEEF);
+    model.SetSongPath(song, "C:\\music\\track.flac");
+    model.AddPlay(song);
+    model.AddSeconds(song, 100);
+    std::string error;
+    Check(SaveMainStatsFile(file, model, &error), "startup rollover fixture saves");
+
+    ListenStatsModel loaded;
+    Check(LoadMainStatsFile(file, loaded, &error), "startup rollover fixture loads");
+
+    PeriodKeys current;
+    current.weekMonday = "24082026";
+    current.month = "082026";  // unchanged
+    current.year = "2026";     // unchanged
+    const auto written = RolloverPeriods(root, loaded, current);
+    Check(written.size() == 1, "startup rollover writes only the advanced week period");
+    // The snapshot name derives from the STORED week label.
+    Check(std::filesystem::exists(root / L"17082026-23082026.ini"),
+          "startup rollover snapshots from the stored week label");
+    const auto* songData = loaded.Find(song);
+    Check(songData != nullptr && songData->week.Empty() && songData->month.plays == 1 &&
+              songData->month.seconds == 100 && songData->year.plays == 1 &&
+              songData->year.seconds == 100 && songData->lifetime.plays == 1 &&
+              songData->lifetime.seconds == 100,
+          "startup rollover zeroes only the week counters");
+    Check(loaded.periods.weekMonday == "24082026" && loaded.periods.month == "082026" &&
+              loaded.periods.year == "2026",
+          "startup rollover advances only the week label");
+
+    std::filesystem::remove_all(root, ec);
+}
+
+void TestListenSessionPlayRule() {
+    using rivan::stats::ListenSession;
+
+    ListenSession session;
+    session.AddSeconds(59.0);
+    Check(!session.CountPlayIfQualified(200.0), "59 seconds of 200 does not qualify");
+    session.AddSeconds(1.0);
+    Check(session.CountPlayIfQualified(200.0), "exactly 30% of 200 qualifies once");
+    session.AddSeconds(200.0);
+    Check(!session.CountPlayIfQualified(200.0), "the session counts at most one play");
+    session.Reset();
+    Check(!session.CountPlayIfQualified(200.0), "a reset session does not qualify from zero");
+    session.AddSeconds(60.0);
+    Check(session.CountPlayIfQualified(200.0), "a reset session qualifies again at 30%");
+    Check(session.Seconds() == 60.0, "reset keeps the accumulated seconds");
+
+    ListenSession unknown;
+    unknown.AddSeconds(100.0);
+    Check(!unknown.CountPlayIfQualified(0.0), "an unknown duration never qualifies");
+    Check(!unknown.CountPlayIfQualified(-5.0), "a negative duration never qualifies");
+}
+
+void TestStatisticsDashboardDerivation() {
+    using namespace rivan;
+    using namespace stats;
+
+    ListenStatsModel model;
+    const auto alpha = SongSectionName(101);
+    const auto beta = SongSectionName(202);
+    const auto missing = SongSectionName(303);
+    const auto invalid = std::string("legacy:ignored");
+    model.SetSongPath(alpha, "C:\\Music\\alpha-file.flac");
+    model.SetSongPath(beta, "C:\\Music\\beta-file.flac");
+    model.SetSongPath(missing, "C:\\Archive\\gone-song.ogg");
+    model.entities[alpha].week = {2, 180};
+    model.entities[alpha].month = {4, 300};
+    model.entities[alpha].year = {6, 420};
+    model.entities[alpha].lifetime = {8, 480};
+    model.entities[beta].week = {1, 240};
+    model.entities[beta].month = {3, 360};
+    model.entities[beta].year = {5, 480};
+    model.entities[beta].lifetime = {7, 540};
+    model.entities[missing].week = {3, 120};
+    model.entities[missing].month = {3, 120};
+    model.entities[missing].year = {3, 120};
+    model.entities[missing].lifetime = {3, 120};
+    model.entities[invalid].week = {99, 9999};
+
+    library::Track alphaTrack;
+    alphaTrack.id = 101;
+    alphaTrack.filePath = L"C:\\Music\\alpha.flac";
+    alphaTrack.title = L"Current Alpha";
+    alphaTrack.artist = L"Artist A";
+    library::Track betaTrack;
+    betaTrack.id = 202;
+    betaTrack.filePath = L"C:\\Music\\beta.flac";
+    betaTrack.title = L"Current Beta";
+    betaTrack.artist = L"Artist A";
+    library::Track duplicateAlpha = alphaTrack;
+    duplicateAlpha.filePath = L"C:\\Music\\duplicate-alpha.flac";
+    duplicateAlpha.title = L"Duplicate must not win";
+    duplicateAlpha.artist = L"Duplicate artist";
+    const std::vector<library::Track> catalog{alphaTrack, betaTrack, duplicateAlpha};
+
+    const auto dashboardCatalog = BuildDashboardCatalog(catalog);
+    const auto week = BuildDashboard(model, dashboardCatalog, DashboardPeriod::Week);
+    Check(week.totals.plays == 6 && week.totals.seconds == 540 &&
+              week.differentTracks == 3,
+          "dashboard sums only active current-period song entities");
+    Check(week.topTracks.size() == 3 && week.topTracks[0].id == 202 &&
+              week.topTracks[1].id == 101 && week.topTracks[2].id == 303,
+          "dashboard top tracks sort descending by listened seconds");
+    Check(week.topTracks[1].title == "Current Alpha" &&
+              week.topTracks[1].artist == "Artist A" &&
+              week.topTracks[1].filePath == alphaTrack.filePath,
+          "dashboard uses first all-library metadata record and cover path for a track id");
+    Check(week.topTracks[2].title == "gone-song" &&
+              week.topTracks[2].artist == "Unknown artist" && week.topTracks[2].filePath.empty(),
+          "dashboard falls back without a cover path for missing tracks");
+    Check(week.topArtists.size() == 2 && week.topArtists[0].name == "Artist A" &&
+              week.topArtists[0].activity.seconds == 420 &&
+              week.topArtists[0].activity.plays == 3 && week.topArtists[0].trackCount == 2,
+          "dashboard aggregates artist activity once per active track");
+
+    const auto month = BuildDashboard(model, dashboardCatalog, DashboardPeriod::Month);
+    const auto year = BuildDashboard(model, dashboardCatalog, DashboardPeriod::Year);
+    const auto allTime = BuildDashboard(model, dashboardCatalog, DashboardPeriod::AllTime);
+    Check(month.totals.seconds == 780 && month.totals.plays == 10,
+          "dashboard derives month metrics from month counters");
+    Check(year.totals.seconds == 1020 && year.totals.plays == 14,
+          "dashboard derives year metrics from year counters");
+    Check(allTime.totals.seconds == 1140 && allTime.totals.plays == 18,
+          "dashboard derives lifetime metrics from lifetime counters");
+    Check(NextDashboardPeriod(DashboardPeriod::Week) == DashboardPeriod::Month &&
+              NextDashboardPeriod(DashboardPeriod::Month) == DashboardPeriod::Year &&
+              NextDashboardPeriod(DashboardPeriod::Year) == DashboardPeriod::AllTime &&
+              NextDashboardPeriod(DashboardPeriod::AllTime) == DashboardPeriod::Week,
+          "dashboard period cycle visits week month year and all time");
+}
+
+void TestUpdateReleaseParsing() {
+    using rivan::update::UpdateService;
+
+    constexpr std::string_view matching = R"({"tag_name":"1.1","html_url":"https:\/\/github.com\/gyatstian\/Rivan\/releases\/tag\/v1.1"})";
+    const auto equal = UpdateService::ParseLatestReleaseJson(matching);
+    Check(equal.has_value() && !equal->updateAvailable && equal->latestVersion == L"1.1" &&
+              equal->releaseUrl == L"https://github.com/gyatstian/Rivan/releases/tag/v1.1",
+          "update parser accepts escaped GitHub release URLs and strips only one leading v for equality");
+
+    constexpr std::string_view latest = R"({"html_url":"https://github.com/gyatstian/Rivan/releases/tag/v1.2","tag_name":"V1.2","assets":[{"name":"ignored"}]})";
+    const auto newer = UpdateService::ParseLatestReleaseJson(latest);
+    Check(newer.has_value() && newer->updateAvailable && newer->currentVersion == L"v1.1" &&
+              newer->latestVersion == L"V1.2",
+          "update parser reports every normalized-version mismatch without semantic ordering");
+
+    constexpr std::string_view malformed = R"({"tag_name":"v1.2","html_url":123})";
+    constexpr std::string_view untrusted = R"({"tag_name":"v1.2","html_url":"https://example.test/releases/tag/v1.2"})";
+    constexpr std::string_view traversal = R"({"tag_name":"v1.2","html_url":"https://github.com/gyatstian/Rivan/releases/../settings"})";
+    constexpr std::string_view encodedTraversal = R"({"tag_name":"v1.2","html_url":"https://github.com/gyatstian/Rivan/releases/%2e%2e/settings"})";
+    Check(!UpdateService::ParseLatestReleaseJson(malformed).has_value() &&
+              !UpdateService::ParseLatestReleaseJson(untrusted).has_value() &&
+              !UpdateService::ParseLatestReleaseJson(traversal).has_value() &&
+              !UpdateService::ParseLatestReleaseJson(encodedTraversal).has_value(),
+          "update parser rejects malformed JSON and release URLs outside Rivan releases");
+
+    Check(UpdateService::VersionsMatch(L"v1.1", L"V1.1") &&
+              !UpdateService::VersionsMatch(L"vv1.1", L"v1.1") &&
+              !UpdateService::VersionsMatch(L"v1.1", L"1.1.0"),
+          "update version normalization removes at most one leading v or V without semantic comparison");
+}
+
 } // namespace
 
 int main() {
@@ -3123,6 +3589,15 @@ int main() {
     TestAddExternalTrackDuplicateGuard();
     TestCollapseShiftIsolation();
     TestTabStripProportionalWidths();
+    TestListenStatsPeriodKeys();
+    TestListenStatsSectionNames();
+    TestListenStatsModelRoundTrip();
+    TestListenStatsRollover();
+    TestListenStatsRolloverPartial();
+    TestListenStatsStartupRollover();
+    TestListenSessionPlayRule();
+    TestStatisticsDashboardDerivation();
+    TestUpdateReleaseParsing();
     if (failures == 0) std::cout << "Rivan core tests passed\n";
     return failures == 0 ? 0 : 1;
 }

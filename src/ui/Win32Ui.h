@@ -14,6 +14,7 @@
 namespace rivan::ui {
 
 inline constexpr UINT kAudioSignalMessage = WM_APP + 43;
+inline constexpr UINT kUpdateServiceMessage = WM_APP + 44;
 
 struct WindowOptions {
     const wchar_t* title{L"Rivan"};
@@ -51,7 +52,7 @@ public:
     [[nodiscard]] LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
 private:
-    enum class WindowKind { Main, Settings, SkinStudio, YoutubeChooser };
+    enum class WindowKind { Main, Settings, SkinStudio, YoutubeChooser, UpdateNotifier };
     Win32Ui(IUiHost& host, WindowKind kind);
 
     struct Impl;

@@ -215,6 +215,7 @@ void ColorToHsv(skin::Color color, float& hue, float& saturation, float& value) 
     case SettingCategory::Modules: return L"MODULES";
     case SettingCategory::Appearance: return L"APPEARANCE";
     case SettingCategory::Integrations: return L"INTEGRATIONS";
+    case SettingCategory::Statistics: return L"STATISTICS";
     case SettingCategory::SkinManager: return L"SKIN MANAGER";
     }
     return L"SETTINGS";
@@ -266,7 +267,8 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     enum class HitKind : std::uint8_t {
         Command, Playlist, PlaylistToggle, Track, Seek, Volume, Setting,
         PlaylistSearch, WindowControl, Studio, Refresh, SettingsAction, TimeToggle,
-        YoutubeResult, YoutubeChooserAction, FilePreviewFullscreen, FilePreviewExitFullscreen,
+        YoutubeResult, YoutubeChooserAction, UpdateNotifierAction,
+        FilePreviewFullscreen, FilePreviewExitFullscreen,
         ModuleTitle,
         ModuleTab,
         ModuleCollapseToggle,
@@ -322,6 +324,10 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     D2D1_RECT_F lyricsContentBounds{};
     float lyricsScrollY{};
     bool lyricsSyncedMode_{true};
+    // True while the user is manually scrolling the lyrics view. Suspends the synced
+    // auto-follow so wheel scrolling (up or down) is not undone by the next repaint.
+    // Reset when the user scrolls back to the bottom, presses SYNC, or clicks a verse.
+    bool lyricsUserScrolling_{};
     std::uint64_t lyricsRevision_{};
     DWRITE_TEXT_ALIGNMENT lyricsAlignment_{DWRITE_TEXT_ALIGNMENT_LEADING};
     // Skin Manager saved-skins list row scroll.
@@ -332,6 +338,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     std::unique_ptr<Win32Ui> settingsWindow;
     std::unique_ptr<Win32Ui> studioWindow;
     std::unique_ptr<Win32Ui> youtubeWindow;
+    std::unique_ptr<Win32Ui> updateWindow;
     // True while the notification-area icon is live (exit-to-tray hid the window).
     bool trayIconAdded{};
     bool youtubeGrabberHotkeyRegistered{};
@@ -377,7 +384,11 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void TrimTrackCoverCache();
 
     [[nodiscard]] ID2D1Bitmap* TrackCoverBitmap(const std::wstring& path,
-                                                 UINT maximumDimension);
+                                                  UINT maximumDimension);
+
+    // Draws current-catalog cover art and reports whether one was available. Callers can
+    // reserve the artwork region and render a no-cover fallback without touching playback.
+    [[nodiscard]] bool DrawTrackCover(const std::wstring& path, const D2D1_RECT_F& bounds);
 
     void DrawTrackCover(const TrackView& track, const D2D1_RECT_F& bounds);
 
@@ -606,6 +617,8 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
 
     void DrawYoutubeChooser(const D2D1_SIZE_F size,
                             std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawUpdateNotifier(const D2D1_SIZE_F size,
+                            std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
 
     // Settings detail pane: category-name heading when the pane has no per-section header.
     void DrawSettingsPane(const D2D1_RECT_F& details,
@@ -622,7 +635,9 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void DrawAppearanceSection(float left, float right, float& y,
                                std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
     void DrawIntegrationsSection(float left, float right, float& y,
-                                 std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+                                  std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
+    void DrawStatisticsSection(float left, float right, float& y,
+                               std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
 
     // Skin Manager pane: two side-by-side actions on top (open the skin studio / open the
     // skins folder), and a scrollable-ish list of saved and built-in skins below. Clicking
@@ -643,6 +658,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
                         std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);
     void HandleSettingsAction(std::uint64_t action);
     void HandleYoutubeChooserAction(std::uint64_t action);
+    void HandleUpdateNotifierAction(std::uint64_t action);
     [[nodiscard]] std::optional<std::filesystem::path> PickFolder();
     void StudioRailButton(const D2D1_RECT_F& bounds, const wchar_t* icon, const wchar_t* label,
                           StudioSection section, std::uint64_t action,

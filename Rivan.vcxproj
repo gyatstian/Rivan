@@ -100,6 +100,10 @@
     <ClInclude Include="src\skin\Skin.h" />
     <ClInclude Include="src\skin\SkinArchive.h" />
     <ClInclude Include="src\skin\SkinManager.h" />
+    <ClInclude Include="src\stats\ListenStats.h" />
+    <ClInclude Include="src\stats\StatsService.h" />
+    <ClInclude Include="src\stats\StatsDashboard.h" />
+    <ClInclude Include="src\update\UpdateService.h" />
     <ClInclude Include="src\ui\UiHost.h" />
     <ClInclude Include="src\ui\SongRowLayout.h" />
     <ClInclude Include="src\ui\TrackCoverCache.h" />
@@ -131,6 +135,8 @@
     <ClCompile Include="src\AppPlaylistPersistence.cpp" />
     <ClCompile Include="src\AppLibrary.cpp" />
     <ClCompile Include="src\AppPersistence.cpp" />
+    <ClCompile Include="src\AppStats.cpp" />
+    <ClCompile Include="src\AppUpdate.cpp" />
     <ClCompile Include="src\audio\AudioAnalysisBuffer.cpp" />
     <ClCompile Include="src\audio\AudioEngine.cpp" />
     <ClCompile Include="src\audio\NativeAudioBackend.cpp" />
@@ -150,6 +156,10 @@
     <ClCompile Include="src\skin\Skin.cpp" />
     <ClCompile Include="src\skin\SkinArchive.cpp" />
     <ClCompile Include="src\skin\SkinManager.cpp" />
+    <ClCompile Include="src\stats\ListenStats.cpp" />
+    <ClCompile Include="src\stats\StatsService.cpp" />
+    <ClCompile Include="src\stats\StatsDashboard.cpp" />
+    <ClCompile Include="src\update\UpdateService.cpp" />
     <ClCompile Include="src\skin\miniz\miniz.c" />
     <ClCompile Include="src\ui\Win32Ui.cpp" />
     <ClCompile Include="src\ui\Win32Ui.DrawingPrimitives.cpp" />
@@ -163,6 +173,7 @@
     <ClCompile Include="src\ui\Win32Ui.Keyboard.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Pointer.cpp" />
     <ClCompile Include="src\ui\Win32Ui.YoutubeChooser.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.UpdateNotifier.cpp" />
     <ClCompile Include="src\ui\Win32Ui.RowInteraction.cpp" />
     <ClCompile Include="src\ui\Win32Ui.Settings.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Actions.cpp" />

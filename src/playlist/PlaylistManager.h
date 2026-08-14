@@ -20,6 +20,8 @@ public:
     void ApplyScan(const library::LibraryScanResult& scan);
 
     [[nodiscard]] const std::vector<Playlist>& Playlists() const noexcept;
+    // Current deduplicated library catalog, including tracks retained as external imports.
+    [[nodiscard]] const std::vector<library::Track>& AllTracks() const noexcept;
     [[nodiscard]] const library::Track* FindTrack(library::TrackId id) const noexcept;
     [[nodiscard]] const Playlist* FindPlaylist(PlaylistId id) const noexcept;
     // Direct tracks of a playlist (non-recursive for Directory playlists).
@@ -90,6 +92,7 @@ private:
     void PruneExternalTracks();
 
     std::vector<library::Track> tracks_;
+    std::vector<library::Track> allTracks_;
     std::vector<Playlist> playlists_;
     // Tracks referenced by user playlists that are not part of the current scan. Keyed by
     // id so FindTrack can fall back here after the scanned catalog misses.

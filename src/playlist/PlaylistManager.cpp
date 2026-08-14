@@ -119,6 +119,10 @@ const std::vector<Playlist>& PlaylistManager::Playlists() const noexcept {
     return playlists_;
 }
 
+const std::vector<library::Track>& PlaylistManager::AllTracks() const noexcept {
+    return allTracks_;
+}
+
 const library::Track* PlaylistManager::FindTrack(library::TrackId id) const noexcept {
     const auto found = trackIndex_.find(id);
     if (found != trackIndex_.end() && found->second < tracks_.size()) {
@@ -512,6 +516,16 @@ void PlaylistManager::RebuildIndexes() {
     trackIndex_.reserve(tracks_.size());
     for (std::size_t index = 0; index < tracks_.size(); ++index) {
         trackIndex_[tracks_[index].id] = index;
+    }
+
+    // Keep one canonical metadata catalog for consumers that need every known track,
+    // including imported tracks outside current scan roots. Scanned records win.
+    allTracks_ = tracks_;
+    std::unordered_set<library::TrackId> catalogIds;
+    catalogIds.reserve(allTracks_.size() + externalTracks_.size());
+    for (const auto& track : allTracks_) catalogIds.insert(track.id);
+    for (const auto& [id, track] : externalTracks_) {
+        if (catalogIds.insert(id).second) allTracks_.push_back(track);
     }
 
     playlistIndex_.reserve(playlists_.size());
