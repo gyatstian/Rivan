@@ -111,10 +111,10 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
             // worker's pending I/O before joining so preview changes cannot stall the
             // UI thread indefinitely.
             CancelSynchronousIo(previewWorker.native_handle());
+            previewWorker.request_stop();
+            previewWake.notify_all();
+            previewWorker = {};
         }
-        previewWorker.request_stop();
-        previewWake.notify_all();
-        previewWorker = {};
     }
 
 [[nodiscard]] bool Win32Ui::Impl::IsVideoPath(const std::wstring& path) {
@@ -340,6 +340,8 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
             try {
                 std::uint64_t activeGeneration = 0;
                 double synced = -1.0;
+                double lastWanted = -1.0;
+                bool catchingUpAfterSeek = false;
                 ComPtr<IMFSourceReader> reader;
                 UINT width = 0;
                 UINT height = 0;
@@ -407,10 +409,13 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                     reader.Reset();
                     activeGeneration = generation;
                     synced = -1.0;
+                    lastWanted = -1.0;
+                    catchingUpAfterSeek = false;
                     if (path.empty()) continue;
                     ComPtr<IMFAttributes> attributes;
                     if (FAILED(MFCreateAttributes(attributes.ReleaseAndGetAddressOf(), 1)) ||
-                        FAILED(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE)) ||
+                        FAILED(attributes->SetUINT32(
+                            MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE)) ||
                         FAILED(MFCreateSourceReaderFromURL(path.c_str(), attributes.Get(),
                                                            reader.ReleaseAndGetAddressOf()))) {
                         reader.Reset();
@@ -432,14 +437,31 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                     nativeSourceRect = ReadPreviewSourceRect(nativeType.Get(), width, height);
                     nativeWidth = width;
                     nativeHeight = height;
+                    UINT nativeFrameRateNumerator = 0;
+                    UINT nativeFrameRateDenominator = 0;
+                    const bool hasValidNativeFrameRate =
+                        SUCCEEDED(MFGetAttributeRatio(nativeType.Get(), MF_MT_FRAME_RATE,
+                                                      &nativeFrameRateNumerator,
+                                                      &nativeFrameRateDenominator)) &&
+                        nativeFrameRateNumerator != 0 && nativeFrameRateDenominator != 0;
+                    const bool capFrameRate = hasValidNativeFrameRate &&
+                        static_cast<std::uint64_t>(nativeFrameRateNumerator) >
+                            30ULL * nativeFrameRateDenominator;
+
                     // Do not ask Source Reader to resize decoded frames. Several decoder
                     // paths report scaled RGB32 stride/layout inconsistently, producing
                     // duplicated image fields or horizontal corruption. D2D scales safely.
+                    // Cap conversion at the UI's 30 Hz presentation rate so 60 fps sources
+                    // cannot outrun synchronous RGB32 conversion and remain stuck catching up.
                     ComPtr<IMFMediaType> type;
                     if (FAILED(MFCreateMediaType(type.ReleaseAndGetAddressOf())) ||
                         FAILED(type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video)) ||
                         FAILED(type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32)) ||
                         FAILED(MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, width, height)) ||
+                        (hasValidNativeFrameRate &&
+                         FAILED(MFSetAttributeRatio(type.Get(), MF_MT_FRAME_RATE,
+                                                    capFrameRate ? 30U : nativeFrameRateNumerator,
+                                                    capFrameRate ? 1U : nativeFrameRateDenominator))) ||
                         FAILED(reader->SetCurrentMediaType(
                             static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, type.Get()))) {
                         reader.Reset();
@@ -452,24 +474,43 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                     continue;
                 }
                 if (!reader) continue;
-                double want = previewWantedSeconds.load(std::memory_order_relaxed);
-                if (synced >= 0.0 && want + kPreviewFrameLeadSeconds < synced) {
+                const double want = previewWantedSeconds.load(std::memory_order_relaxed);
+                const bool requestedPositionJumped = lastWanted >= 0.0 &&
+                    std::abs(want - lastWanted) > kPreviewSeekThresholdSeconds;
+                lastWanted = want;
+
+                // Throttle: if we're ahead of playback, wait until it catches up
+                if (synced >= 0.0 && want + kPreviewFrameLeadSeconds < synced &&
+                    !requestedPositionJumped) {
                     std::unique_lock lock(previewFrameMutex);
-                    previewWake.wait_for(lock, stop, std::chrono::milliseconds(20), [this, synced] {
-                        return previewWantedSeconds.load(std::memory_order_relaxed) +
-                                   kPreviewFrameLeadSeconds >= synced;
+                    previewWake.wait_for(lock, stop, std::chrono::milliseconds(20), [this, synced, want] {
+                        const double currentWant =
+                            previewWantedSeconds.load(std::memory_order_relaxed);
+                        return currentWant + kPreviewFrameLeadSeconds >= synced ||
+                               std::abs(currentWant - want) > kPreviewSeekThresholdSeconds;
                     });
-                    continue;
+                    continue;  // re-check want after wait
                 }
-                if (synced < 0.0 || std::abs(want - synced) > kPreviewSeekThresholdSeconds) {
+
+                // Seeking lands on an earlier keyframe. Seek only for startup or a
+                // transport discontinuity; normal playback must keep reading forward
+                // from that keyframe or the same frame is returned indefinitely.
+                if (synced < 0.0 || requestedPositionJumped ||
+                    (!catchingUpAfterSeek &&
+                     std::abs(want - synced) > kPreviewSeekThresholdSeconds)) {
                     PROPVARIANT position{};
                     PropVariantInit(&position);
                     position.vt = VT_I8;
                     position.hVal.QuadPart = static_cast<LONGLONG>(want * 10'000'000.0);
-                    reader->SetCurrentPosition(GUID_NULL, position);
+                    const HRESULT seekResult = reader->SetCurrentPosition(GUID_NULL, position);
                     PropVariantClear(&position);
-                    synced = want;
+                    if (FAILED(seekResult)) {
+                        reader.Reset();
+                        continue;
+                    }
+                    catchingUpAfterSeek = true;
                 }
+
                 DWORD flags = 0;
                 LONGLONG timestamp = 0;
                 ComPtr<IMFSample> sample;
@@ -490,13 +531,16 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                     continue;
                 }
                 if (!sample) continue;
-                synced = static_cast<double>(timestamp) / 10'000'000.0;
-                if (synced + kPreviewFrameLeadSeconds < want) continue;
+                const double frameTime = static_cast<double>(timestamp) / 10'000'000.0;
+                synced = frameTime;
+                // After a seek, decode intervening frames without presenting stale ones.
+                if (frameTime + kPreviewFrameLeadSeconds < want) continue;
+                catchingUpAfterSeek = false;
                 ComPtr<IMFMediaBuffer> buffer;
                 if (FAILED(sample->ConvertToContiguousBuffer(buffer.ReleaseAndGetAddressOf()))) continue;
                 const auto publishFrame = [&](const BYTE* scanline0, LONG pitch,
-                                              const BYTE* bufferStart, DWORD bufferLength,
-                                              bool hasBounds) {
+                                               const BYTE* bufferStart, DWORD bufferLength,
+                                               bool hasBounds) {
                     if (!scanline0 || pitch == 0) return false;
                     const auto pitchMagnitude = static_cast<std::uint64_t>(
                         pitch < 0 ? -static_cast<std::int64_t>(pitch)
@@ -589,7 +633,7 @@ void Win32Ui::Impl::StopPreviewWorker() noexcept {
                         }
                     }
                 }
-                if (window) InvalidateRect(window, nullptr, FALSE);
+                if (frameCopied && window) InvalidateRect(window, nullptr, FALSE);
             }
             } catch (...) {
                 // Preview decoding is optional.  Allocation/decoder failures must not

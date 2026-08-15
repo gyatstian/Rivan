@@ -6,16 +6,17 @@ More of a personal project, don't expect much. was made to be customizable and l
 <div align="center">
   <img src="Rivan.png" alt="Screenshot" width="500">
 </div>
-yes the layout is basically a winamp rip off
 
 ## Features
 
 - Customization with an easy to share .rivanskin file
-- Folder-derived playlists, multiple library roots, recursive **All Music**, search, and recently played history
+- Folder-derived playlists, multiple library roots, recursive **All Music**, search
 - File-preview panel with expandable video preview
 - Optional YouTube/YouTube Music search and download through `yt-dlp`
 - Optional Discord Rich Presence
-- Less than 1% cpu and ~60 mb of ram when minimized while playing a 2000 kb/s .FLAC file
+- Optional lyrics
+- Optional listen statistics
+- Less than 1% cpu and ~50 mb of ram when minimized while playing a 2000 kb/s .FLAC file
 
 ## Planned
 - more customization
@@ -40,14 +41,6 @@ msbuild Rivan.slnx /m /p:Configuration=Release /p:Platform=x64
 
 Build output: `x64\Release\Rivan.exe`.
 
-## Library
-
-On first launch, Rivan creates `%USERPROFILE%\Music\Rivan` unless configured library root already exists. Settings can add any number of extra roots.
-
-Each scanned directory becomes folder playlist named after its path relative to root. Files immediately in folder belong to that playlist; **All Music** contains recursive union across every configured root. Overlapping roots and duplicate paths are normalized so track is not counted twice.
-
-Rivan reads files in place. It never moves or copies music during library scans or drag-and-drop. Optional file duplication behavior is configured separately in Settings.
-
 ## Controls
 
 | Input | Action |
@@ -62,9 +55,6 @@ Rivan reads files in place. It never moves or copies music during library scans 
 | R | Cycle repeat |
 | Ctrl+S | Settings |
 | M | Mini-player |
-| Escape | Close Settings |
-| Mouse wheel | Scroll tracks |
-| Drag files/folders | Add to queue |
 
 ## Data and customization
 
@@ -74,7 +64,7 @@ Rivan stores small text files beneath `%LOCALAPPDATA%\Rivan`:
 - `session.ini` — window and playback restoration
 - `skins\` — skin folders
 
-Invalid or missing skins fall back to built-in dark-purple theme. Skin model and archive implementation live under `src/skin`; plugin API declaration is `src/plugin/PluginApi.h`.
+Invalid or missing skins fall back to built-in theme. Skin model and archive implementation live under `src/skin`; plugin API declaration is `src/plugin/PluginApi.h`.
 
 ## Architecture
 
