@@ -35,10 +35,9 @@ public:
     [[nodiscard]] AudioStatus Status() const;
     // Cheap UI path: atomics only (no path/string copies, no mutex).
     [[nodiscard]] LiveTransport Live() const noexcept;
-    [[nodiscard]] AudioAnalysisSnapshot Analysis(std::size_t maximumFrames) const;
-    // Reuses destination capacity; prefer over Analysis() on the UI timer path.
+    // Reuses destination capacity; prefer this on the UI timer path.
     void AnalysisInto(AudioAnalysisSnapshot& out, std::size_t maximumFrames) const;
-    // Generation of the analysis ring; use before Analysis() to skip empty copies.
+    // Generation of the analysis ring; use before AnalysisInto to skip empty copies.
     [[nodiscard]] std::uint64_t AnalysisGeneration() const noexcept;
     void SetEventCallback(EventCallback callback);
 

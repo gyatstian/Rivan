@@ -26,6 +26,12 @@ enum class RepeatMode {
     One,
 };
 
+enum class DiscordSecondaryText {
+    Off,
+    SyncLyrics,
+    TotalStreams,
+};
+
 struct AppSettings final {
     std::filesystem::path musicRoot;
     // Extra library roots (any count). Subfolders of every root become playlists.
@@ -65,7 +71,8 @@ struct AppSettings final {
     bool discordEnabled = false;
     // Optional Rich Presence fields. Discord's application label itself is not removable.
     bool discordShowArtist = true;
-    bool discordShowImageText = true;
+    DiscordSecondaryText discordSecondaryText = DiscordSecondaryText::SyncLyrics;
+    bool discordFallbackToTotalStreams = false;
     bool discordShowGithubButton = false;
     // Local listen-statistics tracking (plays + seconds per song, week/month/year/lifetime).
     bool statsEnabled = true;
@@ -97,7 +104,6 @@ public:
 
     // Missing files are not errors. Invalid persisted fields use their defaults and
     // are described in warnings, separated by newlines.
-    [[nodiscard]] bool Load(std::string* error = nullptr, std::string* warnings = nullptr);
     [[nodiscard]] bool LoadSettings(std::string* error = nullptr, std::string* warnings = nullptr);
     [[nodiscard]] bool LoadSession(std::string* error = nullptr, std::string* warnings = nullptr);
 
@@ -111,8 +117,6 @@ public:
 
     [[nodiscard]] const AppSettings& Settings() const noexcept { return settings_; }
     [[nodiscard]] const SessionState& Session() const noexcept { return session_; }
-    [[nodiscard]] const std::filesystem::path& SettingsPath() const noexcept { return settingsFile_; }
-    [[nodiscard]] const std::filesystem::path& SessionPath() const noexcept { return sessionFile_; }
 
     void ResetSettings();
     void ResetSession();
@@ -129,5 +133,7 @@ private:
 
 [[nodiscard]] std::string_view ToString(RepeatMode mode) noexcept;
 [[nodiscard]] std::optional<RepeatMode> ParseRepeatMode(std::string_view value) noexcept;
+[[nodiscard]] std::optional<DiscordSecondaryText> ParseDiscordSecondaryText(std::string_view value) noexcept;
+[[nodiscard]] const char* DiscordSecondaryTextText(DiscordSecondaryText mode) noexcept;
 
 } // namespace rivan::config

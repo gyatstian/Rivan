@@ -111,4 +111,12 @@ Track Track::FromFile(const std::filesystem::path& path) {
     return track;
 }
 
+Track Track::FromPathOnly(const std::filesystem::path& path) {
+    Track track;
+    track.filePath = NormalizePath(path);
+    track.id = PathId(track.filePath);
+    if (track.title.empty()) track.title = track.filePath.stem().wstring();
+    return track;
+}
+
 } // namespace rivan::library

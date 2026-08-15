@@ -65,7 +65,9 @@ void App::LoadUserPlaylists() {
             if (!pathUtf8) continue;
             const std::filesystem::path path(core::Utf8ToWide(*pathUtf8));
             if (path.empty()) continue;
-            auto track = library::Track::FromFile(path);
+            // Restored user playlists only need a stable id and path; metadata is
+            // re-derived by the library scan.
+            auto track = library::Track::FromPathOnly(path);
             list.AppendTrack(track.id);
             externalTracks.push_back(std::move(track));
         }
@@ -97,7 +99,7 @@ void App::SaveUserPlaylists() const {
 void App::SaveFolderOrder() const {
     // Dedicated INI in the music root, keyed by folder path so the order maps back onto
     // the same directories after a rescan (ids are recomputed but paths are stable).
-    const auto root = settings_.Settings().musicRoot;
+    const auto root = EffectiveMusicRoot();
     if (root.empty()) return;
     core::IniDocument document;
     document.Set("meta", "format", "1");
@@ -113,7 +115,7 @@ void App::SaveFolderOrder() const {
 }
 
 void App::ApplyFolderOrderAfterScan() {
-    const auto root = settings_.Settings().musicRoot;
+    const auto root = EffectiveMusicRoot();
     if (root.empty()) return;
     const auto file = root / L"rivan-folder-order.ini";
     std::error_code ec;
@@ -159,7 +161,7 @@ void App::SaveTrackOrder(playlist::PlaylistId folderId) const {
     // Track order within Directory folders persists to a dedicated INI keyed by folder
     // path then file path. Only the folder that was just reordered changes, so merge with
     // the existing file to keep other folders' custom orders intact.
-    const auto root = settings_.Settings().musicRoot;
+    const auto root = EffectiveMusicRoot();
     if (root.empty()) return;
     const auto* selected = playlists_.FindPlaylist(folderId);
     if (selected == nullptr || selected->kind != playlist::PlaylistKind::Directory) return;
@@ -246,7 +248,7 @@ void App::SaveTrackOrder(playlist::PlaylistId folderId) const {
 }
 
 void App::ApplyTrackOrderAfterScan() {
-    const auto root = settings_.Settings().musicRoot;
+    const auto root = EffectiveMusicRoot();
     if (root.empty()) return;
     const auto file = root / L"rivan-track-order.ini";
     std::error_code ec;

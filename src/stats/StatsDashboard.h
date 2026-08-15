@@ -18,7 +18,9 @@ namespace rivan::stats {
 
 enum class DashboardPeriod : std::uint8_t {
     Week,
+    FourWeeks,
     Month,
+    SixMonths,
     Year,
     AllTime,
 };

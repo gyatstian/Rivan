@@ -9,7 +9,6 @@
 
 #pragma comment(lib, "winhttp.lib")
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <chrono>
@@ -415,7 +414,7 @@ std::optional<UpdateSnapshot> UpdateService::FetchLatestRelease(
         return true;
     };
 
-    const HINTERNET session = WinHttpOpen(L"Rivan/1.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+    const HINTERNET session = WinHttpOpen(L"Rivan/1.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!publishHandle(session_, session)) return std::nullopt;
     if (!WinHttpSetTimeouts(session, kRequestTimeoutMilliseconds, kRequestTimeoutMilliseconds,

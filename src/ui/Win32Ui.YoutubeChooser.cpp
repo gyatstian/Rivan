@@ -100,7 +100,9 @@ constexpr std::uint64_t kCancel = 51;
 
 void Win32Ui::Impl::DrawYoutubeChooser(
     const D2D1_SIZE_F size, std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
-    hits.clear();
+    screenBounds.clear();
+    panelBounds.clear();
+    decorControlBounds.clear();
     target->FillRectangle(Rect(0, 0, size.width, size.height), b[0].Get());
 
     const auto panel = Rect(12.0F, 12.0F, size.width - 12.0F, size.height - 12.0F);

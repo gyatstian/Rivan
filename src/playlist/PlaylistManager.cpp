@@ -197,27 +197,6 @@ PlaylistId PlaylistManager::CreatePlaylist(std::wstring name) {
     return playlists_.back().id;
 }
 
-bool PlaylistManager::RenamePlaylist(PlaylistId id, std::wstring name) {
-    auto* playlist = FindMutableUserPlaylist(id);
-    if (playlist == nullptr) {
-        return false;
-    }
-    playlist->name = std::move(name);
-    return true;
-}
-
-bool PlaylistManager::DeletePlaylist(PlaylistId id) {
-    const auto position = std::find_if(playlists_.begin(), playlists_.end(), [id](const auto& playlist) {
-        return playlist.id == id && playlist.kind == PlaylistKind::User;
-    });
-    if (position == playlists_.end()) {
-        return false;
-    }
-    playlists_.erase(position);
-    RebuildIndexes();
-    return true;
-}
-
 bool PlaylistManager::ReplaceTrack(library::TrackId oldId, const library::Track& replacement) {
     if (oldId == 0 || replacement.id == 0) return false;
     bool found = false;

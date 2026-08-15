@@ -11,7 +11,6 @@ constexpr std::uint64_t kOpenLatestRelease = 1;
 
 void Win32Ui::Impl::DrawUpdateNotifier(
     const D2D1_SIZE_F size, std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
-    hits.clear();
     screenBounds.clear();
     panelBounds.clear();
     decorControlBounds.clear();

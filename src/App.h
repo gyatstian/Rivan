@@ -76,7 +76,8 @@ public:
     void SetModuleLayout(ui::ModuleLayout layout) override;
     void SetDiscordEnabled(bool enabled) override;
     void SetDiscordShowArtist(bool enabled) override;
-    void SetDiscordShowImageText(bool enabled) override;
+    void SetDiscordSecondaryText(config::DiscordSecondaryText mode) override;
+    void SetDiscordFallbackToTotalStreams(bool enabled) override;
     void SetDiscordShowGithubButton(bool enabled) override;
     void InstallYoutubeTool(bool ytDlp) override;
     void SubmitYoutubeQuery(std::wstring query) override;
@@ -140,10 +141,18 @@ public:
 
 private:
     void StartLibraryScan();
+    // Root the session actually runs on: musicRootOverride_ when set (startup fallback),
+    // else the configured settings_.Settings().musicRoot. Never persisted; the configured
+    // root always stays in settings_ and on disk.
+    [[nodiscard]] std::filesystem::path EffectiveMusicRoot() const noexcept;
     void ApplyCompletedScan();
     void RestoreSessionAfterScan();
     void HandleAudioSignals();
     void NotifyAudioSignal();
+    // Waits until the audio worker finishes the placeholder Load ("__RIVAN_EDIT__")
+    // and reports the release (Error, no media), or a bounded wait elapses.
+    // Returns true only when the release was observed.
+    [[nodiscard]] bool WaitForAudioRelease() const;
     void PlayNavigation(const playlist::QueueNavigation& navigation, bool startPlayback = true);
     void UpdateDiscordPresence();
     void PersistState();
@@ -194,8 +203,24 @@ private:
     // both services, which are destroyed later because members are destroyed in reverse order.
     std::atomic_bool endOfStream_{false};
     std::atomic_bool audioChanged_{false};
+    // Audio emits this at a bounded rate while playing. It keeps lyric presence
+    // updates alive when rendering is paused (minimized/hidden window).
+    std::atomic_bool audioPositionChanged_{false};
+    std::atomic_bool discordTimestampRefreshRequested_{false};
+    std::atomic_bool discordPositionUpdatesEnabled_{false};
+    // Set from the audio callback after a navigation request. A Live() snapshot can
+    // still describe the old track as Playing until the queued Load begins.
+    std::atomic_bool discordTrackTransitionLoadingObserved_{false};
     std::atomic<HWND> audioNotificationWindow_{nullptr};
     std::atomic_bool youtubeDirty_{false};
+    // True while a library scan is in flight or its result has not been applied yet.
+    bool scanRunning_{};
+    // Session-only override used when the configured music root is temporarily
+    // unavailable (e.g. removable drive unplugged). The configured root stays in
+    // settings_ and is never overwritten on disk. Empty = use configured root.
+    std::filesystem::path musicRootOverride_;
+    // A download finished while a scan was in flight; rescan once it has applied.
+    bool downloadRescanPending_{};
     std::atomic_bool lyricsDirty_{false};
     std::atomic_bool updateDirty_{false};
     std::atomic<HWND> updateNotificationWindow_{nullptr};
@@ -243,11 +268,17 @@ private:
     // Lyrics snapshot is copied only when the service revision advances.
     std::uint64_t lyricsRevisionCache_{~std::uint64_t{0}};
     lyrics::LyricsSnapshot lyricsSnapshotCache_;
-    // Last published Discord presence key; republished only when it changes (verse
-    // transition, track change, settings) so the 30 Hz playback repaint never spams
-    // the Discord IPC pipe.
+    // Last published Discord presence surface. Timestamps stay outside these keys so
+    // 30 Hz playback paints do not send Discord RPC updates.
     bool discordPresencePublished_{};
     std::string discordPresenceStateKey_;
+    std::string discordPresenceBaseKey_;
+    library::TrackId discordPresenceTrackId_{};
+    // Keeps the transient audio Load state from clearing the new track presence.
+    bool discordTrackTransitionPending_{};
+    bool discordTrackTransitionPublished_{};
+    // A seek requests one timestamp correction; ordinary position notifications do not.
+    bool discordTimestampRefreshPending_{};
     // Cap FFT to ~20 Hz even if analysis generation advances every WASAPI period.
     std::chrono::steady_clock::time_point lastAnalysisSubmit_{};
     // Last fully built library/UI snapshot. Live playback fields refresh in place.
@@ -278,6 +309,8 @@ private:
     ui::ModuleLayout moduleLayout_{ui::ModuleLayout::Defaults()};
     // Throttle layout INI writes during interactive resize; session stays in memory.
     std::chrono::steady_clock::time_point lastSessionSave_{};
+    // Throttle Youtube chooser preference writes; settings stay in memory every click.
+    std::chrono::steady_clock::time_point lastYoutubeChooserSave_{};
     // PersistState runs on WM_CLOSE and again in ~App; skip the destructor duplicate.
     bool persistedOnClose_{};
 };

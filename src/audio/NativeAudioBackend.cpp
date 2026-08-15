@@ -19,7 +19,6 @@
 #include <wrl/client.h>
 
 #include <algorithm>
-#include <cmath>
 #include <condition_variable>
 #include <cwctype>
 #include <exception>
@@ -73,20 +72,10 @@ void Check(const HRESULT result, const char* operation) {
 class UniqueHandle final {
 public:
     UniqueHandle() noexcept = default;
-    explicit UniqueHandle(HANDLE value) noexcept : value_(value) {}
     ~UniqueHandle() { Reset(); }
 
     UniqueHandle(const UniqueHandle&) = delete;
     UniqueHandle& operator=(const UniqueHandle&) = delete;
-
-    UniqueHandle(UniqueHandle&& other) noexcept : value_(std::exchange(other.value_, nullptr)) {}
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept {
-        if (this != &other) {
-            Reset();
-            value_ = std::exchange(other.value_, nullptr);
-        }
-        return *this;
-    }
 
     void Reset(HANDLE value = nullptr) noexcept {
         if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE) {

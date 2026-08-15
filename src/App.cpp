@@ -4,7 +4,6 @@
 #include "App.h"
 
 #include "core/AppPaths.h"
-#include "core/Text.h"
 
 #include <Windows.h>
 
@@ -12,34 +11,36 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
-#include <span>
 #include <string>
-#include <string_view>
 #include <system_error>
-#include <vector>
 
 namespace rivan {
 namespace {
-
-std::wstring CurrentExecutablePath() {
-    std::wstring path(260, L'\0');
-    for (;;) {
-        const DWORD length = GetModuleFileNameW(nullptr, path.data(),
-                                                static_cast<DWORD>(path.size()));
-        if (length == 0) return {};
-        if (length < path.size() - 1) {
-            path.resize(length);
-            return path;
-        }
-        path.resize(path.size() * 2);
-    }
-}
 
 // IniDocument::SaveAtomic writes "<name>.tmp.<pid>.<sequence>" next to the target
 // and renames it onto the destination. A crash between the temporary write and the
 // rename strands garbage that accumulates across saves; delete any leftovers at
 // startup. A surviving temp is always garbage from a crashed save, regardless of age.
+// Only names matching the app's own suffix are deleted, so unrelated files that merely
+// contain ".tmp." are never swept.
+bool IsStaleTemporaryIniName(const std::wstring& name) {
+    const std::size_t last = name.rfind(L".tmp.");
+    // The "<name>" portion before the suffix must be non-empty.
+    if (last == std::wstring::npos || last == 0) return false;
+    const std::size_t tailStart = last + 5;  // length of L".tmp."
+    std::size_t index = tailStart;
+    for (; index < name.size() && name[index] >= L'0' && name[index] <= L'9'; ++index) {}
+    if (index == tailStart) return false;
+    if (index == name.size()) return true;
+    if (name[index] != L'.') return false;
+    ++index;
+    if (index == name.size()) return false;  // Trailing dot without digits.
+    for (; index < name.size() && name[index] >= L'0' && name[index] <= L'9'; ++index) {}
+    return index == name.size();
+}
+
 void SweepStaleTemporaryIniFiles() {
     std::error_code error;
     std::filesystem::directory_iterator iterator(core::AppPaths::LocalDataRoot(), error);
@@ -48,7 +49,7 @@ void SweepStaleTemporaryIniFiles() {
     while (iterator != end) {
         if (iterator->is_regular_file(error)) {
             const std::wstring name = iterator->path().filename().wstring();
-            if (name.find(L".tmp.") != std::wstring::npos) {
+            if (IsStaleTemporaryIniName(name)) {
                 std::filesystem::remove(iterator->path(), error);
             }
         }
@@ -147,6 +148,7 @@ bool App::Initialize() {
     if (applicationSettings.musicRoot.empty()) {
         applicationSettings.musicRoot = core::AppPaths::DefaultMusicRoot();
     }
+    const auto configuredRoot = applicationSettings.musicRoot;
     std::filesystem::create_directories(applicationSettings.musicRoot, filesystemError);
     if (filesystemError || !std::filesystem::is_directory(applicationSettings.musicRoot, filesystemError)) {
         applicationSettings.musicRoot = core::AppPaths::DefaultMusicRoot();
@@ -154,10 +156,18 @@ bool App::Initialize() {
         std::filesystem::create_directories(applicationSettings.musicRoot, filesystemError);
         if (filesystemError) return false;
     }
+    // The fallback root is session-only: keep the configured root in settings_ (and on
+    // disk) and let this session run on the override until the user changes the folder.
+    if (applicationSettings.musicRoot != configuredRoot) {
+        musicRootOverride_ = applicationSettings.musicRoot;
+        applicationSettings.musicRoot = configuredRoot;
+    }
     (void)settings_.SetSettings(applicationSettings, &error);
     lyrics_.SetCacheEnabled(applicationSettings.lyricsCacheEnabled);
     stats_.SetEnabled(applicationSettings.statsEnabled);
     std::wstring startupError;
+    // applicationSettings.musicRoot still holds the configured root, so this failure
+    // path also persists the configured root, never the fallback.
     if (!SyncStartupRegistration(applicationSettings.startAtStartup, &startupError)) {
         applicationSettings.startAtStartup = false;
         (void)settings_.SetSettings(applicationSettings, &error);
@@ -194,7 +204,19 @@ bool App::Initialize() {
         if (event.type == audio::AudioEventType::EndOfStream) {
             endOfStream_.store(true, std::memory_order_release);
         }
-        audioChanged_.store(true, std::memory_order_release);
+        if (event.type == audio::AudioEventType::StateChanged &&
+            event.status.state == audio::PlaybackState::Loading) {
+            discordTrackTransitionLoadingObserved_.store(true, std::memory_order_release);
+        }
+        if (event.type == audio::AudioEventType::PositionChanged) {
+            if (!discordPositionUpdatesEnabled_.load(std::memory_order_acquire)) return;
+            audioPositionChanged_.store(true, std::memory_order_release);
+        } else {
+            if (event.type == audio::AudioEventType::Seeked) {
+                discordTimestampRefreshRequested_.store(true, std::memory_order_release);
+            }
+            audioChanged_.store(true, std::memory_order_release);
+        }
         NotifyAudioSignal();
     });
 
@@ -202,6 +224,10 @@ bool App::Initialize() {
     youtubeView_ = youtube_.Snapshot();
 
     discord_.SetEnabled(applicationSettings.discordEnabled);
+    discordPositionUpdatesEnabled_.store(
+        applicationSettings.discordEnabled &&
+            applicationSettings.discordSecondaryText == config::DiscordSecondaryText::SyncLyrics,
+        std::memory_order_release);
 
     window_ = std::make_unique<ui::Win32Ui>(*this);
     ui::WindowOptions options;
@@ -301,6 +327,11 @@ void App::Invoke(ui::Command command) {
         }
         break;
     case ui::Command::Stop:
+        // An explicit stop is not a transient Load/Stopped state from a track switch.
+        discordTrackTransitionPending_ = false;
+        discordTrackTransitionPublished_ = false;
+        discordTimestampRefreshPending_ = false;
+        discordTrackTransitionLoadingObserved_.store(false, std::memory_order_release);
         audio_.Stop();
         break;
     case ui::Command::Previous:
@@ -311,6 +342,7 @@ void App::Invoke(ui::Command command) {
         break;
     case ui::Command::ToggleShuffle:
         queue_.SetShuffle(!queue_.Shuffle());
+        SyncPlaybackSession();
         break;
     case ui::Command::CycleRepeat:
         switch (queue_.Repeat()) {
@@ -318,6 +350,7 @@ void App::Invoke(ui::Command command) {
         case playlist::RepeatMode::All: queue_.SetRepeat(playlist::RepeatMode::One); break;
         case playlist::RepeatMode::One: queue_.SetRepeat(playlist::RepeatMode::Off); break;
         }
+        SyncPlaybackSession();
         break;
     case ui::Command::ToggleSettings:
         settingsVisible_ = !settingsVisible_;
@@ -466,6 +499,8 @@ void App::SetMusicFolder(std::size_t index, std::filesystem::path folder) {
     }
     std::string error;
     if (!settings_.SetSettings(settings, &error)) return;
+    // An explicit folder change overrides any startup fallback.
+    musicRootOverride_.clear();
     (void)settings_.SaveSettings(&error);
     RefreshLibrary();  // Rescan with the new folder set.
 }
@@ -530,7 +565,7 @@ bool App::SyncStartupRegistration(bool enabled, std::wstring* error) {
 
     bool success = true;
     if (enabled) {
-        const std::wstring exePath = CurrentExecutablePath();
+        const std::wstring exePath = core::AppPaths::ExecutablePath().wstring();
         if (exePath.empty()) {
             if (error) *error = L"Unable to resolve the Rivan executable path.";
             success = false;
@@ -612,6 +647,11 @@ void App::SetModuleResizeBehavior(ui::ModuleResizeBehavior behavior) {
     (void)settings_.SaveSettings(&error);
     ++revision_;
     if (window_) window_->Refresh();
+}
+
+std::filesystem::path App::EffectiveMusicRoot() const noexcept {
+    return musicRootOverride_.empty() ? settings_.Settings().musicRoot
+                                      : musicRootOverride_;
 }
 
 } // namespace rivan

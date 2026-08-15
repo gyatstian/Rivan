@@ -126,11 +126,9 @@ bool Win32Ui::Create(HINSTANCE instance, const WindowOptions& options) {
         options.owner, nullptr, instance, this);
     if (!impl_->window) return false;
 
-    SendMessageW(impl_->window, WM_SETICON, ICON_BIG,
-                 reinterpret_cast<LPARAM>(LoadRivanIcon(instance, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON))));
-    SendMessageW(impl_->window, WM_SETICON, ICON_SMALL,
-                 reinterpret_cast<LPARAM>(LoadRivanIcon(instance, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON))));
-
+    // The registered class icons cover both window sizes, so the per-window WM_SETICON
+    // sends were redundant. (LR_SHARED icons must also never be destroyed, so keeping
+    // only the class icons avoids any DestroyIcon-on-shared-resource risk.)
     if (options.acceptFileDrops) DragAcceptFiles(impl_->window, TRUE);
     // Force a non-client recalculation so WM_NCCALCSIZE removes the caption immediately.
     SetWindowPos(impl_->window, nullptr, 0, 0, 0, 0,
@@ -524,6 +522,7 @@ LRESULT Win32Ui::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return 1;
     case WM_CLOSE:
         if (impl_->windowKind == WindowKind::Settings) {
+            impl_->statisticsPeriodDropdown = false;
             impl_->InvokeSafely(Command::ToggleSettings);
             return 0;
         }

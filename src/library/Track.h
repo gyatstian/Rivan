@@ -31,6 +31,10 @@ struct Track final {
     // Audio-only subset of supported media. Video files can play but cannot carry song art.
     [[nodiscard]] static bool IsAudioFile(const std::filesystem::path& path) noexcept;
     [[nodiscard]] static Track FromFile(const std::filesystem::path& path);
+    // Same as FromFile but skips the Windows property-store metadata read. Callers
+    // that only need the stable id or the normalized path (startup playlist restore,
+    // Youtube local-library rows) avoid one shell call per file.
+    [[nodiscard]] static Track FromPathOnly(const std::filesystem::path& path);
 };
 
 } // namespace rivan::library

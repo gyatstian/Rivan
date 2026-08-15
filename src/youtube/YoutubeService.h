@@ -117,7 +117,6 @@ public:
 
     // Cancel any in-flight job and clear entries/status when the feature is disabled.
     void Reset();
-    void Cancel();
 
     // Refresh installed flags on the snapshot (cheap path probes).
     void RefreshToolStatus();

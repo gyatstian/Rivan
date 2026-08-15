@@ -11,7 +11,6 @@
 
 #include <cstdint>
 #include <optional>
-#include <string_view>
 #include <system_error>
 
 namespace rivan::skin {

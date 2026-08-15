@@ -34,7 +34,9 @@ std::wstring YoutubeGrabberHotkeyLabel(std::uint32_t modifiers,
 
 void Win32Ui::Impl::DrawSettings(const D2D1_SIZE_F size,
                                  std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
-    hits.clear();
+    screenBounds.clear();
+    panelBounds.clear();
+    decorControlBounds.clear();
     const auto panel = Rect(10.0F, 10.0F, size.width - 10.0F, size.height - 10.0F);
     target->FillRectangle(Rect(0, 0, size.width, size.height), b[0].Get());
     auto content = DrawPanel(panel, L"RIVAN SETTINGS", b[1].Get(), b[2].Get(), b[3].Get(),
@@ -335,8 +337,22 @@ void Win32Ui::Impl::DrawIntegrationsSection(const float left, const float right,
     y += 20;
     const float optionWidth = (right - left - 8) * 0.5F;
     SettingsButton(Rect(left, y, left + optionWidth, y + 24), model.discordShowArtist ? L"SHOW ARTIST: ON" : L"SHOW ARTIST: OFF", 20, b);
-    SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24), model.discordShowImageText ? L"SYNC LYRICS: ON" : L"SYNC LYRICS: OFF", 21, b);
+    const wchar_t* secondaryTextLabel = L"SECONDARY TEXT: OFF";
+    switch (model.discordSecondaryText) {
+    case config::DiscordSecondaryText::Off: secondaryTextLabel = L"SECONDARY TEXT: OFF"; break;
+    case config::DiscordSecondaryText::SyncLyrics: secondaryTextLabel = L"SECONDARY TEXT: SYNC LYRICS"; break;
+    case config::DiscordSecondaryText::TotalStreams: secondaryTextLabel = L"SECONDARY TEXT: TOTAL STREAMS"; break;
+    }
+    SettingsButton(Rect(left + optionWidth + 8, y, right, y + 24), secondaryTextLabel, 21, b);
     y += 34;
+    if (model.discordSecondaryText == config::DiscordSecondaryText::SyncLyrics) {
+        SettingsButton(Rect(left, y, right, y + 24),
+                       model.discordFallbackToTotalStreams
+                           ? L"FALLBACK TO TOTAL STREAMS: ON"
+                           : L"FALLBACK TO TOTAL STREAMS: OFF",
+                       22, b);
+        y += 34;
+    }
     SettingsButton(Rect(left, y, right, y + 24), model.discordShowGithubButton ? L"GITHUB BUTTON: ON" : L"GITHUB BUTTON: OFF", 23, b);
     y += 26;
     DrawText(L"Visible to other users only; links to https://github.com/gyatstian/Rivan.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
@@ -388,7 +404,7 @@ void Win32Ui::Impl::DrawIntegrationsSection(const float left, const float right,
     SettingsButton(Rect(left, y, right, y + 24),
                    model.statsEnabled ? L"LISTEN STATISTICS: ON" : L"LISTEN STATISTICS: OFF", 26, b);
     y += 26;
-    DrawText(L"Tracks plays and listening time per song (weekly, monthly, yearly, and lifetime).", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    DrawText(L"Tracks plays and listening time per song (weekly, 4-week, monthly, 6-month, yearly, and lifetime).", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
     y += 22;
 }
 
@@ -398,12 +414,23 @@ void Win32Ui::Impl::DrawStatisticsSection(const float left, const float right, f
     const auto periodName = [](const stats::DashboardPeriod period) -> const wchar_t* {
         switch (period) {
         case stats::DashboardPeriod::Week: return L"WEEK";
+        case stats::DashboardPeriod::FourWeeks: return L"4 WEEKS";
         case stats::DashboardPeriod::Month: return L"MONTH";
+        case stats::DashboardPeriod::SixMonths: return L"6 MONTHS";
         case stats::DashboardPeriod::Year: return L"YEAR";
         case stats::DashboardPeriod::AllTime: return L"ALL TIME";
         }
         return L"WEEK";
     };
+    constexpr std::array periodOptions = {
+        stats::DashboardPeriod::Week,
+        stats::DashboardPeriod::FourWeeks,
+        stats::DashboardPeriod::Month,
+        stats::DashboardPeriod::SixMonths,
+        stats::DashboardPeriod::Year,
+        stats::DashboardPeriod::AllTime
+    };
+
     const auto number = [](const std::uint64_t value) { return std::to_wstring(value); };
     const auto minutes = [&number](const std::uint64_t seconds) {
         return number(seconds / 60);
@@ -415,10 +442,44 @@ void Win32Ui::Impl::DrawStatisticsSection(const float left, const float right, f
     const float periodControlWidth = std::clamp((right - left) * 0.32F, 104.0F, 130.0F);
     DrawText(L"PERIOD", Rect(left, y, right - periodControlWidth - 7.0F, y + 23),
              b[8].Get(), headingFormat.Get());
-    SettingsButton(Rect(right - periodControlWidth, y, right, y + 24),
-                    std::wstring(periodName(dashboard.period)) + L" \u25be", 27, b);
-    y += 34;
+    const auto periodButton = Rect(right - periodControlWidth, y, right, y + 24);
+    std::wstring buttonLabel = std::wstring(periodName(dashboard.period)) + (statisticsPeriodDropdown ? L" ▴" : L" ▾");
+    SettingsButton(periodButton, buttonLabel, 27, b);
 
+    if (statisticsPeriodDropdown) {
+        y = periodButton.bottom + 3.0F;
+        const float optionHeight = 24.0F;
+        const float dropBottom = y + optionHeight * periodOptions.size() + 4.0F;
+        DrawBevel(Rect(periodButton.left, y, periodButton.right, dropBottom), b[1].Get(), b[3].Get(), b[4].Get(), true);
+        for (std::size_t i = 0; i < periodOptions.size(); ++i) {
+            const auto row = Rect(periodButton.left + 2.0F, y + 2.0F + i * optionHeight,
+                                  periodButton.right - 2.0F, y + 2.0F + (i + 1) * optionHeight);
+            const bool selected = dashboard.period == periodOptions[i];
+            const bool hot = Contains(row, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
+            if (selected) target->FillRectangle(row, b[11].Get());
+            else if (hot) target->FillRectangle(row, b[7].Get());
+            DrawText(periodName(periodOptions[i]), Rect(row.left + 5, row.top, row.right - 4, row.bottom),
+                     selected ? b[12].Get() : b[9].Get(), smallFormat.Get());
+            // Clip hit region to viewport
+            const float clipTop = settingsDetailsBounds.top + 15.0F;
+            const float clipBottom = settingsDetailsBounds.bottom - 4.0F;
+            if (row.bottom > clipTop && row.top < clipBottom) {
+                D2D1_RECT_F hitBounds = row;
+                hitBounds.top = std::max(row.top, clipTop);
+                hitBounds.bottom = std::min(row.bottom, clipBottom);
+                if (hitBounds.bottom > hitBounds.top) {
+                    HitRegion hit;
+                    hit.bounds = hitBounds;
+                    hit.kind = HitKind::SettingsAction;
+                    hit.id = 320 + i;
+                    hits.push_back(hit);
+                }
+            }
+        }
+        y = dropBottom + 10.0F;
+    } else {
+        y = periodButton.bottom + 10.0F;
+    }
     constexpr float metricGap = 7.0F;
     constexpr float minimumMetricWidth = 96.0F;
     constexpr float maximumMetricWidth = 100.0F;
@@ -963,6 +1024,21 @@ void Win32Ui::Impl::SettingsButton(const D2D1_RECT_F& bounds, const std::wstring
 
 void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
     try {
+        if (action == 27) { statisticsPeriodDropdown = !statisticsPeriodDropdown; return; }
+        constexpr std::array periodOptions = {
+            stats::DashboardPeriod::Week,
+            stats::DashboardPeriod::FourWeeks,
+            stats::DashboardPeriod::Month,
+            stats::DashboardPeriod::SixMonths,
+            stats::DashboardPeriod::Year,
+            stats::DashboardPeriod::AllTime
+        };
+        if (action >= 320 && action <= 325) {
+            statisticsPeriodDropdown = false;
+            host.SetStatisticsPeriod(periodOptions[action - 320]);
+            return;
+        }
+        statisticsPeriodDropdown = false;
         const auto updateSongRow = [this](const auto& update) {
             if (!songRowEditorVisible) return;
             update(songRowDraft);
@@ -982,7 +1058,6 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 6: if (!model.youtubeFfmpegInstalled && !model.youtubeInstallingFfmpeg) host.InstallYoutubeTool(false); break;
         case 7: host.SetLyricsCacheEnabled(!model.lyricsCacheEnabled); break;
         case 26: host.SetStatsEnabled(!model.statsEnabled); break;
-        case 27: host.SetStatisticsPeriod(stats::NextDashboardPeriod(model.statistics.period)); break;
         case 300: host.SetStatisticsTracksExpanded(!model.statistics.tracksExpanded); break;
         case 301: if (!model.statistics.tracksExpanded && model.statistics.tracksPage > 0) host.SetStatisticsTracksPage(model.statistics.tracksPage - 1); break;
         case 302: if (!model.statistics.tracksExpanded) host.SetStatisticsTracksPage(model.statistics.tracksPage + 1); break;
@@ -996,7 +1071,20 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 17: host.SetDuplicateAsFile(!model.duplicateAsFile); break;
         case 18: host.SetDiscordEnabled(!model.discordEnabled); break;
         case 20: host.SetDiscordShowArtist(!model.discordShowArtist); break;
-        case 21: host.SetDiscordShowImageText(!model.discordShowImageText); break;
+        case 21: {
+            using DST = config::DiscordSecondaryText;
+            DST current = model.discordSecondaryText;
+            DST next = (current == DST::Off) ? DST::SyncLyrics
+                       : (current == DST::SyncLyrics) ? DST::TotalStreams
+                                                     : DST::Off;
+            host.SetDiscordSecondaryText(next);
+            break;
+        }
+        case 22:
+            if (model.discordSecondaryText == config::DiscordSecondaryText::SyncLyrics) {
+                host.SetDiscordFallbackToTotalStreams(!model.discordFallbackToTotalStreams);
+            }
+            break;
         case 70:
             songRowEditorVisible = true;
             songRowDraft = model.songRowLayout;

@@ -7,6 +7,9 @@ More of a personal project, don't expect much. was made to be customizable and l
   <img src="Rivan.png" alt="Screenshot" width="500">
 </div>
 
+## Dependencies
+[Microsoft Visual C++ Redistributable for Visual Studio 2022 (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+
 ## Features
 
 - Customization with an easy to share .rivanskin file
@@ -64,7 +67,7 @@ Rivan stores small text files beneath `%LOCALAPPDATA%\Rivan`:
 - `session.ini` — window and playback restoration
 - `skins\` — skin folders
 
-Invalid or missing skins fall back to built-in theme. Skin model and archive implementation live under `src/skin`; plugin API declaration is `src/plugin/PluginApi.h`.
+Invalid or missing skins fall back to built-in theme. Skin model and archive implementation live under `src/skin`
 
 ## Architecture
 

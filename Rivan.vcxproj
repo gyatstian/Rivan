@@ -95,8 +95,6 @@
     <ClInclude Include="src\playlist\PlaybackQueue.h" />
     <ClInclude Include="src\playlist\Playlist.h" />
     <ClInclude Include="src\playlist\PlaylistManager.h" />
-    <ClInclude Include="src\plugin\PluginApi.h" />
-    <ClInclude Include="src\plugin\PluginHost.h" />
     <ClInclude Include="src\skin\Skin.h" />
     <ClInclude Include="src\skin\SkinArchive.h" />
     <ClInclude Include="src\skin\SkinManager.h" />
@@ -152,7 +150,6 @@
     <ClCompile Include="src\lyrics\LyricsService.cpp" />
     <ClCompile Include="src\playlist\PlaybackQueue.cpp" />
     <ClCompile Include="src\playlist\PlaylistManager.cpp" />
-    <ClCompile Include="src\plugin\PluginHost.cpp" />
     <ClCompile Include="src\skin\Skin.cpp" />
     <ClCompile Include="src\skin\SkinArchive.cpp" />
     <ClCompile Include="src\skin\SkinManager.cpp" />

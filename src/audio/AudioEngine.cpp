@@ -179,10 +179,6 @@ public:
         return live;
     }
 
-    [[nodiscard]] AudioAnalysisSnapshot Analysis(const std::size_t maximumFrames) const {
-        return state_->analysis.Latest(maximumFrames);
-    }
-
     void AnalysisInto(AudioAnalysisSnapshot& out, const std::size_t maximumFrames) const {
         state_->analysis.LatestInto(out, maximumFrames);
     }
@@ -209,6 +205,11 @@ private:
         } catch (...) {
             // Allocation failure cannot prevent shutdown: the worker also observes this flag.
         }
+        // Once shutdown is queued nothing may be emitted, so releasing the callback
+        // closes the window where a detached worker could invoke a captured App/UI
+        // object after their destruction.
+        std::scoped_lock callbackLock(state->callbackMutex);
+        state->callback = {};
         SetEvent(state->commandEvent);
     }
 
@@ -270,6 +271,7 @@ private:
                                const bool force = false) {
         // UI only paints ~20 Hz; skip most WASAPI-period status mutex writes.
         static thread_local std::chrono::steady_clock::time_point lastPublish{};
+        static thread_local std::chrono::steady_clock::time_point lastPositionEvent{};
         const auto now = std::chrono::steady_clock::now();
         if (!force && lastPublish.time_since_epoch().count() != 0 &&
             now - lastPublish < std::chrono::milliseconds{40}) {
@@ -283,10 +285,24 @@ private:
             position = (std::min)(position, duration);
         }
         position = (std::max)(position, std::chrono::nanoseconds{0});
-        std::scoped_lock lock(state->statusMutex);
-        state->status.position = position;
-        state->status.duration = duration;
-        PublishLive(state, state->status);
+        bool emitPositionEvent = false;
+        {
+            std::scoped_lock lock(state->statusMutex);
+            state->status.position = position;
+            state->status.duration = duration;
+            PublishLive(state, state->status);
+            // Rich Presence needs to notice a lyric-boundary even while the UI is
+            // minimized. Four checks a second keeps that detection prompt without
+            // generating the paint-rate callback traffic it replaces.
+            constexpr auto kPositionEventInterval = std::chrono::milliseconds{250};
+            if (state->status.state == PlaybackState::Playing &&
+                (lastPositionEvent.time_since_epoch().count() == 0 ||
+                 now - lastPositionEvent >= kPositionEventInterval)) {
+                lastPositionEvent = now;
+                emitPositionEvent = true;
+            }
+        }
+        if (emitPositionEvent) Emit(state, AudioEventType::PositionChanged);
     }
 
     static void RecordError(const std::shared_ptr<SharedState>& state,
@@ -482,6 +498,7 @@ private:
             PublishLive(state, state->status);
         }
         Emit(state, AudioEventType::StateChanged);
+        Emit(state, AudioEventType::Seeked);
     }
 
     static bool HandleCommand(const std::shared_ptr<SharedState>& state,
@@ -669,10 +686,6 @@ AudioStatus AudioEngine::Status() const {
 
 LiveTransport AudioEngine::Live() const noexcept {
     return impl_->Live();
-}
-
-AudioAnalysisSnapshot AudioEngine::Analysis(const std::size_t maximumFrames) const {
-    return impl_->Analysis(maximumFrames);
 }
 
 void AudioEngine::AnalysisInto(AudioAnalysisSnapshot& out,

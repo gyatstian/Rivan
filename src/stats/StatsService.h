@@ -36,7 +36,6 @@ public:
 
     // Starts/stops accumulation. Persists pending state when disabling.
     void SetEnabled(bool enabled);
-    [[nodiscard]] bool Enabled() const;
 
     // App pushes the currently active library track (or nullopt when none).
     void SetActiveTrack(std::optional<library::Track> track);

@@ -4,7 +4,6 @@
 
 #include "Playlist.h"
 
-#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -36,8 +35,6 @@ public:
     [[nodiscard]] std::size_t TrackCountRecursive(PlaylistId id) const noexcept;
 
     [[nodiscard]] PlaylistId CreatePlaylist(std::wstring name);
-    bool RenamePlaylist(PlaylistId id, std::wstring name);
-    bool DeletePlaylist(PlaylistId id);
     // Replaces a renamed file's id/path everywhere it can be persisted before rescan.
     bool ReplaceTrack(library::TrackId oldId, const library::Track& replacement);
 

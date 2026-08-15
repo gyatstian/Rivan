@@ -82,21 +82,22 @@ void App::SnapshotUiModel(ui::UiModel& out) {
             lyricsRevisionCache_ = lyricsRevision;
             lyricsSnapshotCache_ = lyrics_.Snapshot();
         }
-        // Presence verse follows playback: republish (deduped inside) when the current
-        // synced line changes. Paint runs at 30 Hz while playing, so a verse transition
-        // is caught within a frame without a dedicated timer.
-        if (live.state == audio::PlaybackState::Playing) UpdateDiscordPresence();
+        // Rich Presence follows bounded audio-clock notifications instead of paint.
+        // This keeps lyric transitions alive while minimized and avoids invoking the
+        // presence path thirty times a second just because the view repainted.
         model.lyrics = lyricsSnapshotCache_;
         model.lyricsCacheEnabled = settings_.Settings().lyricsCacheEnabled;
-        model.statsEnabled = settings_.Settings().statsEnabled;
-        if (statisticsCatalogCacheRevision_ != revision_) {
+        const bool statsEnabled = settings_.Settings().statsEnabled;
+        model.statsEnabled = statsEnabled;
+        if (statsEnabled && statisticsCatalogCacheRevision_ != revision_) {
             statisticsCatalogCache_ = stats::BuildDashboardCatalog(playlists_.AllTracks());
             statisticsCatalogCacheRevision_ = revision_;
         }
         const auto statsSnapshot = stats_.Snapshot();
-        if (statsSnapshot != statisticsSnapshotCache_ ||
-            statisticsDashboardCache_.period != statisticsPeriod_ ||
-            statisticsDashboardCatalogRevision_ != revision_) {
+        if (statsEnabled &&
+            (statsSnapshot != statisticsSnapshotCache_ ||
+             statisticsDashboardCache_.period != statisticsPeriod_ ||
+             statisticsDashboardCatalogRevision_ != revision_)) {
             statisticsSnapshotCache_ = statsSnapshot;
             statisticsDashboardCache_ = statsSnapshot
                 ? stats::BuildDashboard(*statsSnapshot, statisticsCatalogCache_, statisticsPeriod_)
@@ -337,7 +338,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.miniPlayer = miniPlayer_;
     out.settingsCategory = settingsCategory_;
     out.musicFolders.clear();
-    out.musicFolders.push_back(settings_.Settings().musicRoot.wstring());
+    out.musicFolders.push_back(EffectiveMusicRoot().wstring());
     for (const auto& root : settings_.Settings().additionalMusicRoots) {
         out.musicFolders.push_back(root.wstring());
     }
@@ -372,7 +373,8 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.youtubeGrabberHotkeyVirtualKey = settings_.Settings().youtubeGrabberHotkeyVirtualKey;
     out.discordEnabled = settings_.Settings().discordEnabled;
     out.discordShowArtist = settings_.Settings().discordShowArtist;
-    out.discordShowImageText = settings_.Settings().discordShowImageText;
+    out.discordSecondaryText = settings_.Settings().discordSecondaryText;
+    out.discordFallbackToTotalStreams = settings_.Settings().discordFallbackToTotalStreams;
     out.discordShowGithubButton = settings_.Settings().discordShowGithubButton;
     out.moduleExpansionBehavior = settings_.Settings().moduleExpansionBehavior;
     out.windowResizeBehavior = settings_.Settings().windowResizeBehavior;

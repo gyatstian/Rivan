@@ -95,7 +95,10 @@ void StatsService::SampleTick(const audio::LiveTransport& live,
             const PeriodKeys before = model_.periods;
             const auto written = RolloverPeriods(statsDirectory_, model_, keys);
             if (model_.periods.weekMonday != before.weekMonday ||
-                model_.periods.month != before.month || model_.periods.year != before.year) {
+                model_.periods.fourWeekStart != before.fourWeekStart ||
+                model_.periods.month != before.month ||
+                model_.periods.sixMonthStart != before.sixMonthStart ||
+                model_.periods.year != before.year) {
                 dirty_ = true;
                 PublishSnapshotLocked();
             }
@@ -237,11 +240,6 @@ std::shared_ptr<const ListenStatsModel> StatsService::Snapshot() const noexcept 
 void StatsService::PublishSnapshotLocked() {
     publishedModel_.store(std::make_shared<const ListenStatsModel>(model_),
                           std::memory_order_release);
-}
-
-bool StatsService::Enabled() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return enabled_;
 }
 
 } // namespace rivan::stats

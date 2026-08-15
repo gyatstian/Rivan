@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <charconv>
-#include <unordered_map>
 
 namespace rivan::stats {
 namespace {
@@ -18,7 +17,9 @@ constexpr std::string_view kUnknownTrack = "Unknown track";
                                             DashboardPeriod period) noexcept {
     switch (period) {
     case DashboardPeriod::Week: return entity.week;
+    case DashboardPeriod::FourWeeks: return entity.fourWeeks;
     case DashboardPeriod::Month: return entity.month;
+    case DashboardPeriod::SixMonths: return entity.sixMonths;
     case DashboardPeriod::Year: return entity.year;
     case DashboardPeriod::AllTime: return entity.lifetime;
     }
@@ -64,8 +65,10 @@ constexpr std::string_view kUnknownTrack = "Unknown track";
 
 DashboardPeriod NextDashboardPeriod(const DashboardPeriod period) noexcept {
     switch (period) {
-    case DashboardPeriod::Week: return DashboardPeriod::Month;
-    case DashboardPeriod::Month: return DashboardPeriod::Year;
+    case DashboardPeriod::Week: return DashboardPeriod::FourWeeks;
+    case DashboardPeriod::FourWeeks: return DashboardPeriod::Month;
+    case DashboardPeriod::Month: return DashboardPeriod::SixMonths;
+    case DashboardPeriod::SixMonths: return DashboardPeriod::Year;
     case DashboardPeriod::Year: return DashboardPeriod::AllTime;
     case DashboardPeriod::AllTime: return DashboardPeriod::Week;
     }

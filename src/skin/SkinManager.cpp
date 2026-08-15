@@ -16,15 +16,12 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
-#include <limits>
 #include <system_error>
 #include <utility>
 
 namespace rivan::skin {
 namespace {
 
-constexpr std::uintmax_t kMaximumPackageBytes = 64U * 1024U * 1024U;
-constexpr std::size_t kMaximumPackageFiles = 512;
 std::atomic_uint64_t g_installSequence{0};
 
 void SetError(std::string* error, std::string message) {

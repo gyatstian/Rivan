@@ -243,10 +243,6 @@ void ColorToHsv(skin::Color color, float& hue, float& saturation, float& value) 
            Lowercase(track.album).find(loweredQuery) != std::wstring::npos;
 }
 
-[[nodiscard]] bool Matches(const TrackView& track, const std::wstring& query) {
-    return query.empty() || MatchesLowered(track, Lowercase(query));
-}
-
 [[nodiscard]] std::string Utf8(std::wstring_view text) {
     if (text.empty()) return {};
     const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
@@ -320,6 +316,7 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     // Preferences detail pane: pixel scroll for General content that exceeds the window.
     float settingsScrollY{};
     float settingsContentHeight{};
+    bool statisticsPeriodDropdown{};
     D2D1_RECT_F settingsDetailsBounds{};
     D2D1_RECT_F lyricsContentBounds{};
     float lyricsScrollY{};

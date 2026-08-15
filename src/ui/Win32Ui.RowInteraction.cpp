@@ -559,10 +559,10 @@ void Win32Ui::Impl::ShowTrackContextMenu(std::size_t modelIndex) {
     // in tree rows can be stale while selection and repaint are being synchronized.
     const bool editable = model.selectedPlaylistIsUser;
     const wchar_t* removeLabel = model.selectedPlaylistDeletesFiles ? L"Delete from disk" : L"Remove";
-    AppendMenuW(menu, MF_STRING | (editable ? 0U : MF_GRAYED), 3, removeLabel);
     AppendMenuW(menu, MF_STRING | (editable ? 0U : MF_GRAYED), 4, L"Duplicate");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 5, L"Rename");
+    AppendMenuW(menu, MF_STRING | (editable ? 0U : MF_GRAYED), 3, removeLabel);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     const bool hasAudio = std::any_of(trackSelection.begin(), trackSelection.end(), [this](std::size_t index) {
         return index < model.tracks.size() && model.tracks[index].audioFile;

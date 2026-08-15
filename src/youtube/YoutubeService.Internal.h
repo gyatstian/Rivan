@@ -3,6 +3,8 @@
 
 #include "YoutubeService.h"
 
+#include <chrono>
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -19,13 +21,17 @@ using ProcessLineCallback = std::function<void(std::string_view line)>;
 [[nodiscard]] bool PathExistsFile(const std::filesystem::path& path);
 
 [[nodiscard]] std::wstring BuildUnbufferedEnvironment();
+// Runs the child and captures stdout/stderr. The inactivity deadline resets on
+// every output chunk, so a long but active download is never killed, while a
+// hung process that stops producing output is terminated after `timeout`.
 [[nodiscard]] bool RunProcessCapture(const std::filesystem::path& exe,
                                      const std::wstring& arguments,
                                      std::stop_token stop,
                                      std::string& stdoutText,
                                      std::string& errorText,
                                      DWORD* exitCode,
-                                     ProcessLineCallback onLine = {});
+                                     ProcessLineCallback onLine = {},
+                                     std::chrono::milliseconds timeout = std::chrono::milliseconds(60000));
 [[nodiscard]] bool ParseDownloadPercent(std::string_view line, float& percentOut);
 [[nodiscard]] bool LineLooksLikePostprocess(std::string_view line);
 
@@ -46,7 +52,8 @@ using ProcessLineCallback = std::function<void(std::string_view line)>;
 
 [[nodiscard]] bool DownloadUrlToFile(const wchar_t* url,
                                      const std::filesystem::path& dest,
-                                     std::wstring& error);
+                                     std::wstring& error,
+                                     std::stop_token stop);
 [[nodiscard]] std::optional<std::filesystem::path> FindFileRecursive(
     const std::filesystem::path& root, const wchar_t* fileName);
 [[nodiscard]] std::optional<std::filesystem::path> SystemTarPath();

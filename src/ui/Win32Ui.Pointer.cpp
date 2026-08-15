@@ -387,6 +387,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
                 settingsScrollY = 0.0F;
                 settingsSkinScroll = 0;
             }
+            statisticsPeriodDropdown = false;
             host.SelectSettingsCategory(hit.category);
             break;
         case HitKind::PlaylistSearch: activeSearch = SearchTarget::Playlist; break;

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
+#include <utility>
 
 namespace rivan::visualization {
 namespace {
@@ -20,6 +22,26 @@ namespace {
     return ColorEqual(left.panel, right.panel) && ColorEqual(left.grid, right.grid) &&
            ColorEqual(left.waveform, right.waveform) && ColorEqual(left.spectrum, right.spectrum);
 }
+
+// Cache of log-spaced spectrum bar boundaries, keyed by (binCount, barCount).
+// File-static because all rendering happens on the UI thread; only distinct
+// (binCount, barCount) keys are ever inserted, so the table stays small.
+struct SpectrumBoundaryKey {
+    std::size_t binCount;
+    std::size_t barCount;
+
+    bool operator==(const SpectrumBoundaryKey&) const noexcept = default;
+};
+
+struct SpectrumBoundaryKeyHash {
+    std::size_t operator()(const SpectrumBoundaryKey& key) const noexcept {
+        return key.binCount * 31 + key.barCount;
+    }
+};
+
+std::unordered_map<SpectrumBoundaryKey, std::vector<std::pair<std::size_t, std::size_t>>,
+                   SpectrumBoundaryKeyHash>
+    gSpectrumBoundaries;
 
 } // namespace
 
@@ -140,14 +162,24 @@ HRESULT VisualizationRenderer::Draw(ID2D1RenderTarget& target,
             static_cast<std::size_t>((plot.right - plot.left) / 10.0F), 8U, 48U);
         constexpr float gap = 2.0F;
         const float slotWidth = (plot.right - plot.left) / static_cast<float>(barCount);
+        // Bin boundaries depend only on binCount/barCount, so cache them per key.
+        auto& boundaries = gSpectrumBoundaries[{binCount, barCount}];
+        if (boundaries.size() != barCount) {
+            boundaries.clear();
+            boundaries.reserve(barCount);
+            for (std::size_t bar = 0; bar < barCount; ++bar) {
+                // Logarithmic grouping gives low musical frequencies useful screen space.
+                const float low = static_cast<float>(bar) / static_cast<float>(barCount);
+                const float high = static_cast<float>(bar + 1U) / static_cast<float>(barCount);
+                const auto first = static_cast<std::size_t>(std::floor(
+                    (std::pow(static_cast<float>(binCount), low) - 1.0F)));
+                const auto last = static_cast<std::size_t>(std::ceil(
+                    (std::pow(static_cast<float>(binCount), high) - 1.0F)));
+                boundaries.emplace_back(first, last);
+            }
+        }
         for (std::size_t bar = 0; bar < barCount; ++bar) {
-            // Logarithmic grouping gives low musical frequencies useful screen space.
-            const float low = static_cast<float>(bar) / static_cast<float>(barCount);
-            const float high = static_cast<float>(bar + 1U) / static_cast<float>(barCount);
-            const auto first = static_cast<std::size_t>(std::floor(
-                (std::pow(static_cast<float>(binCount), low) - 1.0F)));
-            const auto last = static_cast<std::size_t>(std::ceil(
-                (std::pow(static_cast<float>(binCount), high) - 1.0F)));
+            const auto [first, last] = boundaries[bar];
             float magnitude = 0.0F;
             for (std::size_t bin = std::min(first, binCount - 1U);
                  bin <= std::min(std::max(last, first), binCount - 1U); ++bin) {

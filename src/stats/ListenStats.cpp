@@ -50,6 +50,14 @@ constexpr CivilDate CivilFromDays(int daysSinceEpoch) noexcept {
 
 constexpr int kMondayReference = DaysFromCivil(1970, 1, 5);  // 1970-01-05 is a Monday
 
+// Weeks are numbered from kMondayReference (week 0 is 1970-01-05). A 4-week block
+// starts at week 0, 4, 8, ... (and at -4, -8, ... before the reference).
+constexpr int FourWeekBlockStartDays(int mondayDays) noexcept {
+    const int weeksSinceReference = (mondayDays - kMondayReference) / 7;
+    const int blockOffset = ((weeksSinceReference % 4) + 4) % 4;
+    return mondayDays - blockOffset * 7;
+}
+
 // ---------------------------------------------------------------------------
 // Formatting / parsing helpers.
 // ---------------------------------------------------------------------------
@@ -213,8 +221,12 @@ std::vector<std::filesystem::path> RolloverOnePeriod(
         (void)sectionName;
         if (periodMember == &EntityData::week) {
             data.ClearWeek();
+        } else if (periodMember == &EntityData::fourWeeks) {
+            data.ClearFourWeeks();
         } else if (periodMember == &EntityData::month) {
             data.ClearMonth();
+        } else if (periodMember == &EntityData::sixMonths) {
+            data.ClearSixMonths();
         } else {
             data.ClearYear();
         }
@@ -268,7 +280,9 @@ PeriodKeys CurrentPeriodKeys(const std::tm& localNow) {
 
     PeriodKeys keys;
     keys.weekMonday = FormatDdMmYyyy(monday);
+    keys.fourWeekStart = FormatDdMmYyyy(CivilFromDays(FourWeekBlockStartDays(mondayDays)));
     keys.month = FormatMmYyyy(month, year);
+    keys.sixMonthStart = FormatMmYyyy(((month - 1) / 6) * 6 + 1, year);
     keys.year = std::to_string(year);
     return keys;
 }
@@ -294,6 +308,27 @@ std::string WeeklySnapshotName(std::string_view weekMondayDdMmYyyy) {
     return FormatDdMmYyyy(CivilDate{year, month, day}) + "-" + FormatDdMmYyyy(sunday);
 }
 
+std::string FourWeekSnapshotName(std::string_view fourWeekStartDdMmYyyy) {
+    if (fourWeekStartDdMmYyyy.size() != 8) {
+        return {};
+    }
+    int day = 0;
+    int month = 0;
+    int year = 0;
+    if (!ParseDigits(fourWeekStartDdMmYyyy.substr(0, 2), day) ||
+        !ParseDigits(fourWeekStartDdMmYyyy.substr(2, 2), month) ||
+        !ParseDigits(fourWeekStartDdMmYyyy.substr(4, 4), year)) {
+        return {};
+    }
+    if (day < 1 || day > 31 || month < 1 || month > 12) {
+        return {};
+    }
+    const int startDays = DaysFromCivil(year, static_cast<unsigned>(month),
+                                        static_cast<unsigned>(day));
+    const auto end = CivilFromDays(startDays + 27);
+    return FormatDdMmYyyy(CivilDate{year, month, day}) + "-" + FormatDdMmYyyy(end);
+}
+
 std::string MonthlySnapshotName(std::string_view monthMmYyyy) {
     if (monthMmYyyy.size() != 6) {
         return {};
@@ -317,6 +352,29 @@ std::string MonthlySnapshotName(std::string_view monthMmYyyy) {
     return result;
 }
 
+std::string SixMonthSnapshotName(std::string_view sixMonthStartMmYyyy) {
+    if (sixMonthStartMmYyyy.size() != 6) {
+        return {};
+    }
+    int month = 0;
+    int year = 0;
+    if (!ParseDigits(sixMonthStartMmYyyy.substr(0, 2), month) ||
+        !ParseDigits(sixMonthStartMmYyyy.substr(2, 4), year)) {
+        return {};
+    }
+    if (month < 1 || month > 12) {
+        return {};
+    }
+    std::string result = FormatMmYyyy(month, year);
+    result += '-';
+    if (month > 6) {
+        result += FormatMmYyyy(month - 6, year + 1);
+    } else {
+        result += FormatMmYyyy(month + 6, year);
+    }
+    return result;
+}
+
 std::string YearlySnapshotName(std::string_view yearYyyy) {
     if (yearYyyy.size() != 4) {
         return {};
@@ -335,7 +393,9 @@ std::string YearlySnapshotName(std::string_view yearYyyy) {
 void ListenStatsModel::AddPlay(const std::string& sectionName) {
     auto& data = entities[sectionName];
     ++data.week.plays;
+    ++data.fourWeeks.plays;
     ++data.month.plays;
+    ++data.sixMonths.plays;
     ++data.year.plays;
     ++data.lifetime.plays;
 }
@@ -343,7 +403,9 @@ void ListenStatsModel::AddPlay(const std::string& sectionName) {
 void ListenStatsModel::AddSeconds(const std::string& sectionName, std::uint64_t seconds) {
     auto& data = entities[sectionName];
     data.week.seconds += seconds;
+    data.fourWeeks.seconds += seconds;
     data.month.seconds += seconds;
+    data.sixMonths.seconds += seconds;
     data.year.seconds += seconds;
     data.lifetime.seconds += seconds;
 }
@@ -370,7 +432,9 @@ core::IniDocument BuildMainStatsDocument(const ListenStatsModel& model) {
     rivan::core::IniDocument doc;
     doc.Set("meta", "format", "rivan-stats");
     doc.Set("meta", "week", model.periods.weekMonday);
+    doc.Set("meta", "four_weeks", model.periods.fourWeekStart);
     doc.Set("meta", "month", model.periods.month);
+    doc.Set("meta", "six_months", model.periods.sixMonthStart);
     doc.Set("meta", "year", model.periods.year);
     for (const auto& [sectionName, data] : model.entities) {
         if (data.Empty()) {
@@ -382,7 +446,9 @@ core::IniDocument BuildMainStatsDocument(const ListenStatsModel& model) {
         }
         doc.Set(sectionName, "l", FormatPeriodValue(data.lifetime));
         doc.Set(sectionName, "w", FormatPeriodValue(data.week));
+        doc.Set(sectionName, "4w", FormatPeriodValue(data.fourWeeks));
         doc.Set(sectionName, "m", FormatPeriodValue(data.month));
+        doc.Set(sectionName, "6m", FormatPeriodValue(data.sixMonths));
         doc.Set(sectionName, "y", FormatPeriodValue(data.year));
     }
     return doc;
@@ -419,8 +485,14 @@ bool LoadMainStatsFile(const std::filesystem::path& path,
     if (const auto week = doc->Get("meta", "week")) {
         loaded.periods.weekMonday = std::string(*week);
     }
+    if (const auto fourWeeks = doc->Get("meta", "four_weeks")) {
+        loaded.periods.fourWeekStart = std::string(*fourWeeks);
+    }
     if (const auto month = doc->Get("meta", "month")) {
         loaded.periods.month = std::string(*month);
+    }
+    if (const auto sixMonths = doc->Get("meta", "six_months")) {
+        loaded.periods.sixMonthStart = std::string(*sixMonths);
     }
     if (const auto year = doc->Get("meta", "year")) {
         loaded.periods.year = std::string(*year);
@@ -437,7 +509,9 @@ bool LoadMainStatsFile(const std::filesystem::path& path,
         auto& data = loaded.entities[sectionName];
         ParsePeriodKey(*doc, sectionName, "l", data.lifetime);
         ParsePeriodKey(*doc, sectionName, "w", data.week);
+        ParsePeriodKey(*doc, sectionName, "4w", data.fourWeeks);
         ParsePeriodKey(*doc, sectionName, "m", data.month);
+        ParsePeriodKey(*doc, sectionName, "6m", data.sixMonths);
         ParsePeriodKey(*doc, sectionName, "y", data.year);
         if (const auto songPath = doc->Get(sectionName, "path")) {
             data.songPath = std::string(*songPath);
@@ -461,8 +535,14 @@ std::vector<std::filesystem::path> RolloverPeriods(
     };
     append(RolloverOnePeriod(statsDir, model, &EntityData::week, model.periods.weekMonday,
                              current.weekMonday, "rivan-stats-weekly", WeeklySnapshotName));
+    append(RolloverOnePeriod(statsDir, model, &EntityData::fourWeeks,
+                             model.periods.fourWeekStart, current.fourWeekStart,
+                             "rivan-stats-four-weekly", FourWeekSnapshotName));
     append(RolloverOnePeriod(statsDir, model, &EntityData::month, model.periods.month,
                              current.month, "rivan-stats-monthly", MonthlySnapshotName));
+    append(RolloverOnePeriod(statsDir, model, &EntityData::sixMonths,
+                             model.periods.sixMonthStart, current.sixMonthStart,
+                             "rivan-stats-six-monthly", SixMonthSnapshotName));
     append(RolloverOnePeriod(statsDir, model, &EntityData::year, model.periods.year,
                              current.year, "rivan-stats-yearly", YearlySnapshotName));
     return written;

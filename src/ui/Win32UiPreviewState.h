@@ -54,7 +54,6 @@ struct Win32UiPreviewState {
     std::atomic_bool previewWorkerFailed{false};
     std::uint64_t uploadedPreviewFrameVersion{};
     bool previewIsVideo{};
-    bool previewHasPresentedFrame{};
 };
 
 } // namespace rivan::ui

@@ -18,12 +18,6 @@ SettingsManager::SettingsManager(std::filesystem::path settingsFile,
       settings_(AppSettings::Defaults()),
       session_(SessionState::Defaults()) {}
 
-bool SettingsManager::Load(std::string* error, std::string* warnings) {
-    if (warnings != nullptr) warnings->clear();
-    if (!LoadSettings(error, warnings)) return false;
-    return LoadSession(error, warnings);
-}
-
 bool SettingsManager::Save(std::string* error) const {
     return SaveSettings(error) && SaveSession(error);
 }

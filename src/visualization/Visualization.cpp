@@ -153,8 +153,6 @@ struct FloatSnapshotAnalyzer::State {
     std::vector<std::complex<float>> workBins;
     std::vector<float> hannWindow;
     std::vector<std::complex<float>> twiddles;
-    std::uint32_t sampleRate{};
-    float peak{};
     std::uint64_t sequence{};
 };
 
@@ -165,10 +163,9 @@ FloatSnapshotAnalyzer::~FloatSnapshotAnalyzer() = default;
 
 void FloatSnapshotAnalyzer::Submit(std::span<const float> samples,
                                    std::uint32_t channelCount,
-                                   std::uint32_t sampleRate) {
+                                   std::uint32_t /*sampleRate*/) {
     auto& workWaveform = state_->workWaveform;
     auto& workSpectrum = state_->workSpectrum;
-    float peak = 0.0F;
 
     if (channelCount != 0 && !samples.empty()) {
         const std::size_t frameCount = samples.size() / channelCount;
@@ -186,7 +183,6 @@ void FloatSnapshotAnalyzer::Submit(std::span<const float> samples,
             }
             mono = std::clamp(mono / static_cast<float>(channelCount), -1.0F, 1.0F);
             workWaveform[destinationStart + frame] = mono;
-            peak = std::max(peak, std::abs(mono));
         }
     } else {
         std::fill(workWaveform.begin(), workWaveform.end(), 0.0F);
@@ -199,15 +195,7 @@ void FloatSnapshotAnalyzer::Submit(std::span<const float> samples,
     std::scoped_lock lock(state_->mutex);
     state_->waveform.swap(workWaveform);
     state_->spectrum.swap(workSpectrum);
-    state_->sampleRate = sampleRate;
-    state_->peak = peak;
     ++state_->sequence;
-}
-
-VisualizationSnapshot FloatSnapshotAnalyzer::Snapshot() const {
-    std::scoped_lock lock(state_->mutex);
-    return {state_->waveform, state_->spectrum, state_->sampleRate,
-            state_->peak, state_->sequence};
 }
 
 void FloatSnapshotAnalyzer::CopySnapshot(VisualizationSnapshot& out) const {
@@ -216,14 +204,10 @@ void FloatSnapshotAnalyzer::CopySnapshot(VisualizationSnapshot& out) const {
         out.waveform.size() == state_->waveform.size() &&
         out.spectrum.size() == state_->spectrum.size()) {
         // Same published frame; skip vector assignment.
-        out.sampleRate = state_->sampleRate;
-        out.peak = state_->peak;
         return;
     }
     out.waveform = state_->waveform;
     out.spectrum = state_->spectrum;
-    out.sampleRate = state_->sampleRate;
-    out.peak = state_->peak;
     out.sequence = state_->sequence;
 }
 

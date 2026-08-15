@@ -48,6 +48,10 @@ struct LiveTransport {
 enum class AudioEventType {
     StateChanged,
     Loaded,
+    // Bounded transport-clock notification for consumers that must follow playback
+    // without tying their work to the render cadence.
+    PositionChanged,
+    Seeked,
     EndOfStream,
     Error,
 };

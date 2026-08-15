@@ -362,8 +362,17 @@ DurationProbeResult ProbeDurationSeconds(const std::filesystem::path& path,
     if (stop.stop_requested()) return {};
     {
         std::scoped_lock lock(gDurationCacheMutex);
-        // Bound retained file metadata across long-running sessions and removable-media scans.
-        if (gDurationCache.size() >= DurationCacheMaxEntries) gDurationCache.clear();
+        // Bound retained file metadata across long-running sessions and removable-media
+        // scans. Evict a small slice rather than the whole map so a library near the
+        // cap does not re-probe every file on the next scan.
+        if (gDurationCache.size() >= DurationCacheMaxEntries) {
+            std::size_t evict = gDurationCache.size() / 16;
+            if (evict == 0) evict = 1;
+            auto it = gDurationCache.begin();
+            while (evict-- > 0 && it != gDurationCache.end()) {
+                it = gDurationCache.erase(it);
+            }
+        }
         gDurationCache.insert_or_assign(path, DurationCacheEntry{modified, size, seconds});
     }
     return DurationProbeResult{seconds, size};

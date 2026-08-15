@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <functional>
 #include <span>
 #include <string>
 #include <system_error>
@@ -64,6 +63,17 @@ HRESULT WriteCoverArt(const std::filesystem::path& track, const std::filesystem:
 
 } // namespace
 
+bool App::WaitForAudioRelease() const {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto status = audio_.Status();
+        if (!status.hasMedia && status.state == audio::PlaybackState::Error) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
+}
+
 void App::ImportDroppedFiles(std::span<const std::wstring> paths) {
     std::vector<std::filesystem::path> importedPaths;
     importedPaths.reserve(paths.size());
@@ -84,6 +94,7 @@ void App::CreateUserPlaylist(std::wstring name) {
     if (name.empty()) return;
     const std::filesystem::path folderName(name);
     // A playlist is a direct child folder of configured library root, never virtual state.
+    // A user playlist must land in the root the session is actually using.
     if (!core::IsValidFileName(name)) {
         if (window_ && window_->WindowHandle()) {
             MessageBoxW(window_->WindowHandle(), L"Playlist name is not a valid folder name.",
@@ -92,7 +103,7 @@ void App::CreateUserPlaylist(std::wstring name) {
         return;
     }
 
-    const auto folder = settings_.Settings().musicRoot / folderName;
+    const auto folder = EffectiveMusicRoot() / folderName;
     std::error_code ec;
     if (!std::filesystem::create_directory(folder, ec)) {
         const wchar_t* message = ec ? L"Unable to create playlist folder in Music root."
@@ -324,6 +335,7 @@ void App::ChangeTracksCover(std::span<const std::size_t> indices) {
 
     // --- Audio release for playing track ---
     AudioReleaseGuard guard;
+    bool releaseObserved = false;
     if (activeTrack_ && audio_.Live().hasMedia) {
         for (const auto index : indices) {
             const auto id = TrackIdAtIndex(index);
@@ -334,13 +346,8 @@ void App::ChangeTracksCover(std::span<const std::size_t> indices) {
                 guard.filePath = activeTrack_->filePath;
                 audio_.Pause();
                 audio_.Load(L"__RIVAN_EDIT__");
-                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-                while (std::chrono::steady_clock::now() < deadline) {
-                    const auto status = audio_.Status();
-                    if (!status.hasMedia && status.state == audio::PlaybackState::Error) break;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                }
-                guard.released = true;
+                guard.released = true;      // restore is owed once the placeholder load is enqueued
+                releaseObserved = WaitForAudioRelease();
                 break;
             }
         }
@@ -352,6 +359,9 @@ void App::ChangeTracksCover(std::span<const std::size_t> indices) {
         const auto id = TrackIdAtIndex(index);
         const auto* track = id ? playlists_.FindTrack(*id) : nullptr;
         if (track == nullptr || !library::Track::IsAudioFile(track->filePath)) continue;
+        // The audio worker may still hold this file open when the bounded wait
+        // expired; rewriting it then would fail with a sharing violation.
+        if (!releaseObserved && activeTrack_ && activeTrack_->id == *id) continue;
         if (!SUCCEEDED(WriteCoverArt(track->filePath, image))) continue;
         changed = true;
         // Cover art is not stored in the Track model — no in-memory update needed.
@@ -383,6 +393,7 @@ void App::ChangeTrackMetadata(std::span<const std::size_t> indices,
                               const std::wstring& value) {
     // --- Audio release for playing track ---
     AudioReleaseGuard guard;
+    bool releaseObserved = false;
     if (activeTrack_ && audio_.Live().hasMedia) {
         for (const auto index : indices) {
             const auto id = TrackIdAtIndex(index);
@@ -393,13 +404,8 @@ void App::ChangeTrackMetadata(std::span<const std::size_t> indices,
                 guard.filePath = activeTrack_->filePath;
                 audio_.Pause();
                 audio_.Load(L"__RIVAN_EDIT__");
-                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-                while (std::chrono::steady_clock::now() < deadline) {
-                    const auto status = audio_.Status();
-                    if (!status.hasMedia && status.state == audio::PlaybackState::Error) break;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                }
-                guard.released = true;
+                guard.released = true;      // restore is owed once the placeholder load is enqueued
+                releaseObserved = WaitForAudioRelease();
                 break;
             }
         }
@@ -411,6 +417,9 @@ void App::ChangeTrackMetadata(std::span<const std::size_t> indices,
         const auto id = TrackIdAtIndex(index);
         const auto* track = id ? playlists_.FindTrack(*id) : nullptr;
         if (track == nullptr || !library::Track::IsAudioFile(track->filePath)) continue;
+        // The audio worker may still hold this file open when the bounded wait
+        // expired; rewriting it then would fail with a sharing violation.
+        if (!releaseObserved && activeTrack_ && activeTrack_->id == *id) continue;
         if (!ui::WriteTrackMetadataValue(track->filePath.wstring(), field, value)) continue;
         changed = true;
 

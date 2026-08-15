@@ -12,7 +12,6 @@
 #include <cctype>
 #include <cwctype>
 #include <filesystem>
-#include <limits>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -168,14 +167,28 @@ bool App::DeleteSkin(std::wstring_view id, std::wstring& error) {
     }
     const std::string deletedId = selected->id;
     std::error_code ec;
-    std::filesystem::remove(skins_.PackagePath(selected->id), ec);
+    // Folder skins (a directory inside the skins directory with a skin.ini) have no
+    // package file; remove the directory. Package skins delete the .rivanskin file.
+    const auto package = skins_.PackagePath(selected->id);
+    const bool isFolderSkin = selected->directory.parent_path() == skins_.SkinsDirectory();
+    if (isFolderSkin) {
+        std::filesystem::remove_all(selected->directory, ec);
+    } else {
+        std::filesystem::remove(package, ec);
+    }
     if (ec) {
         error = L"Unable to delete skin: " + std::filesystem::path(ec.message()).wstring();
         return false;
     }
+    // Verify the skin is really gone; folder skin manifests may live in a nested
+    // working directory, in which case removing the folder was still the right call.
     std::string narrowError;
     if (!skins_.Refresh(&narrowError, nullptr)) {
         error = core::Utf8ToWide(narrowError, L"Unable to decode error text");
+        return false;
+    }
+    if (skins_.Find(deletedId) != nullptr) {
+        error = L"Unable to delete skin: the skin is still present after removal.";
         return false;
     }
     if (committedSkin_.id == deletedId) {

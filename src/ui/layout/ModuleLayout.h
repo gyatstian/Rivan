@@ -36,7 +36,6 @@ struct ModuleLayout final {
     [[nodiscard]] bool IsEffectivelyCollapsed(ModuleId id) const noexcept;
     [[nodiscard]] bool IsCollapseHandleVisible(ModuleId id) const noexcept;
     void ClearModuleCollapse(ModuleId id) noexcept;
-    void ClearCollapseReferences(ModuleId target) noexcept;
     void ClearInsideCollapseReferences(ModuleId target) noexcept;
 
     [[nodiscard]] static bool IsCollapseSide(ModuleCollapseSide side) noexcept;
@@ -86,7 +85,6 @@ struct ModuleLayout final {
     [[nodiscard]] ModuleId SnapRoot(ModuleId id) const noexcept;
     [[nodiscard]] bool HasValidGeometry() const noexcept;
     [[nodiscard]] std::size_t TabCount() const noexcept;
-    [[nodiscard]] std::size_t ActiveTabIndex() const noexcept;
     [[nodiscard]] static ModuleNormalizedRect Bounds(const ModuleLayoutItem& item) noexcept;
     [[nodiscard]] static bool Intersects(const ModuleNormalizedRect& first,
                                          const ModuleNormalizedRect& second) noexcept;
@@ -137,7 +135,6 @@ struct ModuleLayout final {
     [[nodiscard]] ModuleId GroupActiveMember(ModuleId id) const noexcept;
     void SetGroupActiveTab(ModuleId id, std::size_t index) noexcept;
     void NormalizeTabState() noexcept;
-    void ClearTabs() noexcept;
     void MakeTab(ModuleId first, ModuleId second) noexcept;
     void RemoveTab(ModuleId id) noexcept;
     void TabWith(ModuleId source, ModuleId target) noexcept;

@@ -97,8 +97,8 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
 
     ReadIntegerField(*document, "window", "x", -32768, 32767, session_.window.x, warnings);
     ReadIntegerField(*document, "window", "y", -32768, 32767, session_.window.y, warnings);
-    ReadIntegerField(*document, "window", "width", 320, 16384, session_.window.width, warnings);
-    ReadIntegerField(*document, "window", "height", 200, 16384, session_.window.height, warnings);
+    ReadIntegerField(*document, "window", "width", 120, 16384, session_.window.width, warnings);
+    ReadIntegerField(*document, "window", "height", 80, 16384, session_.window.height, warnings);
     ReadBoolField(*document, "window", "mini_mode", session_.miniMode, warnings);
     ReadEncodedString(*document, "playback", "selected_playlist", kMaximumSelectionBytes,
                       session_.selectedPlaylist, warnings);
@@ -236,8 +236,7 @@ bool SettingsManager::LoadSession(std::string* error, std::string* warnings) {
         const auto* library = layout.Find(ui::ModuleId::RivanLibrary);
         const auto* videoPreview = layout.Find(ui::ModuleId::VideoPreview);
         const bool oldFiveModuleDefault = library != nullptr && videoPreview != nullptr &&
-            library->visible && videoPreview->visible && !library->collapsed &&
-            !videoPreview->collapsed && std::abs(library->x - 0.46F) < 0.0001F &&
+            !library->collapsed && !videoPreview->collapsed && std::abs(library->x - 0.46F) < 0.0001F &&
             std::abs(library->y) < 0.0001F && std::abs(library->width - 0.54F) < 0.0001F &&
             std::abs(library->height - 0.66F) < 0.0001F &&
             std::abs(videoPreview->x - 0.46F) < 0.0001F &&
@@ -346,8 +345,8 @@ void SettingsManager::ResetSession() {
 bool SettingsManager::Validate(const SessionState& session, std::string* error) {
     if (session.window.x < -32768 || session.window.x > 32767 ||
         session.window.y < -32768 || session.window.y > 32767 ||
-        session.window.width < 320 || session.window.width > 16384 ||
-        session.window.height < 200 || session.window.height > 16384) {
+        session.window.width < 120 || session.window.width > 16384 ||
+        session.window.height < 80 || session.window.height > 16384) {
         SetError(error, "Window rectangle is outside supported bounds");
         return false;
     }
@@ -381,6 +380,22 @@ std::optional<RepeatMode> ParseRepeatMode(std::string_view value) noexcept {
     if (value == "off") return RepeatMode::Off;
     if (value == "all") return RepeatMode::All;
     if (value == "one") return RepeatMode::One;
+    return std::nullopt;
+}
+
+const char* DiscordSecondaryTextText(DiscordSecondaryText mode) noexcept {
+    switch (mode) {
+    case DiscordSecondaryText::Off: return "off";
+    case DiscordSecondaryText::SyncLyrics: return "sync_lyrics";
+    case DiscordSecondaryText::TotalStreams: return "total_streams";
+    }
+    return "sync_lyrics";
+}
+
+std::optional<DiscordSecondaryText> ParseDiscordSecondaryText(std::string_view value) noexcept {
+    if (value == "off") return DiscordSecondaryText::Off;
+    if (value == "sync_lyrics") return DiscordSecondaryText::SyncLyrics;
+    if (value == "total_streams") return DiscordSecondaryText::TotalStreams;
     return std::nullopt;
 }
 

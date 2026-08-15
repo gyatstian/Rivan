@@ -1,7 +1,6 @@
 // YoutubeService.Process.cpp
 #include "YoutubeService.Internal.h"
 
-#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cwctype>
@@ -63,7 +62,8 @@ std::wstring BuildUnbufferedEnvironment() {
 
 bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arguments,
                        std::stop_token stop, std::string& stdoutText, std::string& errorText,
-                       DWORD* exitCode, ProcessLineCallback onLine) {
+                       DWORD* exitCode, ProcessLineCallback onLine,
+                       std::chrono::milliseconds timeout) {
     stdoutText.clear();
     errorText.clear();
     if (exitCode) *exitCode = static_cast<DWORD>(-1);
@@ -79,8 +79,6 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
         return false;
     }
     SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-    DWORD pipeMode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-    (void)pipeMode;
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
@@ -162,7 +160,17 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
 
     bool processExited = false;
     std::chrono::steady_clock::time_point drainDeadline{};
+    // A deadline that resets on every progress output, so a long but active download
+    // is never killed, while a hung process is terminated after the inactivity window.
+    auto deadline = std::chrono::steady_clock::now() + timeout;
     for (;;) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            errorText = "yt-dlp timed out";
+            TerminateProcess(process.hProcess, 1);
+            if (job) TerminateJobObject(job, 1);
+            WaitForSingleObject(process.hProcess, 2000);
+            break;
+        }
         if (stop.stop_requested()) {
             TerminateProcess(process.hProcess, 1);
             if (job) TerminateJobObject(job, 1); // kill any spawned children (ffmpeg)
@@ -181,6 +189,8 @@ bool RunProcessCapture(const std::filesystem::path& exe, const std::wstring& arg
             if (!ReadFile(readPipe, chunk, sizeof(chunk), &read, nullptr) || read == 0) break;
             buffer.append(chunk, chunk + read);
             feedLines(std::string_view(chunk, read));
+            // Activity keeps the child alive; only a silent process hits the deadline.
+            deadline = std::chrono::steady_clock::now() + timeout;
             if (buffer.size() > 8 * 1024 * 1024) {
                 // Don't kill a healthy long download: keep the tail and continue.
                 // Callers read the retained tail via TailWide for error diagnostics,

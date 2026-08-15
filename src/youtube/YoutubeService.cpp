@@ -177,34 +177,6 @@ void YoutubeService::StoreSearchCacheLocked(const std::wstring& query,
     }
 }
 
-void YoutubeService::Cancel() {
-    Enqueue([this] {
-        JoinWorker();
-        {
-            std::scoped_lock lock(mutex_);
-            state_.busy = false;
-            state_.job = YoutubeJobKind::Idle;
-            state_.installingYtDlp = false;
-            state_.installingFfmpeg = false;
-            for (auto& entry : state_.entries) {
-                entry.downloading = false;
-                if (entry.downloadProgress >= 0.0F && entry.localPath.empty()) {
-                    entry.downloadProgress = -1.0F;
-                }
-            }
-            if (state_.status == L"Searching..." || state_.status == L"Probing..." ||
-                state_.status == L"Downloading..." ||
-                state_.status.rfind(L"Downloading ", 0) == 0 || state_.status == L"Converting..." ||
-                state_.status == L"Resolving..." || state_.status == L"Installing yt-dlp..." ||
-                state_.status == L"Installing ffmpeg...") {
-                state_.status = L"Cancelled";
-            }
-            WriteToolFlagsLocked();
-            ++state_.generation;
-        }
-    });
-}
-
 void YoutubeService::SubmitQuery(std::wstring query) {
     query = detail::Trim(std::move(query));
     if (query.empty()) return;

@@ -129,7 +129,14 @@ void App::PersistYoutubeChooserSelection() {
     settings.youtubeAudioExtension = NarrowAscii(youtubeDownloadSelection_.preferredAudioExtension);
     settings.youtubeAudioBitrate = std::max(0, youtubeDownloadSelection_.preferredAudioBitrate);
     std::string error;
-    if (settings_.SetSettings(std::move(settings), &error)) (void)settings_.SaveSettings(&error);
+    const bool accepted = settings_.SetSettings(std::move(settings), &error);
+    // Throttle the INI write; preferences stay in memory on every click. The final
+    // state is still persisted by PersistState on exit.
+    const auto now = std::chrono::steady_clock::now();
+    if (accepted && now - lastYoutubeChooserSave_ >= std::chrono::milliseconds(1500)) {
+        (void)settings_.SaveSettings(&error);
+        lastYoutubeChooserSave_ = now;
+    }
 }
 
 void App::SetYoutubeEnabled(bool enabled) {
@@ -164,7 +171,7 @@ void App::SetYoutubeEnabled(bool enabled) {
         youtubeGrabberHotkeyAvailable_ = grabberHotkeyAvailable;
         std::error_code ec;
         std::filesystem::create_directories(
-            youtube::YoutubeService::DownloadDirectory(settings_.Settings().musicRoot), ec);
+            youtube::YoutubeService::DownloadDirectory(EffectiveMusicRoot()), ec);
         youtube_.RefreshToolStatus();
         youtubeView_ = youtube_.Snapshot();
         if (!grabberHotkeyAvailable) {
@@ -502,7 +509,7 @@ void App::ConfirmYoutubeDownload() {
                                  : !youtubeView_.probe->audioFormats.empty();
     if (!canDownload) return;
     const auto entryId = youtubeChooserEntryId_;
-    youtube_.Download(entryId, settings_.Settings().musicRoot, youtubeDownloadSelection_);
+    youtube_.Download(entryId, EffectiveMusicRoot(), youtubeDownloadSelection_);
     PersistYoutubeChooserSelection();
     youtubeChooserVisible_ = false;
     youtubeChooserEntryId_ = 0;
@@ -515,7 +522,7 @@ void App::ShowYoutubeLocalLibrary() {
     youtube_.RefreshToolStatus();
     const auto tools = youtube_.Snapshot();
     const auto directory =
-        youtube::YoutubeService::DownloadDirectory(settings_.Settings().musicRoot);
+        youtube::YoutubeService::DownloadDirectory(EffectiveMusicRoot());
     std::error_code ec;
     youtubeView_.entries.clear();
     if (std::filesystem::is_directory(directory, ec)) {
@@ -535,7 +542,9 @@ void App::ShowYoutubeLocalLibrary() {
                 }
             }
             row.title = stem.empty() ? entry.path().stem().wstring() : stem;
-            row.id = library::Track::FromFile(entry.path()).id;
+            // This runs on the UI thread per downloaded file; only the stable
+            // path-derived id is needed, metadata comes from the library scan.
+            row.id = library::Track::FromPathOnly(entry.path()).id;
             youtubeView_.entries.push_back(std::move(row));
         }
     }
@@ -595,7 +604,14 @@ void App::ApplyYoutubeSnapshot() {
         }
         if (downloaded) {
             restored_ = true;
-            StartLibraryScan();
+            // Coalesce: if a scan is already running, defer to a single trailing rescan
+            // instead of aborting and restarting one per finished download.
+            if (scanRunning_) {
+                downloadRescanPending_ = true;
+            } else {
+                downloadRescanPending_ = false;  // this scan covers the new files too
+                StartLibraryScan();
+            }
         }
     }
 

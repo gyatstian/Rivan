@@ -81,6 +81,16 @@ struct Win32UiRenderState {
              Microsoft::WRL::ComPtr<IDWriteTextFormat>>
         songRowFormats;
 
+    // Cached lyrics line layouts, rebuilt only when the document, width, alignment,
+    // or skin fonts change. Avoids recreating IDWriteTextLayout per line per frame.
+    std::uint64_t lyricsLayoutRevision{~std::uint64_t{0}};
+    int lyricsLayoutWidthKey{};
+    DWRITE_TEXT_ALIGNMENT lyricsLayoutAlignment{};
+    std::vector<Microsoft::WRL::ComPtr<IDWriteTextLayout>> lyricsLayouts;
+    std::vector<float> lyricsLineHeights;
+    std::vector<float> lyricsLineTops;
+    float lyricsContentHeight{};
+
     std::array<ID2D1Brush*, 14> currentBrushes{};
     std::vector<D2D1_RECT_F> screenBounds;
     std::vector<D2D1_RECT_F> panelBounds;

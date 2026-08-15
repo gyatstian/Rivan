@@ -13,7 +13,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool ownsCom = SUCCEEDED(comResult);
+    const bool ownsCom = (comResult == S_OK);
 
     rivan::App app(instance);
     if (!app.Initialize()) {

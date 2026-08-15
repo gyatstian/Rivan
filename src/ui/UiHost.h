@@ -1,6 +1,7 @@
 // UiHost.h
 // Stable value-model and callback seam between the Win32 view and Rivan App.
 #pragma once
+#include "../config/SettingsManager.h"
 #include "../skin/Skin.h"
 #include "../visualization/Visualization.h"
 #include "../youtube/YoutubeService.h"
@@ -200,7 +201,8 @@ struct UiModel {
     // Discord Rich Presence preference (IPC worker runs only when true).
     bool discordEnabled{};
     bool discordShowArtist{true};
-    bool discordShowImageText{true};
+    config::DiscordSecondaryText discordSecondaryText{config::DiscordSecondaryText::SyncLyrics};
+    bool discordFallbackToTotalStreams{};
     bool discordShowGithubButton{};
     ModuleExpansionBehavior moduleExpansionBehavior{ModuleExpansionBehavior::Squash};
     WindowResizeBehavior windowResizeBehavior{WindowResizeBehavior::ScaleAll};
@@ -315,7 +317,8 @@ public:
     virtual void SetDiscordEnabled(bool enabled) = 0;
     // Empty restores the built-in Rivan asset. Returns validation failures to the UI.
     virtual void SetDiscordShowArtist(bool enabled) = 0;
-    virtual void SetDiscordShowImageText(bool enabled) = 0;
+    virtual void SetDiscordSecondaryText(config::DiscordSecondaryText mode) = 0;
+    virtual void SetDiscordFallbackToTotalStreams(bool enabled) = 0;
     virtual void SetDiscordShowGithubButton(bool enabled) = 0;
     // One-click install of yt-dlp or ffmpeg into %LOCALAPPDATA%\Rivan\tools.
     virtual void InstallYoutubeTool(bool ytDlp) = 0;

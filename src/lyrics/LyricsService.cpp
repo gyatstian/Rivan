@@ -17,7 +17,6 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <map>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -28,6 +27,7 @@ namespace rivan::lyrics {
 namespace {
 
 constexpr std::size_t kMaximumResponseBytes = 1024U * 1024U;
+constexpr std::size_t kCacheMaxFiles = 4096;
 constexpr DWORD kNetworkTimeoutMilliseconds = 4000;
 constexpr auto kFetchBudget = std::chrono::seconds{20};
 constexpr std::wstring_view kLrclibBaseUrl = L"https://lrclib.net/api/";
@@ -411,6 +411,40 @@ std::optional<HttpResponse> HttpGet(std::wstring_view url, std::stop_token stop)
                : std::optional<HttpResponse>(HttpResponse{status, std::move(body)});
 }
 
+void PruneCacheIfNeeded(const std::filesystem::path& cacheDirectory) {
+    // Quick over-cap probe: stop counting once the cap is exceeded so the common
+    // small-cache path iterates at most kCacheMaxFiles + 1 entries.
+    std::error_code ec;
+    bool overCap = false;
+    std::size_t count = 0;
+    for (std::filesystem::directory_iterator it(cacheDirectory, ec), end;
+         it != end && !ec; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        if (it->path().extension() != L".lyrics") continue;
+        if (++count > kCacheMaxFiles) {
+            overCap = true;
+            break;
+        }
+    }
+    if (ec || !overCap) return;
+
+    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> files;
+    for (std::filesystem::directory_iterator it(cacheDirectory, ec), end;
+         it != end && !ec; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        const auto& path = it->path();
+        if (path.extension() != L".lyrics") continue;
+        files.emplace_back(std::filesystem::last_write_time(path, ec), path);
+        ec.clear();
+    }
+    std::sort(files.begin(), files.end(),
+              [](const auto& left, const auto& right) { return left.first > right.first; });
+    for (std::size_t index = kCacheMaxFiles; index < files.size(); ++index) {
+        std::filesystem::remove(files[index].second, ec);
+        ec.clear();
+    }
+}
+
 std::optional<double> ParseNumber(std::wstring_view value) {
     double number{};
     std::wistringstream stream{std::wstring(value)};
@@ -602,6 +636,9 @@ void LyricsService::SaveCache(const RequestData& request, const LyricsDocument& 
         std::filesystem::rename(temporary, cachePath, error);
     }
     if (error) std::filesystem::remove(temporary, error);
+    // The cache is a pure replay source; pruning the oldest files loses nothing
+    // but disk space.
+    if (!error) PruneCacheIfNeeded(cacheDirectory_);
 }
 
 std::optional<LyricsDocument> LyricsService::Fetch(const RequestData& request,

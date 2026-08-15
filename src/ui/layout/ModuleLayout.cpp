@@ -400,15 +400,15 @@ bool ModuleLayout::ReattachOutsideCollapseHandles(const ModuleLayout& before) no
 
 ModuleLayout ModuleLayout::Defaults() noexcept {
     return ModuleLayout{
-        {{{ModuleId::Rivan, 0.0F, 0.0F, 0.44F, 0.24F, true, ModuleDockState::Floating},
-           {ModuleId::AllMusic, 0.0F, 0.27F, 0.44F, 0.45F, true, ModuleDockState::Floating},
-           {ModuleId::GraphicEqualizer, 0.0F, 0.75F, 0.44F, 0.25F, true,
+        {{{ModuleId::Rivan, 0.0F, 0.0F, 1.0F, 0.32946298F, true, ModuleDockState::Snapped},
+           {ModuleId::AllMusic, 0.0F, 0.27F, 0.44F, 0.45F, false, ModuleDockState::Floating},
+           {ModuleId::GraphicEqualizer, 0.0F, 0.75F, 0.44F, 0.25F, false,
             ModuleDockState::Floating},
-           {ModuleId::RivanLibrary, 0.46F, 0.0F, 0.54F, 0.46F, true,
+           {ModuleId::RivanLibrary, 0.0F, 0.32946298F, 1.0F, 0.670537F, true,
+            ModuleDockState::Snapped},
+           {ModuleId::VideoPreview, 0.46F, 0.49F, 0.54F, 0.24F, false,
             ModuleDockState::Floating},
-           {ModuleId::VideoPreview, 0.46F, 0.49F, 0.54F, 0.24F, true,
-            ModuleDockState::Floating},
-           {ModuleId::Lyrics, 0.46F, 0.76F, 0.54F, 0.24F, true,
+           {ModuleId::Lyrics, 0.46F, 0.76F, 0.54F, 0.24F, false,
             ModuleDockState::Floating}}},
         {}, 0, 0,
         {ModuleId::Rivan, ModuleId::AllMusic, ModuleId::GraphicEqualizer,
@@ -517,15 +517,6 @@ void ModuleLayout::ClearModuleCollapse(ModuleId id) noexcept {
         item->collapseTarget = id;
         item->collapseTargetIsWindow = false;
         item->collapsed = false;
-    }
-}
-
-void ModuleLayout::ClearCollapseReferences(ModuleId target) noexcept {
-    for (const auto& candidate : items) {
-        if (candidate.id != target && candidate.collapseTarget == target &&
-            candidate.collapseMode != ModuleCollapseMode::None) {
-            ClearModuleCollapse(candidate.id);
-        }
     }
 }
 
@@ -750,11 +741,6 @@ bool ModuleLayout::HasValidGeometry() const noexcept {
 
 std::size_t ModuleLayout::TabCount() const noexcept {
     return std::min(tabCount, tabOrder.size());
-}
-
-std::size_t ModuleLayout::ActiveTabIndex() const noexcept {
-    const auto count = TabCount();
-    return count == 0 ? 0 : std::min(activeTab, count - 1);
 }
 
 ModuleNormalizedRect ModuleLayout::Bounds(const ModuleLayoutItem& item) noexcept {

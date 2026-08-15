@@ -140,8 +140,6 @@ void Win32Ui::Impl::DrawSongRow(
     fieldValues[static_cast<std::size_t>(SongRowField::Bitrate)] =
         track.bitrateKbps > 0 ? std::to_wstring(track.bitrateKbps) + L" kbps"
                               : (sample ? L"320 kbps" : L"-- kbps");
-    fieldAlignments[static_cast<std::size_t>(SongRowField::Duration)] = DWRITE_TEXT_ALIGNMENT_LEADING;
-    fieldAlignments[static_cast<std::size_t>(SongRowField::Bitrate)] = DWRITE_TEXT_ALIGNMENT_LEADING;
     const float textOutline = std::clamp(model.activeSkin.typography.borderSize, 0.0F, 8.0F);
 
     std::array<float, kSongRowFieldCount> fieldWidths{};

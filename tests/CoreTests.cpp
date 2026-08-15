@@ -471,6 +471,8 @@ void TestSongRowLayoutSettingRoundTrip() {
     settings.previewFitWindow = true;
     settings.startAtStartup = true;
     settings.exitToTray = true;
+    settings.discordSecondaryText = rivan::config::DiscordSecondaryText::SyncLyrics;
+    settings.discordFallbackToTotalStreams = true;
     settings.discordShowGithubButton = true;
     settings.youtubeGrabberHotkeyModifiers = 0x0001u | 0x0002u;
     settings.youtubeGrabberHotkeyVirtualKey = VK_F8;
@@ -532,6 +534,10 @@ void TestSongRowLayoutSettingRoundTrip() {
            "preview fit-to-window setting survives settings round-trip");
     Check(reader.Settings().exitToTray,
           "exit to tray survives settings round-trip");
+    Check(reader.Settings().discordSecondaryText ==
+              rivan::config::DiscordSecondaryText::SyncLyrics &&
+              reader.Settings().discordFallbackToTotalStreams,
+          "Discord synced-lyrics stream fallback survives settings round-trip");
     Check(reader.Settings().discordShowGithubButton,
            "Discord GitHub button setting survives settings round-trip");
     Check(reader.Settings().youtubeGrabberHotkeyModifiers == (0x0001u | 0x0002u) &&
@@ -757,6 +763,13 @@ void TestUiModuleRegistry() {
     auto layout = rivan::ui::ModuleLayout::Defaults();
     Check(layout.Find(ModuleId::Rivan)->width > 0.0F,
           "module defaults provide normalized geometry");
+    Check(layout.Find(ModuleId::Rivan)->visible && layout.Find(ModuleId::RivanLibrary)->visible,
+          "module defaults start with only the player and library visible");
+    Check(layout.Find(ModuleId::AllMusic)->visible == false &&
+              layout.Find(ModuleId::GraphicEqualizer)->visible == false &&
+              layout.Find(ModuleId::VideoPreview)->visible == false &&
+              layout.Find(ModuleId::Lyrics)->visible == false,
+          "module defaults leave the remaining sections hidden");
     const auto* videoPreview = layout.Find(ModuleId::VideoPreview);
     Check(videoPreview != nullptr && std::abs(videoPreview->x - 0.46F) < 0.001F &&
               std::abs(videoPreview->y - 0.49F) < 0.001F &&
@@ -764,8 +777,8 @@ void TestUiModuleRegistry() {
               std::abs(videoPreview->height - 0.24F) < 0.001F,
            "module defaults reserve a standalone video preview section");
     const auto* lyrics = layout.Find(ModuleId::Lyrics);
-    Check(lyrics != nullptr && lyrics->visible && lyrics->width > 0.0F,
-          "module defaults reserve a lyrics section");
+    Check(lyrics != nullptr && !lyrics->visible && lyrics->width > 0.0F,
+          "module defaults reserve a hidden lyrics section");
     layout.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
     Check(layout.tabCount == 2 && layout.IsTabbed(ModuleId::AllMusic),
           "module layout can create a tab group");
@@ -847,12 +860,13 @@ void TestUiModuleRegistry() {
           "module drop resolver distinguishes vertical side drops");
 
     auto snapped = rivan::ui::ModuleLayout::Defaults();
+    snapped.Find(ModuleId::AllMusic)->visible = true;
     Check(snapped.SnapTo(ModuleId::AllMusic, ModuleId::Rivan, ModuleDropZone::Right) &&
                snapped.IsSnapped(ModuleId::AllMusic) && snapped.IsSnapped(ModuleId::Rivan) &&
                snapped.IsSnapGrouped(ModuleId::AllMusic) &&
                snapped.SnapRoot(ModuleId::AllMusic) == ModuleId::Rivan &&
-               std::abs(snapped.Find(ModuleId::AllMusic)->x - 0.22F) < 0.001F &&
-               std::abs(snapped.Find(ModuleId::Rivan)->width - 0.22F) < 0.001F,
+               std::abs(snapped.Find(ModuleId::AllMusic)->x - 0.5F) < 0.001F &&
+               std::abs(snapped.Find(ModuleId::Rivan)->width - 0.5F) < 0.001F,
            "side module drops split the target and mark both modules snapped");
     snapped.DetachSnapModule(ModuleId::AllMusic);
     Check(!snapped.IsSnapGrouped(ModuleId::AllMusic) &&
@@ -874,13 +888,14 @@ void TestUiModuleRegistry() {
           "moving a snapped root preserves the module group");
 
     auto resized = rivan::ui::ModuleLayout::Defaults();
+    resized.Find(ModuleId::AllMusic)->visible = true;
     Check(resized.SnapTo(ModuleId::AllMusic, ModuleId::Rivan, ModuleDropZone::Right),
           "snap group can be resized");
     const float oldRivanWidth = resized.Find(ModuleId::Rivan)->width;
     const float oldMusicWidth = resized.Find(ModuleId::AllMusic)->width;
-    (void)resized.ResizeSnapGroup(ModuleId::Rivan, 0.60F, 0.15F, true, false, false, false);
-    Check(resized.Find(ModuleId::Rivan)->width > oldRivanWidth &&
-              resized.Find(ModuleId::AllMusic)->width > oldMusicWidth &&
+    (void)resized.ResizeSnapGroup(ModuleId::Rivan, 0.40F, 0.15F, true, false, false, false);
+    Check(resized.Find(ModuleId::Rivan)->width < oldRivanWidth &&
+              resized.Find(ModuleId::AllMusic)->width < oldMusicWidth &&
               std::abs(resized.Find(ModuleId::Rivan)->width -
                        resized.Find(ModuleId::AllMusic)->width) < 0.001F,
           "resizing a snapped group updates every member");
@@ -1036,6 +1051,7 @@ void TestDuplicateModuleGeometryRepair() {
     auto layout = ModuleLayout::Defaults();
     auto* first = layout.Find(ModuleId::Rivan);
     auto* second = layout.Find(ModuleId::AllMusic);
+    second->visible = true;
     second->x = first->x;
     second->y = first->y;
     second->width = first->width;
@@ -1046,12 +1062,15 @@ void TestDuplicateModuleGeometryRepair() {
           "duplicate independent geometry disables the later module");
 
     auto tabbed = ModuleLayout::Defaults();
+    tabbed.Find(ModuleId::AllMusic)->visible = true;
     tabbed.MakeTab(ModuleId::Rivan, ModuleId::AllMusic);
     Check(!tabbed.DisableDuplicateIndependentModules() &&
               tabbed.Find(ModuleId::Rivan)->visible && tabbed.Find(ModuleId::AllMusic)->visible,
           "tabbed modules may intentionally share identical bounds");
 
     auto tabbedConflict = ModuleLayout::Defaults();
+    tabbedConflict.Find(ModuleId::AllMusic)->visible = true;
+    tabbedConflict.Find(ModuleId::GraphicEqualizer)->visible = true;
     tabbedConflict.MakeTab(ModuleId::AllMusic, ModuleId::GraphicEqualizer);
     first = tabbedConflict.Find(ModuleId::Rivan);
     second = tabbedConflict.Find(ModuleId::AllMusic);
@@ -2436,6 +2455,7 @@ void TestModuleLayoutSessionRoundTrip() {
     auto session = writer.Session();
     session.moduleLayout = rivan::ui::ModuleLayout::Defaults();
     session.moduleLayout.Find(rivan::ui::ModuleId::Rivan)->x = 0.2F;
+    session.moduleLayout.Find(rivan::ui::ModuleId::Rivan)->width = 0.4F;
     session.moduleLayout.Find(rivan::ui::ModuleId::AllMusic)->visible = false;
     session.moduleLayout.Find(rivan::ui::ModuleId::Rivan)->dockState =
         rivan::ui::ModuleDockState::Snapped;
@@ -2787,9 +2807,12 @@ void TestLyricsLayoutMigration() {
     Check(settings.LoadSession(&loadError), "five-module session loads for lyrics migration");
     const auto* lyrics = settings.Session().moduleLayout.Find(rivan::ui::ModuleId::Lyrics);
     const auto* preview = settings.Session().moduleLayout.Find(rivan::ui::ModuleId::VideoPreview);
-    Check(lyrics != nullptr && lyrics->visible && preview != nullptr &&
+    const auto* player = settings.Session().moduleLayout.Find(rivan::ui::ModuleId::Rivan);
+    const auto* library = settings.Session().moduleLayout.Find(rivan::ui::ModuleId::RivanLibrary);
+    Check(lyrics != nullptr && !lyrics->visible && preview != nullptr && !preview->visible &&
+              player != nullptr && player->visible && library != nullptr && library->visible &&
               std::abs(preview->y - 0.49F) < 0.001F,
-          "five-module default session migrates to visible lyrics layout");
+          "five-module default session migrates to the two-panel default layout");
     std::filesystem::remove_all(root, error);
 }
 
@@ -3518,25 +3541,27 @@ void TestStatisticsDashboardDerivation() {
           "dashboard derives year metrics from year counters");
     Check(allTime.totals.seconds == 1140 && allTime.totals.plays == 18,
           "dashboard derives lifetime metrics from lifetime counters");
-    Check(NextDashboardPeriod(DashboardPeriod::Week) == DashboardPeriod::Month &&
-              NextDashboardPeriod(DashboardPeriod::Month) == DashboardPeriod::Year &&
+    Check(NextDashboardPeriod(DashboardPeriod::Week) == DashboardPeriod::FourWeeks &&
+              NextDashboardPeriod(DashboardPeriod::FourWeeks) == DashboardPeriod::Month &&
+              NextDashboardPeriod(DashboardPeriod::Month) == DashboardPeriod::SixMonths &&
+              NextDashboardPeriod(DashboardPeriod::SixMonths) == DashboardPeriod::Year &&
               NextDashboardPeriod(DashboardPeriod::Year) == DashboardPeriod::AllTime &&
               NextDashboardPeriod(DashboardPeriod::AllTime) == DashboardPeriod::Week,
-          "dashboard period cycle visits week month year and all time");
+          "dashboard period cycle visits week 4weeks month 6months year all time");
 }
 
 void TestUpdateReleaseParsing() {
     using rivan::update::UpdateService;
 
-    constexpr std::string_view matching = R"({"tag_name":"1.1","html_url":"https:\/\/github.com\/gyatstian\/Rivan\/releases\/tag\/v1.1"})";
+    constexpr std::string_view matching = R"({"tag_name":"1.99","html_url":"https:\/\/github.com\/gyatstian\/Rivan\/releases\/tag\/v1.99"})";
     const auto equal = UpdateService::ParseLatestReleaseJson(matching);
-    Check(equal.has_value() && !equal->updateAvailable && equal->latestVersion == L"1.1" &&
-              equal->releaseUrl == L"https://github.com/gyatstian/Rivan/releases/tag/v1.1",
+    Check(equal.has_value() && !equal->updateAvailable && equal->latestVersion == L"1.99" &&
+              equal->releaseUrl == L"https://github.com/gyatstian/Rivan/releases/tag/v1.99",
           "update parser accepts escaped GitHub release URLs and strips only one leading v for equality");
 
     constexpr std::string_view latest = R"({"html_url":"https://github.com/gyatstian/Rivan/releases/tag/v1.2","tag_name":"V1.2","assets":[{"name":"ignored"}]})";
     const auto newer = UpdateService::ParseLatestReleaseJson(latest);
-    Check(newer.has_value() && newer->updateAvailable && newer->currentVersion == L"v1.1" &&
+    Check(newer.has_value() && newer->updateAvailable && newer->currentVersion == L"v1.99" &&
               newer->latestVersion == L"V1.2",
           "update parser reports every normalized-version mismatch without semantic ordering");
 

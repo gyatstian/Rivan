@@ -64,26 +64,47 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
     }
 
     const float textWidth = std::max(1.0F, Width(lyricsContentBounds) - 12.0F);
-    std::vector<ComPtr<IDWriteTextLayout>> layouts(lines.size());
-    std::vector<float> lineHeights(lines.size(), 20.0F);
-    std::vector<float> lineTops(lines.size(), 0.0F);
+    const int widthKey = static_cast<int>(textWidth);
+    auto& layouts = lyricsLayouts;
+    auto& lineHeights = lyricsLineHeights;
+    auto& lineTops = lyricsLineTops;
     float contentHeight = 0.0F;
-    for (std::size_t i = 0; i < lines.size(); ++i) {
-        if (FAILED(writeFactory->CreateTextLayout(lines[i].text.data(),
-                                                   static_cast<UINT32>(lines[i].text.size()),
-                                                   regularFormat.Get(), textWidth, 10000.0F,
-                                                   layouts[i].ReleaseAndGetAddressOf()))) {
-            continue;
+    if (model.lyrics.revision != lyricsLayoutRevision ||
+        widthKey != lyricsLayoutWidthKey ||
+        lyricsAlignment_ != lyricsLayoutAlignment ||
+        layouts.size() != lines.size()) {
+        lyricsLayoutRevision = model.lyrics.revision;
+        lyricsLayoutWidthKey = widthKey;
+        lyricsLayoutAlignment = lyricsAlignment_;
+        layouts.clear();
+        layouts.reserve(lines.size());
+        lineHeights.assign(lines.size(), 20.0F);
+        lineTops.assign(lines.size(), 0.0F);
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            ComPtr<IDWriteTextLayout> layout;
+            if (FAILED(writeFactory->CreateTextLayout(lines[i].text.data(),
+                                                       static_cast<UINT32>(lines[i].text.size()),
+                                                       regularFormat.Get(), textWidth, 10000.0F,
+                                                       layout.ReleaseAndGetAddressOf()))) {
+                layouts.push_back(nullptr);
+                continue;
+            }
+            layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            layout->SetTextAlignment(lyricsAlignment_);
+            layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            DWRITE_TEXT_METRICS metrics{};
+            if (SUCCEEDED(layout->GetMetrics(&metrics))) {
+                lineHeights[i] = std::max(20.0F, std::ceil(metrics.height));
+            }
+            lineTops[i] = contentHeight;
+            contentHeight += lineHeights[i];
+            layouts.push_back(std::move(layout));
         }
-        layouts[i]->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
-        layouts[i]->SetTextAlignment(lyricsAlignment_);
-        layouts[i]->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-        DWRITE_TEXT_METRICS metrics{};
-        if (SUCCEEDED(layouts[i]->GetMetrics(&metrics))) {
-            lineHeights[i] = std::max(20.0F, std::ceil(metrics.height));
-        }
-        lineTops[i] = contentHeight;
-        contentHeight += lineHeights[i];
+        lyricsContentHeight = contentHeight;
+    } else {
+        contentHeight = lyricsContentHeight;
+        lineHeights = lyricsLineHeights;
+        lineTops = lyricsLineTops;
     }
 
     std::size_t activeLine = 0;
@@ -122,7 +143,9 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
         const auto origin = D2D1::Point2F(lyricsContentBounds.left + 6.0F, top);
         ID2D1Brush* brush = active ? b[12].Get() : b[9].Get();
         if (deferTexts) {
-            deferredTextLayouts.push_back({std::move(layouts[i]), origin, brush});
+            // Copy (AddRef) into the deferred list: the cached layout must survive the
+            // flush so subsequent frames can reuse it without rebuilding.
+            deferredTextLayouts.push_back({layouts[i], origin, brush});
         } else {
             target->DrawTextLayout(origin, layouts[i].Get(), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
         }

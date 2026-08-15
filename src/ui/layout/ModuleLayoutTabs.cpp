@@ -242,16 +242,6 @@ void ModuleLayout::NormalizeTabState() noexcept {
     }
 }
 
-void ModuleLayout::ClearTabs() noexcept {
-    tabOrder = {};
-    tabCount = 0;
-    activeTab = 0;
-    groupActiveTab = {};
-    for (std::size_t index = 0; index < items.size(); ++index) {
-        tabGroupRoot[index] = items[index].id;
-    }
-}
-
 void ModuleLayout::MakeTab(ModuleId first, ModuleId second) noexcept {
     NormalizeTabState();
     if (first == second || Find(first) == nullptr || Find(second) == nullptr) return;

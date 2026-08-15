@@ -83,7 +83,6 @@ void Win32Ui::Impl::ClearFilePreview() noexcept {
         previewBitmapSourceRect = {};
         previewPath.clear();
         previewIsVideo = false;
-        previewHasPresentedFrame = false;
         previewWantedSeconds.store(0.0, std::memory_order_relaxed);
         pendingPreviewFrameVersion.store(0, std::memory_order_relaxed);
         uploadedPreviewFrameVersion = 0;
@@ -696,7 +695,6 @@ void Win32Ui::Impl::UpdateVideoPreviewFrame() {
             latestPreviewSourceRect = sourceRect;
         }
         uploadedPreviewFrameVersion = version;
-        previewHasPresentedFrame = true;
         if (previewFullscreen && model.previewFitWindow) ApplyPreviewWindowFit();
     }
 

@@ -470,6 +470,9 @@ void Win32Ui::Impl::DrawStudioElements(float left, float right, float& y, LabelF
 
 void Win32Ui::Impl::DrawSkinStudio(const D2D1_SIZE_F size,
                     std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    screenBounds.clear();
+    panelBounds.clear();
+    decorControlBounds.clear();
     EnsureStudioDraft();
     target->FillRectangle(Rect(0, 0, size.width, size.height), b[0].Get());
     const auto panel = Rect(10.0F, 10.0F, size.width - 10.0F, size.height - 10.0F);

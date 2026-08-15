@@ -294,15 +294,17 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
         });
 
     std::optional<std::filesystem::path> local;
-    if (!stop.stop_requested()) {
+    if (ran && exitCode != 0) {
         // A non-zero exit from a ran process is a genuine failure; skip the file
         // lookup so the state update below takes the failure branch.
-        if (ran && exitCode != 0) {
-            local = std::nullopt;
-        } else {
-            local = detail::FindDownloadedFile(directory, target.videoId);
-        }
+        local = std::nullopt;
     } else {
+        // Run the lookup even after a stop: a download that finished and renamed
+        // its file right as the stop landed must still be recorded as Downloaded,
+        // so a retry does not re-download it.
+        local = detail::FindDownloadedFile(directory, target.videoId);
+    }
+    if (stop.stop_requested()) {
         // Cancel path: yt-dlp is killed mid-flight by RunProcessCapture, so its
         // partial stream files (*.part, *.ytdl) are left behind. Remove only files
         // matching this job's [<videoId>] marker; downloads are serialized through

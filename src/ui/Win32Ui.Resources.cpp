@@ -132,6 +132,8 @@ namespace rivan::ui {
         lastAppliedCustomFontFile = type.customFontFile;
         lastAppliedSkinDirectory = model.activeSkin.directory;
         songRowFormats.clear();
+        // Cached lyrics layouts embed the old formats; force a rebuild on next paint.
+        lyricsLayoutRevision = ~std::uint64_t{0};
 
         const float base = std::clamp(type.baseSize, 8.0F, 32.0F);
         const std::filesystem::path customPath(customFile);
@@ -165,6 +167,8 @@ void Win32Ui::Impl::DiscardTarget() noexcept {
         imageCache.clear();
         trackCoverCache.clear();
         songRowFormats.clear();
+        // Cached lyrics layouts are tied to the (possibly recreated) formats; rebuild.
+        lyricsLayoutRevision = ~std::uint64_t{0};
         trackCoverUseCounter = 0;
         nextTrackCoverLookup = {};
         previewBitmap.Reset();

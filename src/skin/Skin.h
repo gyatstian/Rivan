@@ -17,13 +17,6 @@ struct Color final {
     std::uint8_t blue = 0;
     std::uint8_t alpha = 255;
 
-    [[nodiscard]] constexpr std::uint32_t ToArgb() const noexcept {
-        return (static_cast<std::uint32_t>(alpha) << 24U) |
-               (static_cast<std::uint32_t>(red) << 16U) |
-               (static_cast<std::uint32_t>(green) << 8U) |
-               static_cast<std::uint32_t>(blue);
-    }
-
     friend constexpr bool operator==(const Color&, const Color&) noexcept = default;
 };
 

@@ -231,7 +231,8 @@ core::IniDocument MakeSettingsDocument(const AppSettings& settings) {
     document.Set("library", "duplicate_as_file", BoolText(settings.duplicateAsFile));
     document.Set("discord", "enabled", BoolText(settings.discordEnabled));
     document.Set("discord", "show_artist", BoolText(settings.discordShowArtist));
-    document.Set("discord", "show_image_text", BoolText(settings.discordShowImageText));
+    document.Set("discord", "secondary_text", config::DiscordSecondaryTextText(settings.discordSecondaryText));
+    document.Set("discord", "fallback_to_total_streams", BoolText(settings.discordFallbackToTotalStreams));
     document.Set("discord", "show_github_button", BoolText(settings.discordShowGithubButton));
     document.Set("stats", "enabled", BoolText(settings.statsEnabled));
     return document;
@@ -391,7 +392,15 @@ bool SettingsManager::LoadSettings(std::string* error, std::string* warnings) {
         static_cast<std::uint32_t>(grabberHotkeyVirtualKey);
     ReadBoolField(*document, "discord", "enabled", settings_.discordEnabled, warnings);
     ReadBoolField(*document, "discord", "show_artist", settings_.discordShowArtist, warnings);
-    ReadBoolField(*document, "discord", "show_image_text", settings_.discordShowImageText, warnings);
+    if (const auto text = document->Get("discord", "secondary_text")) {
+        if (const auto parsed = config::ParseDiscordSecondaryText(*text)) {
+            settings_.discordSecondaryText = *parsed;
+        } else {
+            AddWarning(warnings, "Ignoring invalid discord.secondary_text");
+        }
+    }
+    ReadBoolField(*document, "discord", "fallback_to_total_streams",
+                  settings_.discordFallbackToTotalStreams, warnings);
     ReadBoolField(*document, "discord", "show_github_button", settings_.discordShowGithubButton, warnings);
     ReadBoolField(*document, "stats", "enabled", settings_.statsEnabled, warnings);
 

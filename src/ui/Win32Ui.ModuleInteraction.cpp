@@ -7,6 +7,12 @@ namespace rivan::ui {
 [[nodiscard]] bool Win32Ui::Impl::BeginModuleResize(float x, float y) {
     if (model.miniPlayer || lastCanvas.width <= 0.0F || lastCanvas.height <= 0.0F) return false;
     constexpr float edge = 7.0F;
+    // If the cursor shows a resize cursor here, always allow resize — hit-test guards
+    // (title bar, tabs, collapse toggle) only apply when the cursor would be an arrow.
+    const HCURSOR cursor = ModuleCursor(x, y);
+    const bool isResizeCursor = cursor && cursor != LoadCursorW(nullptr, IDC_SIZEALL) &&
+                                cursor != LoadCursorW(nullptr, IDC_HAND) &&
+                                cursor != LoadCursorW(nullptr, IDC_ARROW);
     for (auto iterator = moduleRegions.rbegin(); iterator != moduleRegions.rend(); ++iterator) {
         if (!Contains(iterator->bounds, x, y)) continue;
         const bool right = std::abs(x - iterator->bounds.right) <= edge;
@@ -14,13 +20,15 @@ namespace rivan::ui {
         const bool left = std::abs(x - iterator->bounds.left) <= edge;
         const bool top = std::abs(y - iterator->bounds.top) <= edge;
         if (!right && !bottom && !left && !top) continue;
-        // The tab strip is inset by four pixels from the panel edge.  Without
-        // this guard its entire upper edge is interpreted as a resize handle,
-        // so a tab can be selected but never promoted into a detachable drag.
-         if (const auto* hit = HitTestContent(x, y);
-             hit && (hit->kind == HitKind::ModuleTitle || hit->kind == HitKind::ModuleTab ||
-                     hit->kind == HitKind::ModuleCollapseToggle)) {
-            continue;
+        if (!isResizeCursor) {
+            // The tab strip is inset by 4px from the panel edge. The resize zone is 7px.
+            // Only skip resize for the top edge when actually over the title bar (not the
+            // outer 3px where the resize cursor shows). For left/right/bottom edges, no conflict.
+            if (const auto* hit = HitTestContent(x, y);
+                hit && (hit->kind == HitKind::ModuleTab || hit->kind == HitKind::ModuleCollapseToggle ||
+                        (hit->kind == HitKind::ModuleTitle && top && y > iterator->bounds.top + 3.0F))) {
+                continue;
+            }
         }
         const auto geometryId = model.moduleLayout.TabRoot(iterator->id);
         const auto* item = model.moduleLayout.Find(geometryId);
@@ -46,6 +54,12 @@ namespace rivan::ui {
 void Win32Ui::Impl::BeginModuleDrag(ModuleId id, float x, float y,
                                      const ModuleLayout* layoutOverride,
                                      bool detachTabOnMove) {
+    // If the cursor is showing a resize cursor at this position, don't start a drag.
+    // This prevents accidentally moving a module when the user intends to resize.
+    if (auto cursor = ModuleCursor(x, y);
+        cursor && cursor != LoadCursorW(nullptr, IDC_SIZEALL)) {
+        return;
+    }
     const ModuleLayout& sourceLayout = layoutOverride ? *layoutOverride : model.moduleLayout;
     if (!sourceLayout.HasValidGeometry()) return;
     const auto geometryId = sourceLayout.TabRoot(id);
