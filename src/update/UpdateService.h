@@ -13,7 +13,7 @@
 
 namespace rivan::update {
 
-inline constexpr std::wstring_view kCurrentVersion{L"v1.99"};
+inline constexpr std::wstring_view kCurrentVersion{L"v2.0"};
 
 // Published by shared pointer and never mutated after construction, so callers can safely
 // retain a snapshot while a later service operation replaces the current snapshot.

@@ -394,9 +394,34 @@ void Win32Ui::Impl::DrawIntegrationsSection(const float left, const float right,
     DrawText(L"LYRICS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
     y += 29;
     SettingsButton(Rect(left, y, right, y + 24),
-                   model.lyricsCacheEnabled ? L"SAVE FETCHED LYRICS: ON" : L"SAVE FETCHED LYRICS: OFF", 7, b);
+                   model.lyricsOnlineEnabled ? L"ONLINE LYRICS: ON" : L"ONLINE LYRICS: OFF", 29, b);
     y += 26;
-    DrawText(L"Stores fetched lyrics locally for offline retrieval.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    DrawText(L"Fetches lyrics from online services. Off = only lyrics in the lyrics folder.",
+             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 16;
+    if (model.lyricsOnlineEnabled) {
+        SettingsButton(Rect(left, y, right, y + 24),
+                       model.lyricsCacheEnabled ? L"SAVE LYRICS: ON" : L"SAVE LYRICS: OFF", 7, b);
+        y += 26;
+        DrawText(L"Stores fetched lyrics locally for offline retrieval.",
+                 Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+        y += 22;
+    }
+    SettingsButton(Rect(left, y, right, y + 24),
+                   model.lyricsFakeTimestampsEnabled ? L"FAKE TIMESTAMPS: ON" : L"FAKE TIMESTAMPS: OFF", 30, b);
+    y += 26;
+    DrawText(L"Generates synced-style timestamps for lyrics without them (4-7s apart).",
+             Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
+    y += 22;
+    std::wstring alignmentLabel = L"TEXT ALIGN: LEFT";
+    switch (model.lyricsAlignment) {
+    case config::LyricsTextAlignment::Center: alignmentLabel = L"TEXT ALIGN: CENTER"; break;
+    case config::LyricsTextAlignment::Right: alignmentLabel = L"TEXT ALIGN: RIGHT"; break;
+    default: break;
+    }
+    SettingsButton(Rect(left, y, right, y + 24), alignmentLabel, 28, b);
+    y += 26;
+    DrawText(L"Aligns lyrics text inside the lyrics module.", Rect(left, y, right, y + 14), b[6].Get(), tinyFormat.Get());
     y += 22;
     DrawSettingsSectionGap(y, b);
     DrawText(L"STATISTICS", Rect(left, y, right, y + 25), b[8].Get(), headingFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -1057,6 +1082,17 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         case 5: if (!model.youtubeYtDlpInstalled && !model.youtubeInstallingYtDlp) host.InstallYoutubeTool(true); break;
         case 6: if (!model.youtubeFfmpegInstalled && !model.youtubeInstallingFfmpeg) host.InstallYoutubeTool(false); break;
         case 7: host.SetLyricsCacheEnabled(!model.lyricsCacheEnabled); break;
+        case 29: host.SetLyricsOnlineEnabled(!model.lyricsOnlineEnabled); break;
+        case 30: host.SetLyricsFakeTimestampsEnabled(!model.lyricsFakeTimestampsEnabled); break;
+        case 28: {
+            using AT = config::LyricsTextAlignment;
+            const AT current = model.lyricsAlignment;
+            const AT next = current == AT::Left ? AT::Center
+                           : current == AT::Center ? AT::Right
+                                                   : AT::Left;
+            host.SetLyricsAlignment(next);
+            break;
+        }
         case 26: host.SetStatsEnabled(!model.statsEnabled); break;
         case 300: host.SetStatisticsTracksExpanded(!model.statistics.tracksExpanded); break;
         case 301: if (!model.statistics.tracksExpanded && model.statistics.tracksPage > 0) host.SetStatisticsTracksPage(model.statistics.tracksPage - 1); break;

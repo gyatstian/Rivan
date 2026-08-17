@@ -27,6 +27,7 @@
 #include <stop_token>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 
 namespace rivan {
 
@@ -67,6 +68,13 @@ public:
     [[nodiscard]] bool SetYoutubeGrabberHotkey(std::uint32_t modifiers,
                                                std::uint32_t virtualKey) override;
     void SetLyricsCacheEnabled(bool enabled) override;
+    void SetLyricsOnlineEnabled(bool enabled) override;
+    void SetLyricsFakeTimestampsEnabled(bool enabled) override;
+    void SetTrackLyricsDisabled(std::wstring filePath, bool disabled) override;
+    void AddLyricsToTrack(std::wstring title, std::wstring artist, std::wstring album,
+                          double durationSeconds, std::wstring filePath) override;
+    void SetLyricsAlignment(config::LyricsTextAlignment alignment) override;
+    void AddYourOwnLyrics() override;
     void SetStatsEnabled(bool enabled) override;
     void SetStatisticsPeriod(stats::DashboardPeriod period) override;
     void SetStatisticsTracksExpanded(bool expanded) override;
@@ -169,6 +177,9 @@ private:
     // User playlists persist to their own file so they survive restarts and rescans.
     void LoadUserPlaylists();
     void SaveUserPlaylists() const;
+    // Per-song "lyrics disabled" choices persist to their own file, keyed by song path.
+    void LoadDisabledLyrics();
+    void SaveDisabledLyrics() const;
     // Custom folder order persists to a dedicated INI in the music root, keyed by folder
     // path, so a drag-reordered tree survives a library rescan.
     void SaveFolderOrder() const;
@@ -186,6 +197,13 @@ private:
     // Multi-select audio file picker used by ADD.
     [[nodiscard]] std::vector<std::filesystem::path> PickAudioFiles() const;
     [[nodiscard]] std::filesystem::path PickCoverImage() const;
+    // Fallback title/artist derivation shared by lyrics requests and the custom lyrics
+    // file naming (defined in AppLibrary.cpp).
+    [[nodiscard]] static std::pair<std::wstring, std::wstring> LyricsMetadata(
+        const library::Track& track);
+    // Re-requests lyrics for the active track so preference toggles (online-only, fake
+    // timestamps) apply immediately instead of waiting for the next song.
+    void RefreshActiveLyrics();
     // Maps a visible track position in the current view to its library track id.
     [[nodiscard]] std::optional<library::TrackId> TrackIdAtIndex(std::size_t index) const;
     [[nodiscard]] bool YoutubeFeatureOn() const noexcept;
@@ -268,6 +286,8 @@ private:
     // Lyrics snapshot is copied only when the service revision advances.
     std::uint64_t lyricsRevisionCache_{~std::uint64_t{0}};
     lyrics::LyricsSnapshot lyricsSnapshotCache_;
+    // Song file paths (normalized) whose lyrics the user disabled; persisted.
+    std::unordered_set<std::wstring> disabledLyricsSongs_;
     // Last published Discord presence surface. Timestamps stay outside these keys so
     // 30 Hz playback paints do not send Discord RPC updates.
     bool discordPresencePublished_{};

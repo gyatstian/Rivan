@@ -13,10 +13,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <cwctype>
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -31,6 +34,11 @@ constexpr std::size_t kCacheMaxFiles = 4096;
 constexpr DWORD kNetworkTimeoutMilliseconds = 4000;
 constexpr auto kFetchBudget = std::chrono::seconds{20};
 constexpr std::wstring_view kLrclibBaseUrl = L"https://lrclib.net/api/";
+// User-authored lyrics files: the ".txt" suffix keeps them out of the fingerprint cache
+// (".lyrics") so cache pruning never deletes them and text editors open them directly.
+constexpr std::wstring_view kCustomLyricsExtension = L".txt";
+constexpr std::wstring_view kCustomLyricsMagic = L"#RIVAN-CUSTOM-LYRICS-1";
+constexpr std::wstring_view kSongFileHeader = L"#Song file:";
 
 struct HttpResponse final {
     DWORD status{};
@@ -452,6 +460,111 @@ std::optional<double> ParseNumber(std::wstring_view value) {
     return stream && std::isfinite(number) ? std::optional<double>(number) : std::nullopt;
 }
 
+// Windows file names cannot contain these characters (nor the C0 control range).
+// Also capped so title-derived names stay well under MAX_PATH even with a suffix.
+std::wstring SanitizeFileName(std::wstring value) {
+    constexpr std::size_t kMaximumFileNameLength = 120;
+    value = Trim(std::move(value));
+    std::wstring result;
+    result.reserve(value.size());
+    for (const wchar_t character : value) {
+        if (result.size() >= kMaximumFileNameLength) break;
+        if (character == L'<' || character == L'>' || character == L':' ||
+            character == L'"' || character == L'/' || character == L'\\' ||
+            character == L'|' || character == L'?' || character == L'*' ||
+            character < 0x20u) {
+            continue;
+        }
+        result.push_back(character);
+    }
+    // Trailing dots and spaces are also rejected by Windows.
+    while (!result.empty() && (result.back() == L'.' || result.back() == L' ')) result.pop_back();
+    return result.empty() ? std::wstring(L"Lyrics") : result;
+}
+
+// Canonicalizes and case-folds a path so two spellings of the same song file compare
+// equal. Windows paths are case-insensitive, so the fold matters for a hand-edited file.
+std::wstring NormalizePathText(const std::filesystem::path& path) {
+    std::error_code ec;
+    auto absolute = std::filesystem::absolute(path, ec);
+    if (ec) absolute = path;
+    auto normalized = std::filesystem::weakly_canonical(absolute, ec);
+    if (ec) normalized = absolute;
+    return FoldCase(normalized.wstring());
+}
+
+// Decodes text bytes honoring UTF-8 BOM and UTF-16 LE/BE BOMs, so lyrics saved by any
+// common Windows editor (Notepad default encodings included) decode correctly.
+std::wstring DecodeTextBytes(std::string bytes) {
+    const auto byte = [&bytes](std::size_t index) {
+        return static_cast<unsigned char>(bytes[index]);
+    };
+    if (bytes.size() >= 3 && byte(0) == 0xefu && byte(1) == 0xbbu && byte(2) == 0xbfu) {
+        return core::Utf8ToWide(std::string_view(bytes).substr(3));
+    }
+    if (bytes.size() >= 2 && byte(0) == 0xffu && byte(1) == 0xfeu) {
+        const auto chars = (bytes.size() - 2) / 2;
+        std::wstring result(chars, L'\0');
+        if (chars != 0) std::memcpy(result.data(), bytes.data() + 2, chars * sizeof(wchar_t));
+        return result;
+    }
+    if (bytes.size() >= 2 && byte(0) == 0xfeu && byte(1) == 0xffu) {
+        const auto chars = (bytes.size() - 2) / 2;
+        std::wstring result(chars, L'\0');
+        for (std::size_t index = 0; index < chars; ++index) {
+            const auto offset = 2 + index * 2;
+            result[index] = static_cast<wchar_t>(
+                (byte(offset) << 8) | byte(offset + 1));
+        }
+        return result;
+    }
+    return core::Utf8ToWide(bytes);
+}
+
+// Reads a small text file in full.
+std::optional<std::wstring> ReadTextFileWide(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size == 0 || size > kMaximumResponseBytes) return std::nullopt;
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return std::nullopt;
+    std::string bytes(static_cast<std::size_t>(size), '\0');
+    input.read(bytes.data(), static_cast<std::streamsize>(size));
+    bytes.resize(static_cast<std::size_t>(input.gcount()));
+    return DecodeTextBytes(std::move(bytes));
+}
+
+// Reads only the leading bytes of a small text file. The unified lyrics header (magic
+// + "#Song file:" path) lives at the top, so scanning a full directory only needs this
+// prefix until a file actually matches the requested song.
+std::optional<std::wstring> ReadTextFilePrefixWide(const std::filesystem::path& path,
+                                                   std::size_t prefixBytes) {
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size == 0 || size > kMaximumResponseBytes) return std::nullopt;
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return std::nullopt;
+    const auto toRead = std::min<std::size_t>(size, prefixBytes);
+    std::string bytes(toRead, '\0');
+    input.read(bytes.data(), static_cast<std::streamsize>(toRead));
+    bytes.resize(static_cast<std::size_t>(input.gcount()));
+    return DecodeTextBytes(std::move(bytes));
+}
+
+// Formats a timestamp as an LRC "[mm:ss.hh]" prefix, e.g. 75.5 -> "[01:15.50]".
+std::wstring FormatLrcTimestamp(const double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) return L"[00:00.00]";
+    const auto totalMilliseconds = static_cast<long long>(std::llround(seconds * 1000.0));
+    const auto minutes = totalMilliseconds / 60000;
+    const auto remainder = totalMilliseconds % 60000;
+    const auto wholeSeconds = remainder / 1000;
+    const auto hundredths = (remainder % 1000) / 10;
+    wchar_t buffer[32]{};
+    std::swprintf(buffer, std::size(buffer), L"[%02lld:%02lld.%02lld]",
+                  minutes, wholeSeconds, hundredths);
+    return buffer;
+}
+
 } // namespace
 
 std::wstring LyricsDocument::PlainText() const {
@@ -523,6 +636,132 @@ LyricsDocument LyricsService::ParseLrclibResponse(std::string_view json) {
     return document;
 }
 
+std::wstring LyricsService::NormalizedTrackPath(const std::filesystem::path& path) {
+    auto result = path.wstring();
+    for (auto& character : result) {
+        character = static_cast<wchar_t>(std::towlower(character));
+    }
+    return result;
+}
+
+std::wstring LyricsService::UserLyricsTrackPath(std::wstring_view text) {
+    std::wistringstream stream{std::wstring(text)};
+    std::wstring row;
+    while (std::getline(stream, row)) {
+        row = Trim(std::move(row));
+        if (row.empty()) continue;
+        if (row.front() != L'#') return {};
+        if (row.rfind(kSongFileHeader, 0) == 0) {
+            return Trim(row.substr(kSongFileHeader.size()));
+        }
+    }
+    return {};
+}
+
+LyricsDocument LyricsService::ParseCustomLyrics(std::wstring_view text) {
+    // Strip the leading '#RIVAN-CUSTOM-LYRICS-1' header block, then feed the remaining
+    // text to the shared LRC parser so plain and synced custom lyrics honor linebreaks
+    // and timestamps exactly like fetched lyrics.
+    std::wistringstream stream{std::wstring(text)};
+    std::wstring row;
+    std::wstring body;
+    bool inHeader = true;
+    while (std::getline(stream, row)) {
+        row = Trim(std::move(row));
+        if (inHeader) {
+            if (row.empty()) continue;
+            if (row.front() == L'#') continue;
+            inHeader = false;
+        }
+        if (!body.empty()) body += L'\n';
+        body += row;
+    }
+    return ParseLrc(body);
+}
+
+LyricsDocument LyricsService::WithFakeTimestamps(LyricsDocument document) {
+    bool hasUntimedLine = false;
+    for (const auto& line : document.lines) {
+        if (line.timestampSeconds < 0.0) {
+            hasUntimedLine = true;
+            break;
+        }
+    }
+    // Fully timed documents keep their real timestamps untouched.
+    if (!hasUntimedLine) return document;
+    std::mt19937 generator(
+        static_cast<std::uint32_t>(std::random_device{}()) ^
+        static_cast<std::uint32_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::uniform_int_distribution<int> gapSeconds(4, 7);
+    double cursor = 0.0;
+    for (auto& line : document.lines) {
+        if (line.timestampSeconds >= 0.0) {
+            // Anchor on any real timestamp so generated lines never drift from the
+            // actual song timeline.
+            cursor = line.timestampSeconds;
+            continue;
+        }
+        cursor += static_cast<double>(gapSeconds(generator));
+        line.timestampSeconds = cursor;
+    }
+    document.synced = true;
+    return document;
+}
+
+std::filesystem::path LyricsService::CreateUserLyricsFile(
+    std::uint64_t, std::wstring title, std::wstring, std::wstring, double,
+    std::filesystem::path filePath) const {
+    if (cacheDirectory_.empty() || filePath.empty()) return {};
+    std::error_code ec;
+    std::filesystem::create_directories(cacheDirectory_, ec);
+    if (ec) return {};
+    const auto base = SanitizeFileName(std::move(title));
+    const auto expected = NormalizePathText(filePath);
+    const auto fullName = [&base](std::size_t suffix) {
+        return suffix == 1 ? base + std::wstring(kCustomLyricsExtension)
+                           : base + L" (" + std::to_wstring(suffix) + L")" +
+                                 std::wstring(kCustomLyricsExtension);
+    };
+    auto candidate = cacheDirectory_ / fullName(1);
+    for (std::size_t suffix = 1; suffix <= 128; ++suffix) {
+        if (std::filesystem::exists(candidate, ec)) {
+            // Reuse an existing custom file that already belongs to this song, so a
+            // second click opens the same document instead of stacking duplicates.
+            if (const auto text = ReadTextFileWide(candidate);
+                text && NormalizePathText(UserLyricsTrackPath(*text)) == expected) {
+                return candidate;
+            }
+            ec.clear();
+            candidate = cacheDirectory_ / fullName(suffix + 1);
+            continue;
+        }
+        if (ec) return {};
+        break;
+    }
+
+    std::wstring content = std::wstring(kCustomLyricsMagic) + L"\n";
+    content += std::wstring(kSongFileHeader) + L" " + filePath.wstring() + L"\n";
+    content += L"\n";
+    content += L"# Paste your lyrics below, one verse per line.\n";
+    content += L"# Synced lyrics: prefix a line with its start time, e.g. [00:12.50]Hello world.\n";
+    content += L"# Keep the '#RIVAN-CUSTOM-LYRICS-1' and '#Song file:' header lines unchanged.\n";
+    content += L"\n";
+    const auto utf8 = core::WideToUtf8(content);
+    std::ofstream output(candidate, std::ios::binary | std::ios::trunc);
+    if (!output) return {};
+    // A UTF-8 BOM lets modern Windows Notepad detect the encoding for non-ASCII lyrics.
+    constexpr char kUtf8Bom[] = "\xef\xbb\xbf";
+    output.write(kUtf8Bom, static_cast<std::streamsize>(sizeof(kUtf8Bom) - 1));
+    output.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
+    output.close();
+    if (!output) {
+        std::filesystem::remove(candidate, ec);
+        return {};
+    }
+    return candidate;
+}
+
 LyricsService::LyricsService(std::filesystem::path cacheDirectory)
     : cacheDirectory_(std::move(cacheDirectory)), worker_([this](std::stop_token stop) { Worker(stop); }) {}
 
@@ -546,12 +785,28 @@ void LyricsService::SetCacheEnabled(bool enabled) {
     cacheEnabled_ = enabled;
 }
 
+void LyricsService::SetOnlineEnabled(bool enabled) {
+    std::scoped_lock lock(mutex_);
+    onlineEnabled_ = enabled;
+}
+
+void LyricsService::SetFakeTimestampsEnabled(bool enabled) {
+    std::scoped_lock lock(mutex_);
+    fakeTimestampsEnabled_ = enabled;
+}
+
+void LyricsService::SetDisabledSongs(const std::unordered_set<std::wstring>& songs) {
+    std::scoped_lock lock(mutex_);
+    disabledSongs_ = songs;
+}
+
 void LyricsService::Request(std::uint64_t trackId, std::wstring title, std::wstring artist,
-                            std::wstring album, double durationSeconds) {
+                            std::wstring album, double durationSeconds,
+                            std::filesystem::path filePath) {
     std::scoped_lock lock(mutex_);
     ++generation_;
     pending_ = RequestData{trackId, std::move(title), std::move(artist), std::move(album),
-                           durationSeconds, generation_};
+                           durationSeconds, std::move(filePath), generation_};
     snapshot_ = LyricsSnapshot{};
     snapshot_.trackId = trackId;
     snapshot_.loading = true;
@@ -613,32 +868,106 @@ std::optional<LyricsDocument> LyricsService::LoadCache(const RequestData& reques
     return document.Empty() ? std::nullopt : std::optional<LyricsDocument>(std::move(document));
 }
 
-void LyricsService::SaveCache(const RequestData& request, const LyricsDocument& document) const {
-    if (cacheDirectory_.empty() || document.Empty()) return;
-    std::error_code error;
-    std::filesystem::create_directories(cacheDirectory_, error);
-    if (error) return;
-    const auto cachePath = CachePath(request);
-    const auto temporary = cachePath.wstring() + L".partial";
-    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    if (!output) return;
-    std::wstring content = L"RIVAN-LYRICS-1\n";
-    content += document.synced ? L"synced=1\n" : L"synced=0\n";
-    for (const auto& line : document.lines) {
-        content += std::to_wstring(line.timestampSeconds) + L'\t' + line.text + L'\n';
+std::optional<LyricsDocument> LyricsService::LoadLyricsFiles(const RequestData& request) const {
+    if (cacheDirectory_.empty() || request.filePath.empty()) return std::nullopt;
+    const auto expected = NormalizePathText(request.filePath);
+    // Header scan reads only a prefix per file; the header (magic + song path) always
+    // lives at the top. Full content is read only for the file that actually matches.
+    constexpr std::size_t kHeaderScanBytes = 4096;
+    std::error_code ec;
+    std::filesystem::path best;
+    std::filesystem::file_time_type bestTime{};
+    for (std::filesystem::directory_iterator it(cacheDirectory_, ec), end;
+         it != end && !ec; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        const auto& path = it->path();
+        if (path.extension() != kCustomLyricsExtension) continue;
+        auto prefix = ReadTextFilePrefixWide(path, kHeaderScanBytes);
+        if (!prefix || prefix->find(kCustomLyricsMagic) == std::wstring::npos) continue;
+        if (NormalizePathText(UserLyricsTrackPath(*prefix)) != expected) continue;
+        // Multiple files may reference the same song (e.g. hand-edited copies); the most
+        // recently modified one wins so a fresh user edit always shows.
+        const auto modified = std::filesystem::last_write_time(path, ec);
+        if (ec || best.empty() || modified > bestTime) {
+            best = path;
+            bestTime = modified;
+            ec.clear();
+        }
+    }
+    if (best.empty()) return std::nullopt;
+    auto text = ReadTextFileWide(best);
+    if (!text) return std::nullopt;
+    auto document = ParseCustomLyrics(*text);
+    return document.Empty() ? std::nullopt : std::optional<LyricsDocument>(std::move(document));
+}
+
+std::filesystem::path LyricsService::SaveLyricsFile(
+    const std::filesystem::path& directory, std::wstring title,
+    const std::filesystem::path& filePath, const LyricsDocument& document) {
+    if (directory.empty() || filePath.empty() || document.Empty()) return {};
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+    if (ec) return {};
+    const auto expected = NormalizePathText(filePath);
+    const auto base = SanitizeFileName(std::move(title));
+    const auto fullName = [&base](std::size_t suffix) {
+        return suffix == 1 ? base + std::wstring(kCustomLyricsExtension)
+                           : base + L" (" + std::to_wstring(suffix) + L")" +
+                                 std::wstring(kCustomLyricsExtension);
+    };
+    auto candidate = directory / fullName(1);
+    for (std::size_t suffix = 1; suffix <= 128; ++suffix) {
+        if (std::filesystem::exists(candidate, ec)) {
+            // A lyrics file for this song already exists (possibly user-edited); never
+            // overwrite it with fetched data.
+            if (const auto text = ReadTextFileWide(candidate);
+                text && NormalizePathText(UserLyricsTrackPath(*text)) == expected) {
+                return candidate;
+            }
+            ec.clear();
+            candidate = directory / fullName(suffix + 1);
+            continue;
+        }
+        if (ec) return {};
+        break;
+    }
+
+    std::wstring content = std::wstring(kCustomLyricsMagic) + L"\n";
+    content += std::wstring(kSongFileHeader) + L" " + filePath.wstring() + L"\n";
+    content += L"\n";
+    if (document.synced) {
+        for (const auto& line : document.lines) {
+            content += line.timestampSeconds >= 0.0
+                           ? FormatLrcTimestamp(line.timestampSeconds) + line.text
+                           : line.text;
+            content += L'\n';
+        }
+    } else {
+        for (const auto& line : document.lines) {
+            content += line.text + L'\n';
+        }
     }
     const auto utf8 = core::WideToUtf8(content);
+    std::ofstream output(candidate, std::ios::binary | std::ios::trunc);
+    if (!output) return {};
+    // A UTF-8 BOM lets modern Windows Notepad detect the encoding for non-ASCII lyrics.
+    constexpr char kUtf8Bom[] = "\xef\xbb\xbf";
+    output.write(kUtf8Bom, static_cast<std::streamsize>(sizeof(kUtf8Bom) - 1));
     output.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
     output.close();
-    if (output) {
-        std::filesystem::remove(cachePath, error);
-        error.clear();
-        std::filesystem::rename(temporary, cachePath, error);
+    if (!output) {
+        std::filesystem::remove(candidate, ec);
+        return {};
     }
-    if (error) std::filesystem::remove(temporary, error);
-    // The cache is a pure replay source; pruning the oldest files loses nothing
-    // but disk space.
-    if (!error) PruneCacheIfNeeded(cacheDirectory_);
+    return candidate;
+}
+
+void LyricsService::SaveCache(const RequestData& request, const LyricsDocument& document) const {
+    if (cacheDirectory_.empty() || document.Empty()) return;
+    (void)SaveLyricsFile(cacheDirectory_, request.title, request.filePath, document);
+    // Unified ".txt" files are user-visible and possibly hand-edited, so they are never
+    // pruned; the legacy ".lyrics" files (fingerprint-named) still are.
+    PruneCacheIfNeeded(cacheDirectory_);
 }
 
 std::optional<LyricsDocument> LyricsService::Fetch(const RequestData& request,
@@ -781,6 +1110,8 @@ void LyricsService::Worker(std::stop_token stop) {
         bool haveRequest = false;
         try {
             bool useCache = false;
+            bool useOnline = true;
+            bool useFakeTimestamps = false;
             {
                 std::unique_lock lock(mutex_);
                 condition_.wait(lock, stop, [this] { return pending_.has_value(); });
@@ -789,12 +1120,58 @@ void LyricsService::Worker(std::stop_token stop) {
                 haveRequest = true;
                 pending_.reset();
                 useCache = cacheEnabled_;
+                useOnline = onlineEnabled_;
+                useFakeTimestamps = fakeTimestampsEnabled_;
+            }
+            // Publishes after optionally stamping generated timestamps. Generation is
+            // in-memory only: the on-disk lyrics files always keep their original text.
+            const auto publish = [this, &request, useFakeTimestamps](
+                                     LyricsDocument document, std::wstring status) {
+                if (useFakeTimestamps && !document.Empty()) {
+                    document = WithFakeTimestamps(std::move(document));
+                }
+                Publish(request, std::move(document), std::move(status));
+            };
+            // Lyrics for this song disabled explicitly by the user: skip every source
+            // (used when an online service returns wrong lyrics).
+            if (!request.filePath.empty()) {
+                bool disabled = false;
+                {
+                    std::scoped_lock lock(mutex_);
+                    disabled = disabledSongs_.contains(NormalizedTrackPath(request.filePath));
+                }
+                if (disabled) {
+                    publish(LyricsDocument{}, L"Lyrics disabled");
+                    continue;
+                }
+            }
+            // Local-first lookup order: the user's own lyrics files in the lyrics folder
+            // win, then previously saved fetches, and only then are online services asked.
+            // Unified lyrics files (fetched or user-authored) win over the legacy
+            // fingerprint cache: they are human-readable, path-associated, and possibly
+            // hand-edited. Loaded even when the fetch cache setting is disabled.
+            if (auto document = LoadLyricsFiles(request)) {
+                publish(std::move(*document), L"Lyrics");
+                continue;
             }
             if (useCache) {
                 if (auto document = LoadCache(request)) {
-                    Publish(request, std::move(*document), L"Cached lyrics");
+                    // Migrate legacy fingerprint-named cache files into the unified
+                    // format so previously fetched lyrics become readable and
+                    // path-associated like every other lyrics file.
+                    if (!request.filePath.empty() &&
+                        !SaveLyricsFile(cacheDirectory_, request.title,
+                                        request.filePath, *document).empty()) {
+                        std::error_code error;
+                        std::filesystem::remove(CachePath(request), error);
+                    }
+                    publish(std::move(*document), L"Lyrics");
                     continue;
                 }
+            }
+            if (!useOnline) {
+                publish(LyricsDocument{}, L"No lyrics available");
+                continue;
             }
             auto document = Fetch(request, stop);
             bool saveCache = false;
@@ -803,7 +1180,7 @@ void LyricsService::Worker(std::stop_token stop) {
                 saveCache = cacheEnabled_;
             }
             if (document && saveCache) SaveCache(request, *document);
-            Publish(request, document ? std::move(*document) : LyricsDocument{},
+            publish(document ? std::move(*document) : LyricsDocument{},
                     document ? L"Lyrics" : L"No lyrics available");
         } catch (...) {
             if (haveRequest) {

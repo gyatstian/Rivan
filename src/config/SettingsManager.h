@@ -32,6 +32,13 @@ enum class DiscordSecondaryText {
     TotalStreams,
 };
 
+// Lyrics text alignment preference. The view maps these to DirectWrite alignment.
+enum class LyricsTextAlignment : std::uint8_t {
+    Left,
+    Center,
+    Right,
+};
+
 struct AppSettings final {
     std::filesystem::path musicRoot;
     // Extra library roots (any count). Subfolders of every root become playlists.
@@ -53,6 +60,15 @@ struct AppSettings final {
     bool youtubeEnabled = false;
     // Persist fetched online lyrics under the application local-data directory.
     bool lyricsCacheEnabled = false;
+    // Fetch lyrics from online services (lrclib.net / lyrics.ovh). Off means the module
+    // only searches locally inside the lyrics folder (user lyrics and saved fetches).
+    bool lyricsOnlineEnabled = true;
+    // Generate LRC-style timestamps for lyrics that lack them (random 4-7s gaps) so the
+    // lyrics behave as synced for the module and Discord presence. In-memory only, never
+    // written to disk.
+    bool lyricsFakeTimestampsEnabled = false;
+    // Lyrics text alignment (module reads this through the UI model).
+    LyricsTextAlignment lyricsAlignment = LyricsTextAlignment::Left;
     // YouTube chooser defaults. These are not exposed in Preferences; chooser updates them.
     int youtubeDownloadKind = 1;       // 0 = video + audio, 1 = audio only
     int youtubeAudioOutputFormat = 0;  // 0 = native, 1 = mp3, 2 = aac, 3 = opus, 4 = flac, 5 = wav
@@ -135,5 +151,7 @@ private:
 [[nodiscard]] std::optional<RepeatMode> ParseRepeatMode(std::string_view value) noexcept;
 [[nodiscard]] std::optional<DiscordSecondaryText> ParseDiscordSecondaryText(std::string_view value) noexcept;
 [[nodiscard]] const char* DiscordSecondaryTextText(DiscordSecondaryText mode) noexcept;
+[[nodiscard]] const char* LyricsTextAlignmentText(LyricsTextAlignment alignment) noexcept;
+[[nodiscard]] std::optional<LyricsTextAlignment> ParseLyricsTextAlignment(std::string_view value) noexcept;
 
 } // namespace rivan::config

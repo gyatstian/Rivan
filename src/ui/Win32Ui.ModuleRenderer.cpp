@@ -14,6 +14,7 @@ void Win32Ui::Impl::DrawFull(const D2D1_SIZE_F size,
     deferredTextLayouts.clear();
     previewVideoBounds = {};
     lyricsContentBounds = {};
+    lyricsModuleBounds = {};
     const auto& layout = moduleGesture != ModuleGesture::None
         ? moduleLayoutDraft : model.moduleLayout;
     const auto boundsFor = [size](const ModuleLayoutItem& item) {

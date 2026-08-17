@@ -307,6 +307,7 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
                 playlistSelection.clear();
                 playlistAnchorId = 0;
             }
+            lyricsSelection_.active = false;
         }
         // When the studio is open, an empty click on the canvas grabs the topmost
         // decor element (image or shape) under the pointer for drag-move.
@@ -359,7 +360,15 @@ void Win32Ui::Impl::PointerDown(float x, float y) {
             }
             break;
         case HitKind::LyricsAction: HandleLyricsAction(hit.id); return;
-        case HitKind::LyricsVerse: HandleLyricsVerse(static_cast<std::size_t>(hit.id)); return;
+        case HitKind::LyricsVerse: {
+            const std::size_t index = static_cast<std::size_t>(hit.id);
+            if (lyricsSyncedMode_ && model.lyrics.document.synced) {
+                HandleLyricsVerse(index);
+            } else {
+                BeginLyricsTextSelection(index, x, y);
+            }
+            return;
+        }
         case HitKind::Track:
             // Selection now; activation (play) deferred to release when no drag happened.
             BeginTrackPress(hit, x, y);
@@ -462,6 +471,10 @@ void Win32Ui::Impl::PointerMove(float x, float y) {
     titlebarMouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
     if (HasTitlebar()) y -= kTitlebarHeight;
     mouse = {static_cast<LONG>(x), static_cast<LONG>(y)};
+    if (lyricsSelecting_) {
+        UpdateLyricsTextSelection(x, y);
+        return;
+    }
     if (collapsedArrowPress) {
         const float dx = x - collapsedArrowPressStart.x;
         const float dy = y - collapsedArrowPressStart.y;
@@ -544,6 +557,7 @@ void Win32Ui::Impl::PointerUp(const std::optional<D2D1_POINT_2F> release) noexce
     draggingStudioColor = false;
     draggingStudioHue = false;
     draggingLayer = 0;
+    lyricsSelecting_ = false;
     const bool songRowEdited = songRowDragging;
     if (release && songRowDragging) {
         UpdateSongRowFieldDrag(release->x, release->y);

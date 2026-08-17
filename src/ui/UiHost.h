@@ -95,6 +95,8 @@ struct TrackView {
     // Populated only when file preview or small track covers need it, avoiding path copies
     // while both optional features are disabled.
     std::wstring filePath;
+    // User explicitly disabled lyrics for this song (context menu toggle).
+    bool lyricsDisabled{};
     // Folder/user playlist that owns this entry. Parent-folder views can contain tracks
     // from several descendant folders, so the owner must travel with the visible row.
     std::uint64_t sourcePlaylistId{};
@@ -195,6 +197,9 @@ struct UiModel {
     std::uint32_t youtubeGrabberHotkeyModifiers{};
     std::uint32_t youtubeGrabberHotkeyVirtualKey{};
     bool lyricsCacheEnabled{};
+    bool lyricsOnlineEnabled{true};
+    bool lyricsFakeTimestampsEnabled{};
+    config::LyricsTextAlignment lyricsAlignment{config::LyricsTextAlignment::Left};
     bool statsEnabled{true};
     StatisticsDashboardView statistics;
     lyrics::LyricsSnapshot lyrics;
@@ -304,6 +309,22 @@ public:
     [[nodiscard]] virtual bool SetYoutubeGrabberHotkey(std::uint32_t modifiers,
                                                        std::uint32_t virtualKey) = 0;
     virtual void SetLyricsCacheEnabled(bool enabled) = 0;
+    // Restricts lyric lookup to the local lyrics folder when disabled.
+    virtual void SetLyricsOnlineEnabled(bool enabled) = 0;
+    // Generates synced-style timestamps for lyrics that lack them (never persisted).
+    virtual void SetLyricsFakeTimestampsEnabled(bool enabled) = 0;
+    // Disables/enables lyrics for one song by file path. Persisted across sessions.
+    virtual void SetTrackLyricsDisabled(std::wstring filePath, bool disabled) = 0;
+    // Creates and opens a user-editable lyrics file for the given track, exactly like
+    // the ADD YOUR OWN LYRICS module button.
+    virtual void AddLyricsToTrack(std::wstring title, std::wstring artist,
+                                  std::wstring album, double durationSeconds,
+                                  std::wstring filePath) = 0;
+    // Persists the lyrics text alignment used by the main window lyrics module.
+    virtual void SetLyricsAlignment(config::LyricsTextAlignment alignment) = 0;
+    // Creates a user-editable lyrics file for the active track and opens it in the
+    // system text editor. Show in the lyrics module when no lyrics are available.
+    virtual void AddYourOwnLyrics() = 0;
     // Enables/disables local listen statistics (plays + listened seconds).
     virtual void SetStatsEnabled(bool enabled) = 0;
     virtual void SetStatisticsPeriod(stats::DashboardPeriod period) = 0;

@@ -87,6 +87,8 @@ void App::SnapshotUiModel(ui::UiModel& out) {
         // presence path thirty times a second just because the view repainted.
         model.lyrics = lyricsSnapshotCache_;
         model.lyricsCacheEnabled = settings_.Settings().lyricsCacheEnabled;
+        model.lyricsOnlineEnabled = settings_.Settings().lyricsOnlineEnabled;
+        model.lyricsFakeTimestampsEnabled = settings_.Settings().lyricsFakeTimestampsEnabled;
         const bool statsEnabled = settings_.Settings().statsEnabled;
         model.statsEnabled = statsEnabled;
         if (statsEnabled && statisticsCatalogCacheRevision_ != revision_) {
@@ -179,6 +181,9 @@ void App::SnapshotUiModel(ui::UiModel& out) {
                            library::Track::IsAudioFile(track.filePath)};
         // Context-menu rename needs the backing filename even when preview and covers are off.
         view.filePath = track.filePath.wstring();
+        view.lyricsDisabled = !view.filePath.empty() &&
+            disabledLyricsSongs_.contains(
+                lyrics::LyricsService::NormalizedTrackPath(track.filePath));
         view.sourcePlaylistId = sourcePlaylistId;
         return view;
     };
@@ -376,6 +381,7 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.discordSecondaryText = settings_.Settings().discordSecondaryText;
     out.discordFallbackToTotalStreams = settings_.Settings().discordFallbackToTotalStreams;
     out.discordShowGithubButton = settings_.Settings().discordShowGithubButton;
+    out.lyricsAlignment = settings_.Settings().lyricsAlignment;
     out.moduleExpansionBehavior = settings_.Settings().moduleExpansionBehavior;
     out.windowResizeBehavior = settings_.Settings().windowResizeBehavior;
     out.moduleResizeBehavior = settings_.Settings().moduleResizeBehavior;

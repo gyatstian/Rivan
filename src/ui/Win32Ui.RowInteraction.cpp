@@ -13,7 +13,64 @@ void Win32Ui::Impl::Scroll(float x, float y, int direction) {
         value = static_cast<std::size_t>(std::clamp<long long>(
             static_cast<long long>(value) + direction, 0, maximum));
     };
-    if (Contains(playlistSearchBounds, x, y)) {
+    // The lyrics module wins over any overlapping list pane (custom layouts can overlap
+    // modules), and the whole module body scrolls rather than only the text bevel.
+    if (windowKind == WindowKind::Main && Contains(lyricsModuleBounds, x, y)) {
+        const auto& lines = model.lyrics.document.lines;
+        const auto visibleHeight = std::max(0.0F, lyricsContentBounds.bottom - lyricsContentBounds.top);
+        float contentHeight = 0.0F;
+        std::vector<float> lineTops;
+        // Reuse the render-time metrics when the cached layouts cover the current
+        // document; otherwise fall back to a direct measurement pass.
+        const bool cached = !lines.empty() && lyricsLayouts.size() == lines.size() &&
+                            lyricsLineTops.size() == lines.size();
+        if (cached) {
+            contentHeight = lyricsContentHeight;
+            lineTops = lyricsLineTops;
+        } else {
+            lineTops.assign(lines.size(), 0.0F);
+            const float textWidth = std::max(1.0F, lyricsContentBounds.right - lyricsContentBounds.left - 12.0F);
+            for (std::size_t i = 0; i < lines.size(); ++i) {
+                lineTops[i] = contentHeight;
+                ComPtr<IDWriteTextLayout> layout;
+                if (SUCCEEDED(writeFactory->CreateTextLayout(lines[i].text.data(),
+                                                              static_cast<UINT32>(lines[i].text.size()),
+                                                              regularFormat.Get(), textWidth, 10000.0F,
+                                                              layout.ReleaseAndGetAddressOf()))) {
+                    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+                    DWRITE_TEXT_METRICS metrics{};
+                    if (SUCCEEDED(layout->GetMetrics(&metrics))) {
+                        contentHeight += std::max(20.0F, std::ceil(metrics.height));
+                        continue;
+                    }
+                }
+                contentHeight += 20.0F;
+            }
+        }
+        const auto maxScroll = std::max(0.0F, contentHeight - visibleHeight);
+        lyricsScrollY = std::clamp(lyricsScrollY + static_cast<float>(direction) * 40.0F,
+                                     0.0F, maxScroll);
+        // Manual wheel scrolling suspends the synced auto-follow so the user can read
+        // earlier or later lines. Following resumes only when the user scrolls back to
+        // the line currently playing (or via the SYNC button / a verse click); the old
+        // "resume at the absolute bottom" approach snapped the view back to the active
+        // line and made scrolling down look broken.
+        lyricsUserScrolling_ = false;
+        if (lyricsSyncedMode_ && model.lyrics.document.synced && maxScroll > 0.0F &&
+            !lineTops.empty()) {
+            std::size_t activeLine = 0;
+            for (std::size_t i = 0; i < lines.size(); ++i) {
+                if (lines[i].timestampSeconds >= 0.0 &&
+                    lines[i].timestampSeconds <= model.positionSeconds) activeLine = i;
+            }
+            const float followPosition = std::clamp(
+                lineTops[activeLine] - (visibleHeight - 4.0F) * 0.42F, 0.0F, maxScroll);
+            // A wheel notch moves by 40.0F * direction (120px), so the resume band is
+            // half a notch wide: scrolling back onto the playing line re-engages the
+            // follow, while any position clearly above or below it stays suspended.
+            lyricsUserScrolling_ = std::fabs(lyricsScrollY - followPosition) > 60.0F;
+        }
+    } else if (Contains(playlistSearchBounds, x, y)) {
         if (model.youtubeBrowsing) {
             adjust(playlistSearchScroll, model.youtubeResults.size(), playlistSearchRows);
         } else {
@@ -574,6 +631,13 @@ void Win32Ui::Impl::ShowTrackContextMenu(std::size_t modelIndex) {
     AppendMenuW(menu, MF_STRING | (hasAudio ? 0U : MF_GRAYED), 11, L"Change year");
     const bool hasPath = modelIndex < model.tracks.size() && !model.tracks[modelIndex].filePath.empty();
     AppendMenuW(menu, MF_STRING | (hasPath ? 0U : MF_GRAYED), 7, L"Reveal in Explorer");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    const bool lyricsDisabled = hasPath && model.tracks[modelIndex].lyricsDisabled;
+    AppendMenuW(menu,
+                MF_STRING | (hasPath ? (lyricsDisabled ? MF_CHECKED : 0U) : MF_GRAYED),
+                12,
+                lyricsDisabled ? L"Enable lyrics on this song" : L"Disable lyrics on this song");
+    AppendMenuW(menu, MF_STRING | (hasPath ? 0U : MF_GRAYED), 13, L"Add lyrics to this song");
 
     POINT cursor{};
     GetCursorPos(&cursor);
@@ -617,6 +681,13 @@ void Win32Ui::Impl::ShowTrackContextMenu(std::size_t modelIndex) {
         } else if (command == 7 && hasPath) {
             const std::wstring arguments = L"/select,\"" + model.tracks[modelIndex].filePath + L"\"";
             ShellExecuteW(window, L"open", L"explorer.exe", arguments.c_str(), nullptr, SW_SHOWNORMAL);
+        } else if (command == 12 && hasPath) {
+            const auto& track = model.tracks[modelIndex];
+            host.SetTrackLyricsDisabled(track.filePath, !track.lyricsDisabled);
+        } else if (command == 13 && hasPath) {
+            const auto& track = model.tracks[modelIndex];
+            host.AddLyricsToTrack(track.title, track.artist, track.album,
+                                  track.durationSeconds, track.filePath);
         } else if (command >= static_cast<int>(kMoveBase)) {
             const std::size_t which = static_cast<std::size_t>(command) - kMoveBase;
             if (which < moveTargets.size() && !indices.empty()) {

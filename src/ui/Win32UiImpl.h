@@ -319,14 +319,28 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     bool statisticsPeriodDropdown{};
     D2D1_RECT_F settingsDetailsBounds{};
     D2D1_RECT_F lyricsContentBounds{};
+    // Full pixel bounds of the lyrics module panel; the whole module accepts wheel
+    // scrolls so the text bevel does not need to be aimed at precisely.
+    D2D1_RECT_F lyricsModuleBounds{};
     float lyricsScrollY{};
     bool lyricsSyncedMode_{true};
     // True while the user is manually scrolling the lyrics view. Suspends the synced
     // auto-follow so wheel scrolling (up or down) is not undone by the next repaint.
     // Reset when the user scrolls back to the bottom, presses SYNC, or clicks a verse.
     bool lyricsUserScrolling_{};
+    // Plain-text lyrics selection: verse index + UTF-16 code-unit offsets (plain view
+    // only; synced view keeps click-to-seek instead). Ctrl+C copies the selected verses.
+    struct LyricsSelection final {
+        std::size_t anchorLine{};
+        std::uint32_t anchorChar{};
+        std::size_t caretLine{};
+        std::uint32_t caretChar{};
+        bool active{};
+    };
+    LyricsSelection lyricsSelection_;
+    // True while a mouse press-drag is actively extending the lyrics text selection.
+    bool lyricsSelecting_{};
     std::uint64_t lyricsRevision_{};
-    DWRITE_TEXT_ALIGNMENT lyricsAlignment_{DWRITE_TEXT_ALIGNMENT_LEADING};
     // Skin Manager saved-skins list row scroll.
     std::size_t settingsSkinScroll{};
     std::size_t settingsSkinRows{};
@@ -584,6 +598,23 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void HandleLyricsAction(std::uint64_t action);
 
     void HandleLyricsVerse(std::size_t index);
+
+    // Plain-view lyrics text selection. Begin anchors at the clicked verse/character;
+    // Update extends the caret while dragging; Ctrl+C / Ctrl+A drive copy and select-all.
+    [[nodiscard]] bool IsLyricsPlainView() const noexcept;
+
+    void BeginLyricsTextSelection(std::size_t index, float x, float y);
+
+    void UpdateLyricsTextSelection(float x, float y);
+
+    // Character range of the active selection within one verse, or false when the verse
+    // is not part of the selection.
+    [[nodiscard]] bool LyricsSelectionRange(std::size_t line, std::uint32_t& begin,
+                                            std::uint32_t& end) const noexcept;
+
+    void CopyLyricsSelection();
+
+    void SelectAllLyricsText();
 
     void DrawMini(const D2D1_SIZE_F size,
                    std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b);

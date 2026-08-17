@@ -5,6 +5,7 @@
 #include "../src/config/SettingsManager.h"
 #include "../src/core/IniDocument.h"
 #include "../src/core/IniValueCodec.h"
+#include "../src/core/Text.h"
 #include "../src/library/LibraryScanner.h"
 #include "../src/playlist/PlaybackQueue.h"
 #include "../src/playlist/PlaylistManager.h"
@@ -551,6 +552,24 @@ void TestSongRowLayoutSettingRoundTrip() {
     Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error) &&
               reader.LoadSettings(&error) && reader.Settings().lyricsCacheEnabled,
           "lyrics cache setting survives settings round-trip");
+    settings.lyricsOnlineEnabled = false;
+    Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error) &&
+              reader.LoadSettings(&error) && !reader.Settings().lyricsOnlineEnabled,
+          "online lyrics setting survives settings round-trip");
+    settings.lyricsFakeTimestampsEnabled = true;
+    Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error) &&
+              reader.LoadSettings(&error) && reader.Settings().lyricsFakeTimestampsEnabled,
+          "fake timestamps setting survives settings round-trip");
+    settings.lyricsAlignment = rivan::config::LyricsTextAlignment::Center;
+    Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error) &&
+              reader.LoadSettings(&error) &&
+              reader.Settings().lyricsAlignment == rivan::config::LyricsTextAlignment::Center,
+          "lyrics text alignment survives settings round-trip");
+    settings.lyricsAlignment = rivan::config::LyricsTextAlignment::Right;
+    Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error) &&
+              reader.LoadSettings(&error) &&
+              reader.Settings().lyricsAlignment == rivan::config::LyricsTextAlignment::Right,
+          "lyrics right alignment survives settings round-trip");
 
     settings.filePreviewEnabled = true;
     Check(writer.SetSettings(settings, &error) && writer.SaveSettings(&error),
@@ -571,6 +590,10 @@ void TestSongRowLayoutSettingRoundTrip() {
                                rivan::ui::SongRowSnapSide::Right, 1};
     Check(!reader.SetSettings(cyclicLayout, &error),
           "song row layout rejects cyclic field snaps");
+    auto invalidAlignment = reader.Settings();
+    invalidAlignment.lyricsAlignment = static_cast<rivan::config::LyricsTextAlignment>(99);
+    Check(!reader.SetSettings(invalidAlignment, &error),
+          "settings reject an out-of-range lyrics text alignment");
     std::filesystem::remove_all(root, ec);
 }
 
@@ -2762,6 +2785,250 @@ void TestLyricsParsing() {
           "LRCLIB parser ignores field-like lyric text");
 }
 
+void TestLyricsGeneratedTimestamps() {
+    using rivan::lyrics::LyricsService;
+    rivan::lyrics::LyricsDocument plain;
+    plain.lines = {{-1.0, L"One"}, {-1.0, L"Two"}, {-1.0, L"Three"}};
+    const auto stamped = LyricsService::WithFakeTimestamps(plain);
+    Check(stamped.synced && stamped.lines.size() == 3,
+          "fake timestamps mark plain lyrics as synced");
+    Check(stamped.lines[0].timestampSeconds >= 4.0 &&
+              stamped.lines[0].timestampSeconds <= 7.0,
+          "fake timestamps start inside the first gap window");
+    bool monotonic = true;
+    bool inRange = true;
+    for (std::size_t i = 1; i < stamped.lines.size(); ++i) {
+        const double gap = stamped.lines[i].timestampSeconds -
+                           stamped.lines[i - 1].timestampSeconds;
+        if (gap < 4.0 || gap > 7.0) inRange = false;
+        if (stamped.lines[i].timestampSeconds <= stamped.lines[i - 1].timestampSeconds) {
+            monotonic = false;
+        }
+    }
+    Check(monotonic, "fake timestamps are monotonic");
+    Check(inRange, "fake timestamps are spaced 4-7 seconds apart");
+
+    rivan::lyrics::LyricsDocument mixed;
+    mixed.synced = true;
+    mixed.lines = {{1.5, L"Intro"}, {-1.0, L"A"}, {-1.0, L"B"}};
+    const auto mixedStamped = LyricsService::WithFakeTimestamps(mixed);
+    Check(std::abs(mixedStamped.lines[0].timestampSeconds - 1.5) < 1e-9 &&
+              mixedStamped.lines[1].timestampSeconds > 1.5 &&
+              mixedStamped.lines[2].timestampSeconds > mixedStamped.lines[1].timestampSeconds,
+          "fake timestamps anchor on real timestamps");
+
+    rivan::lyrics::LyricsDocument timed;
+    timed.synced = true;
+    timed.lines = {{0.0, L"One"}, {10.0, L"Two"}};
+    const auto same = LyricsService::WithFakeTimestamps(timed);
+    Check(same.lines[0].timestampSeconds == 0.0 &&
+              same.lines[1].timestampSeconds == 10.0,
+          "fully timed lyrics keep their real timestamps");
+}
+
+void TestCustomLyricsParsing() {
+    using rivan::lyrics::LyricsService;
+    const auto synced = LyricsService::ParseCustomLyrics(
+        L"#RIVAN-CUSTOM-LYRICS-1\n#Song file: C:\\Music\\My Song.mp3\n\n"
+        L"[00:01.00]Hello\n[00:02.00]World\n");
+    Check(synced.synced && synced.lines.size() == 2 &&
+              synced.lines[0].text == L"Hello" && synced.lines[1].text == L"World",
+          "custom lyrics parser strips the header and keeps synced timestamps");
+    const auto plain = LyricsService::ParseCustomLyrics(
+        L"#RIVAN-CUSTOM-LYRICS-1\n#Song file: C:\\Music\\My Song.mp3\n"
+        L"Line one\n\nLine two\n");
+    Check(!plain.synced && plain.PlainText() == L"Line one\nLine two",
+          "custom lyrics honor linebreaks for plain text");
+    Check(LyricsService::UserLyricsTrackPath(
+              L"#RIVAN-CUSTOM-LYRICS-1\n#Song file: C:\\Music\\My Song.mp3\n") ==
+              L"C:\\Music\\My Song.mp3",
+          "custom lyrics expose the embedded song file path");
+    Check(LyricsService::UserLyricsTrackPath(L"Line one\nLine two").empty(),
+          "custom lyrics without a header have no song path");
+}
+
+void TestUserLyricsFileLifecycle() {
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanUserLyricsTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    const auto songPath = root / L"My Song.mp3";
+    {
+        std::ofstream song(songPath, std::ios::binary);
+        song << 'x';
+    }
+    rivan::lyrics::LyricsService service(root / L"lyrics");
+    const auto lyricsFile = service.CreateUserLyricsFile(1, L"My Song", L"Artist", L"", 0.0, songPath);
+    Check(!lyricsFile.empty() && lyricsFile.filename() == L"My Song.txt",
+          "custom lyrics file is named after the song");
+    Check(service.CreateUserLyricsFile(1, L"My Song", L"Artist", L"", 0.0, songPath) == lyricsFile,
+          "authoring lyrics twice reuses the same file");
+    {
+        std::wstring content = L"#RIVAN-CUSTOM-LYRICS-1\n#Song file: " + songPath.wstring() +
+                               L"\n\n[00:00.50]First line\n[00:02.25]Second line\n";
+        const auto utf8 = rivan::core::WideToUtf8(content);
+        std::ofstream output(lyricsFile, std::ios::binary | std::ios::trunc);
+        output.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
+    }
+
+    std::mutex mutex;
+    std::condition_variable completion;
+    bool completed = false;
+    service.SetNotify([&] {
+        if (!service.Snapshot().loading) {
+            std::scoped_lock lock(mutex);
+            completed = true;
+            completion.notify_one();
+        }
+    });
+    service.Request(1, L"", L"", L"", 0.0, songPath);
+    {
+        std::unique_lock lock(mutex);
+        Check(completion.wait_for(lock, std::chrono::seconds{2}, [&] { return completed; }),
+              "custom lyrics request publishes a completion snapshot");
+    }
+    const auto snapshot = service.Snapshot();
+    Check(snapshot.available && snapshot.document.synced &&
+              snapshot.document.lines.size() == 2 &&
+              snapshot.document.lines[1].text == L"Second line",
+          "user-authored lyrics load on the next request for the same song");
+    Check(snapshot.status == L"Lyrics",
+          "unified lyrics snapshot carries the loading status");
+    std::filesystem::remove_all(root, ec);
+}
+
+void TestLyricsDisabledSongs() {
+    using rivan::lyrics::LyricsService;
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanLyricsDisabledTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root / L"lyrics", ec);
+    const auto songPath = root / L"My Song.mp3";
+    {
+        std::ofstream song(songPath, std::ios::binary);
+        song << 'x';
+    }
+    {
+        // A local lyrics file that would normally load for this song.
+        std::wstring content = L"#RIVAN-CUSTOM-LYRICS-1\n#Song file: " + songPath.wstring() +
+                               L"\n\n[00:01.00]Hello\n[00:02.00]World\n";
+        const auto utf8 = rivan::core::WideToUtf8(content);
+        std::ofstream output(root / L"lyrics" / L"My Song.txt",
+                             std::ios::binary | std::ios::trunc);
+        output.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
+    }
+    rivan::lyrics::LyricsService service(root / L"lyrics");
+    service.SetDisabledSongs({LyricsService::NormalizedTrackPath(songPath)});
+    std::mutex mutex;
+    std::condition_variable completion;
+    bool completed = false;
+    service.SetNotify([&] {
+        if (!service.Snapshot().loading) {
+            std::scoped_lock lock(mutex);
+            completed = true;
+            completion.notify_one();
+        }
+    });
+    service.Request(1, L"", L"", L"", 0.0, songPath);
+    {
+        std::unique_lock lock(mutex);
+        Check(completion.wait_for(lock, std::chrono::seconds{2}, [&] { return completed; }),
+              "disabled lyrics request publishes a completion snapshot");
+    }
+    const auto disabled = service.Snapshot();
+    Check(!disabled.available && disabled.status == L"Lyrics disabled" &&
+              disabled.document.Empty(),
+          "disabled songs skip every lyric source");
+    service.SetDisabledSongs({});
+    // Re-enabling makes the local file load again.
+    completed = false;
+    service.Request(1, L"", L"", L"", 0.0, songPath);
+    {
+        std::unique_lock lock(mutex);
+        Check(completion.wait_for(lock, std::chrono::seconds{2}, [&] { return completed; }),
+              "re-enabled lyrics request publishes a completion snapshot");
+    }
+    const auto enabled = service.Snapshot();
+    Check(enabled.available && enabled.status == L"Lyrics" &&
+              enabled.document.PlainText() == L"Hello\nWorld",
+          "re-enabled songs load their local lyrics again");
+    Check(LyricsService::NormalizedTrackPath(L"C:\\Music\\Song.MP3") == L"c:\\music\\song.mp3",
+          "disabled-song key folds path case");
+    std::filesystem::remove_all(root, ec);
+}
+
+void TestLyricsSaveFileFormat() {
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanLyricsSaveTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    const auto songPath = root / L"track.mp3";
+    const auto directory = root / L"lyrics";
+    const auto synced = rivan::lyrics::LyricsService::ParseLrc(
+        L"[00:01.00]First line\n[01:02.50]Second line\n");
+
+    // Fetched lyrics are saved like user lyrics: named after the song and carrying the
+    // song file path inside.
+    const auto saved = rivan::lyrics::LyricsService::SaveLyricsFile(
+        directory, L"Track: Name", songPath, synced);
+    Check(!saved.empty() && saved.filename() == L"Track Name.txt",
+          "fetched lyrics are saved with the song title as the file name");
+    Check(std::filesystem::exists(saved, ec), "fetched lyrics file exists on disk");
+    {
+        std::ifstream input(saved, std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+        Check(bytes.find("#RIVAN-CUSTOM-LYRICS-1") != std::string::npos &&
+                  bytes.find("#Song file:") != std::string::npos,
+              "fetched lyrics file embeds the song file path header");
+    }
+    // Saving again for the same song reuses the file instead of overwriting or duplicating.
+    const auto again = rivan::lyrics::LyricsService::SaveLyricsFile(
+        directory, L"Track: Name", songPath, synced);
+    Check(again == saved, "re-saving fetched lyrics reuses the existing file");
+    {
+        std::size_t count = 0;
+        for (std::filesystem::directory_iterator it(directory, ec), end;
+             it != end && !ec; it.increment(ec)) {
+            if (it->is_regular_file(ec)) ++count;
+        }
+        Check(count == 1, "re-saving fetched lyrics creates no duplicate file");
+    }
+    // A different song with the same title gets its own suffixed file.
+    const auto otherPath = root / L"other.mp3";
+    const auto other = rivan::lyrics::LyricsService::SaveLyricsFile(
+        directory, L"Track: Name", otherPath, synced);
+    Check(!other.empty() && other.filename() == L"Track Name (2).txt",
+          "same-title songs get distinct lyrics files");
+
+    // A saved file loads through the service on the next request for the song.
+    rivan::lyrics::LyricsService service(directory);
+    std::mutex mutex;
+    std::condition_variable completion;
+    bool completed = false;
+    service.SetNotify([&] {
+        if (!service.Snapshot().loading) {
+            std::scoped_lock lock(mutex);
+            completed = true;
+            completion.notify_one();
+        }
+    });
+    service.Request(1, L"", L"", L"", 0.0, songPath);
+    {
+        std::unique_lock lock(mutex);
+        Check(completion.wait_for(lock, std::chrono::seconds{2}, [&] { return completed; }),
+              "saved fetched lyrics request publishes a completion snapshot");
+    }
+    const auto snapshot = service.Snapshot();
+    Check(snapshot.available && snapshot.document.synced &&
+              snapshot.document.PlainText() == L"First line\nSecond line",
+          "saved fetched lyrics load on the next request");
+    std::filesystem::remove_all(root, ec);
+}
+
 void TestLyricsPublicationRevisions() {
     std::mutex mutex;
     std::condition_variable completion;
@@ -3607,6 +3874,11 @@ int main() {
     TestOutsideCollapseTransactions();
     TestModuleLayoutSessionRoundTrip();
     TestLyricsParsing();
+    TestLyricsGeneratedTimestamps();
+    TestCustomLyricsParsing();
+    TestUserLyricsFileLifecycle();
+    TestLyricsDisabledSongs();
+    TestLyricsSaveFileFormat();
     TestLyricsPublicationRevisions();
     TestLyricsLayoutMigration();
     TestNestedRootDedup();

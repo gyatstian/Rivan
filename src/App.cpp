@@ -164,6 +164,10 @@ bool App::Initialize() {
     }
     (void)settings_.SetSettings(applicationSettings, &error);
     lyrics_.SetCacheEnabled(applicationSettings.lyricsCacheEnabled);
+    lyrics_.SetOnlineEnabled(applicationSettings.lyricsOnlineEnabled);
+    lyrics_.SetFakeTimestampsEnabled(applicationSettings.lyricsFakeTimestampsEnabled);
+    LoadDisabledLyrics();
+    lyrics_.SetDisabledSongs(disabledLyricsSongs_);
     stats_.SetEnabled(applicationSettings.statsEnabled);
     std::wstring startupError;
     // applicationSettings.musicRoot still holds the configured root, so this failure

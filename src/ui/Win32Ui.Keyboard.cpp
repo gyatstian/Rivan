@@ -271,11 +271,18 @@ bool Win32Ui::Impl::KeyDown(WPARAM key) {
             switch (key) {
             case L'S': HandleLyricsAction(1); return true;
             case L'P': HandleLyricsAction(2); return true;
-            case L'L': HandleLyricsAction(3); return true;
-            case L'E': HandleLyricsAction(4); return true;
-            case L'R': HandleLyricsAction(5); return true;
-            case L'C': HandleLyricsAction(6); return true;
             default: break;
+            }
+        }
+        if (control && IsLyricsPlainView()) {
+            // Plain lyrics view: copy the selected verses or select them all.
+            if (key == L'C' || key == L'c') {
+                CopyLyricsSelection();
+                return true;
+            }
+            if (key == L'A' || key == L'a') {
+                SelectAllLyricsText();
+                return true;
             }
         }
     }

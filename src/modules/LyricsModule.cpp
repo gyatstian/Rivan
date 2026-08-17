@@ -7,9 +7,58 @@
 #include <vector>
 
 namespace rivan::ui {
+namespace {
+
+[[nodiscard]] DWRITE_TEXT_ALIGNMENT LyricsAlignmentToDw(
+    config::LyricsTextAlignment alignment) noexcept {
+    switch (alignment) {
+    case config::LyricsTextAlignment::Center: return DWRITE_TEXT_ALIGNMENT_CENTER;
+    case config::LyricsTextAlignment::Right: return DWRITE_TEXT_ALIGNMENT_TRAILING;
+    case config::LyricsTextAlignment::Left: break;
+    }
+    return DWRITE_TEXT_ALIGNMENT_LEADING;
+}
+
+// Resolves the caret character (UTF-16 code-unit position) at a point given in the
+// verse layout's own coordinate space.
+[[nodiscard]] std::uint32_t LyricsHitCharacter(
+    const Microsoft::WRL::ComPtr<IDWriteTextLayout>& layout, float localX,
+    float localY) noexcept {
+    if (!layout) return 0;
+    BOOL isTrailing = FALSE;
+    BOOL isInside = FALSE;
+    DWRITE_HIT_TEST_METRICS metrics{};
+    if (FAILED(layout->HitTestPoint(localX, localY, &isTrailing, &isInside, &metrics))) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(metrics.textPosition +
+                                      (isTrailing ? metrics.length : 0U));
+}
+
+void SetClipboardText(HWND window, std::wstring_view text) {
+    if (text.empty() || !OpenClipboard(window)) return;
+    EmptyClipboard();
+    const auto bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (memory) {
+        void* destination = GlobalLock(memory);
+        if (destination) {
+            std::memcpy(destination, text.data(), bytes);
+            GlobalUnlock(memory);
+            if (SetClipboardData(CF_UNICODETEXT, memory)) memory = nullptr;
+        }
+        if (memory) GlobalFree(memory);
+    }
+    CloseClipboard();
+}
+
+} // namespace
 
 void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
                                std::array<ComPtr<ID2D1SolidColorBrush>, 14>& b) {
+    // The whole module is a scroll target; scrolling must not depend on a narrow strip
+    // inside the text bevel (see Scroll).
+    lyricsModuleBounds = bounds;
     const auto content = DrawPanel(bounds, UiModuleRegistry::Get(ModuleId::Lyrics).Title(),
                                    b[1].Get(), b[2].Get(), b[3].Get(), b[4].Get(),
                                    b[13].Get(), b[7].Get(), ModuleId::Lyrics);
@@ -17,33 +66,26 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
 
     const float buttonHeight = 22.0F;
     const float gap = 4.0F;
-    const std::size_t buttonColumns = Width(content) >= 330.0F ? 6U : 3U;
-    const float buttonWidth = (Width(content) - gap * static_cast<float>(buttonColumns + 1U)) /
-                              static_cast<float>(buttonColumns);
-    const auto button = [this, &b, buttonHeight, gap, buttonWidth, buttonColumns, &content]
-        (std::size_t index, std::wstring_view label, std::uint64_t action, bool active) {
-            const std::size_t row = index / buttonColumns;
-            const std::size_t column = index % buttonColumns;
-            const float left = content.left + gap + static_cast<float>(column) * (buttonWidth + gap);
-            const float top = content.top + gap + static_cast<float>(row) * (buttonHeight + gap);
-            const auto bounds = Rect(left, top, left + buttonWidth, top + buttonHeight);
-            const bool hot = Contains(bounds, static_cast<float>(mouse.x), static_cast<float>(mouse.y));
-            DrawBevel(bounds, active ? b[11].Get() : (hot ? b[7].Get() : b[2].Get()),
-                      b[3].Get(), b[4].Get(), active);
-            DrawText(label, bounds, b[9].Get(), tinyFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
-            AddIdHit(bounds, HitKind::LyricsAction, action);
-        };
     const bool syncedAvailable = model.lyrics.available && model.lyrics.document.synced;
     const bool synced = syncedAvailable && lyricsSyncedMode_;
-    button(0, synced ? L"SYNC" : L"PLAIN", 1, synced);
-    button(1, L"TEXT", 2, !synced);
-    button(2, L"LEFT", 3, lyricsAlignment_ == DWRITE_TEXT_ALIGNMENT_LEADING);
-    button(3, L"CENTER", 4, lyricsAlignment_ == DWRITE_TEXT_ALIGNMENT_CENTER);
-    button(4, L"RIGHT", 5, lyricsAlignment_ == DWRITE_TEXT_ALIGNMENT_TRAILING);
-    button(5, L"COPY", 6, false);
+    // A single sync/plain toggle is shown only when both modes exist. With plain-only
+    // lyrics there is no mode switch, so the module shows no buttons at all.
+    float controlsHeight = 0.0F;
+    if (syncedAvailable) {
+        const float buttonWidth = std::max(1.0F, Width(content) - gap * 2.0F);
+        const auto toggle = Rect(content.left + gap, content.top + gap,
+                                 content.left + gap + buttonWidth,
+                                 content.top + gap + buttonHeight);
+        const bool hot = Contains(toggle, static_cast<float>(mouse.x),
+                                  static_cast<float>(mouse.y));
+        DrawBevel(toggle, synced ? b[11].Get() : (hot ? b[7].Get() : b[2].Get()),
+                  b[3].Get(), b[4].Get(), synced);
+        DrawText(synced ? L"UNSYNCED LYRICS" : L"SYNC LYRICS", toggle, b[9].Get(),
+                 tinyFormat.Get(), DWRITE_TEXT_ALIGNMENT_CENTER);
+        AddIdHit(toggle, HitKind::LyricsAction, synced ? 2U : 1U);
+        controlsHeight = buttonHeight + gap;
+    }
 
-    const float controlsHeight = static_cast<float>((6U + buttonColumns - 1U) / buttonColumns) *
-                                 (buttonHeight + gap);
     lyricsContentBounds = Rect(content.left + 5.0F, content.top + controlsHeight + 5.0F,
                                content.right - 5.0F, content.bottom - 5.0F);
     DrawBevel(lyricsContentBounds, b[5].Get(), b[3].Get(), b[4].Get(), true, 1.0F);
@@ -53,16 +95,46 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
         lyricsScrollY = 0.0F;
         lyricsSyncedMode_ = true;
         lyricsUserScrolling_ = false;
+        lyricsSelection_.active = false;
     }
     if (model.lyrics.loading || !model.lyrics.available || lines.empty()) {
         const auto status = model.lyrics.status.empty()
                                 ? (model.lyrics.loading ? L"LOADING LYRICS..." : L"NO LYRICS AVAILABLE")
                                 : model.lyrics.status;
-        DrawText(status, lyricsContentBounds, b[10].Get(), smallFormat.Get(),
+        // Only offer authoring lyrics for an active track that finished loading.
+        const bool canAdd = !model.lyrics.loading && model.lyrics.trackId != 0;
+        constexpr float addLabelHeight = 26.0F;
+        constexpr float addButtonHeight = 22.0F;
+        constexpr float addSpacing = 6.0F;
+        float top = lyricsContentBounds.top;
+        if (canAdd) {
+            top = lyricsContentBounds.top +
+                  std::max(0.0F, (Height(lyricsContentBounds) - (addLabelHeight + addSpacing + addButtonHeight)) * 0.5F);
+        }
+        const auto label = Rect(lyricsContentBounds.left, top, lyricsContentBounds.right,
+                                top + addLabelHeight);
+        DrawText(status, label, b[10].Get(), smallFormat.Get(),
                  DWRITE_TEXT_ALIGNMENT_CENTER);
+        if (canAdd) {
+            const float buttonTop = top + addLabelHeight + addSpacing;
+            const float buttonBottom = std::min(buttonTop + addButtonHeight, lyricsContentBounds.bottom - 1.0F);
+            if (buttonBottom - buttonTop >= 14.0F) {
+                const float left = lyricsContentBounds.left + 6.0F;
+                const float right = lyricsContentBounds.right - 6.0F;
+                const auto button = Rect(left, buttonTop, right, buttonBottom);
+                const bool hot = Contains(button, static_cast<float>(mouse.x),
+                                          static_cast<float>(mouse.y));
+                DrawBevel(button, hot ? b[7].Get() : b[2].Get(), b[3].Get(), b[4].Get(),
+                          false);
+                DrawText(L"ADD YOUR OWN LYRICS", button, b[9].Get(), tinyFormat.Get(),
+                         DWRITE_TEXT_ALIGNMENT_CENTER);
+                AddIdHit(button, HitKind::LyricsAction, 3U);
+            }
+        }
         return;
     }
 
+    const DWRITE_TEXT_ALIGNMENT alignment = LyricsAlignmentToDw(model.lyricsAlignment);
     const float textWidth = std::max(1.0F, Width(lyricsContentBounds) - 12.0F);
     const int widthKey = static_cast<int>(textWidth);
     auto& layouts = lyricsLayouts;
@@ -71,11 +143,11 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
     float contentHeight = 0.0F;
     if (model.lyrics.revision != lyricsLayoutRevision ||
         widthKey != lyricsLayoutWidthKey ||
-        lyricsAlignment_ != lyricsLayoutAlignment ||
+        alignment != lyricsLayoutAlignment ||
         layouts.size() != lines.size()) {
         lyricsLayoutRevision = model.lyrics.revision;
         lyricsLayoutWidthKey = widthKey;
-        lyricsLayoutAlignment = lyricsAlignment_;
+        lyricsLayoutAlignment = alignment;
         layouts.clear();
         layouts.reserve(lines.size());
         lineHeights.assign(lines.size(), 20.0F);
@@ -90,7 +162,7 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
                 continue;
             }
             layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
-            layout->SetTextAlignment(lyricsAlignment_);
+            layout->SetTextAlignment(alignment);
             layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
             DWRITE_TEXT_METRICS metrics{};
             if (SUCCEEDED(layout->GetMetrics(&metrics))) {
@@ -126,8 +198,7 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
     const float firstTop = lyricsContentBounds.top + 2.0F - lyricsScrollY;
     for (std::size_t i = 0; i < lines.size(); ++i) {
         const float top = firstTop + lineTops[i];
-        if (synced && lines[i].timestampSeconds >= 0.0 &&
-            top + lineHeights[i] >= lyricsContentBounds.top && top <= lyricsContentBounds.bottom) {
+        if (top + lineHeights[i] >= lyricsContentBounds.top && top <= lyricsContentBounds.bottom) {
             AddIdHit(Rect(lyricsContentBounds.left, top, lyricsContentBounds.right,
                           top + lineHeights[i]),
                      HitKind::LyricsVerse, static_cast<std::uint64_t>(i));
@@ -142,6 +213,27 @@ void Win32Ui::Impl::DrawLyrics(const D2D1_RECT_F& bounds,
         }
         const auto origin = D2D1::Point2F(lyricsContentBounds.left + 6.0F, top);
         ID2D1Brush* brush = active ? b[12].Get() : b[9].Get();
+        if (lyricsSelection_.active && !synced) {
+            std::uint32_t selBegin = 0;
+            std::uint32_t selEnd = 0;
+            if (LyricsSelectionRange(i, selBegin, selEnd)) {
+                const UINT32 selLength = selEnd - selBegin;
+                std::vector<DWRITE_HIT_TEST_METRICS> metrics(
+                    std::max<std::size_t>(1, static_cast<std::size_t>(selLength)));
+                UINT32 actual = 0;
+                if (SUCCEEDED(layouts[i]->HitTestTextRange(selBegin, selLength, origin.x, origin.y,
+                                                           metrics.data(),
+                                                           static_cast<UINT32>(metrics.size()),
+                                                           &actual))) {
+                    for (UINT32 m = 0; m < actual; ++m) {
+                        target->FillRectangle(Rect(metrics[m].left, metrics[m].top,
+                                                   metrics[m].left + metrics[m].width,
+                                                   metrics[m].top + metrics[m].height),
+                                              b[11].Get());
+                    }
+                }
+            }
+        }
         if (deferTexts) {
             // Copy (AddRef) into the deferred list: the cached layout must survive the
             // flush so subsequent frames can reuse it without rebuilding.
@@ -158,6 +250,7 @@ void Win32Ui::Impl::HandleLyricsAction(std::uint64_t action) {
     case 1:
         lyricsSyncedMode_ = true;
         lyricsUserScrolling_ = false;
+        lyricsSelection_.active = false;
         break;
     case 2:
         lyricsSyncedMode_ = false;
@@ -167,34 +260,13 @@ void Win32Ui::Impl::HandleLyricsAction(std::uint64_t action) {
         // the plain view at the beginning of the text on switch.
         lyricsScrollY = 0.0F;
         lyricsUserScrolling_ = false;
+        lyricsSelection_.active = false;
         break;
     case 3:
-        lyricsAlignment_ = DWRITE_TEXT_ALIGNMENT_LEADING;
+        // No lyrics available: let the user author a lyrics file and open it in their
+        // text editor. The service picks the file up on the next request for the song.
+        host.AddYourOwnLyrics();
         break;
-    case 4:
-        lyricsAlignment_ = DWRITE_TEXT_ALIGNMENT_CENTER;
-        break;
-    case 5:
-        lyricsAlignment_ = DWRITE_TEXT_ALIGNMENT_TRAILING;
-        break;
-    case 6: {
-        const auto text = model.lyrics.document.PlainText();
-        if (text.empty() || !OpenClipboard(window)) break;
-        EmptyClipboard();
-        const auto bytes = (text.size() + 1) * sizeof(wchar_t);
-        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
-        if (memory) {
-            void* destination = GlobalLock(memory);
-            if (destination) {
-                std::memcpy(destination, text.c_str(), bytes);
-                GlobalUnlock(memory);
-                if (SetClipboardData(CF_UNICODETEXT, memory)) memory = nullptr;
-            }
-            if (memory) GlobalFree(memory);
-        }
-        CloseClipboard();
-        break;
-    }
     default:
         break;
     }
@@ -214,6 +286,106 @@ void Win32Ui::Impl::HandleLyricsVerse(std::size_t index) {
     } catch (...) {}
     // Jumping to a verse implies returning to synced following.
     lyricsUserScrolling_ = false;
+    InvalidateRect(window, nullptr, FALSE);
+}
+
+bool Win32Ui::Impl::IsLyricsPlainView() const noexcept {
+    return !(model.lyrics.available && model.lyrics.document.synced && lyricsSyncedMode_);
+}
+
+void Win32Ui::Impl::BeginLyricsTextSelection(std::size_t index, float x, float y) {
+    const auto& lines = model.lyrics.document.lines;
+    if (index >= lines.size()) return;
+    std::uint32_t character = 0;
+    if (index < lyricsLayouts.size() && lyricsLayouts[index]) {
+        const float localX = x - (lyricsContentBounds.left + 6.0F);
+        const float localY = y - (lyricsContentBounds.top + 2.0F - lyricsScrollY +
+                                  lyricsLineTops[index]);
+        character = LyricsHitCharacter(lyricsLayouts[index], localX, localY);
+    }
+    lyricsSelection_ = {index, character, index, character, true};
+    lyricsSelecting_ = true;
+    SetCapture(window);
+    InvalidateRect(window, nullptr, FALSE);
+}
+
+void Win32Ui::Impl::UpdateLyricsTextSelection(float x, float y) {
+    const auto& lines = model.lyrics.document.lines;
+    if (!lyricsSelecting_ || lines.empty()) return;
+    std::size_t index = 0;
+    if (lyricsLineTops.size() == lines.size() && lyricsLineHeights.size() == lines.size()) {
+        const float firstTop = lyricsContentBounds.top + 2.0F - lyricsScrollY;
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            const float top = firstTop + lyricsLineTops[i];
+            if (y < top) { index = i; break; }
+            index = i;
+        }
+    }
+    std::uint32_t character = 0;
+    if (index < lyricsLayouts.size() && lyricsLayouts[index]) {
+        const float localX = x - (lyricsContentBounds.left + 6.0F);
+        const float localY = y - (lyricsContentBounds.top + 2.0F - lyricsScrollY +
+                                  lyricsLineTops[index]);
+        character = LyricsHitCharacter(lyricsLayouts[index], localX, localY);
+    }
+    lyricsSelection_.caretLine = index;
+    lyricsSelection_.caretChar = character;
+    InvalidateRect(window, nullptr, FALSE);
+}
+
+bool Win32Ui::Impl::LyricsSelectionRange(std::size_t line, std::uint32_t& begin,
+                                         std::uint32_t& end) const noexcept {
+    if (!lyricsSelection_.active) return false;
+    const auto& lines = model.lyrics.document.lines;
+    if (line >= lines.size()) return false;
+    const std::size_t anchorLine = lyricsSelection_.anchorLine;
+    const std::size_t caretLine = lyricsSelection_.caretLine;
+    const std::uint32_t anchorChar = lyricsSelection_.anchorChar;
+    const std::uint32_t caretChar = lyricsSelection_.caretChar;
+    const bool anchorFirst = anchorLine < caretLine ||
+                             (anchorLine == caretLine && anchorChar <= caretChar);
+    const std::size_t startLine = anchorFirst ? anchorLine : caretLine;
+    const std::size_t endLine = anchorFirst ? caretLine : anchorLine;
+    if (line < startLine || line > endLine) return false;
+    const std::uint32_t size = static_cast<std::uint32_t>(lines[line].text.size());
+    begin = 0;
+    end = size;
+    if (line == startLine && line == endLine) {
+        begin = std::min(anchorChar, caretChar);
+        end = std::max(anchorChar, caretChar);
+    } else if (line == startLine) {
+        begin = anchorFirst ? anchorChar : caretChar;
+    } else if (line == endLine) {
+        end = anchorFirst ? caretChar : anchorChar;
+    }
+    return begin < end;
+}
+
+void Win32Ui::Impl::CopyLyricsSelection() {
+    const auto& lines = model.lyrics.document.lines;
+    if (!lyricsSelection_.active || lines.empty()) return;
+    std::wstring text;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        std::uint32_t begin = 0;
+        std::uint32_t end = 0;
+        if (!LyricsSelectionRange(i, begin, end)) continue;
+        if (!text.empty()) text += L'\n';
+        text.append(lines[i].text, static_cast<std::size_t>(begin),
+                    static_cast<std::size_t>(end - begin));
+    }
+    SetClipboardText(window, text);
+    InvalidateRect(window, nullptr, FALSE);
+}
+
+void Win32Ui::Impl::SelectAllLyricsText() {
+    const auto& lines = model.lyrics.document.lines;
+    if (lines.empty()) {
+        lyricsSelection_.active = false;
+        InvalidateRect(window, nullptr, FALSE);
+        return;
+    }
+    lyricsSelection_ = {0, 0, lines.size() - 1,
+                        static_cast<std::uint32_t>(lines.back().text.size()), true};
     InvalidateRect(window, nullptr, FALSE);
 }
 

@@ -399,4 +399,20 @@ std::optional<DiscordSecondaryText> ParseDiscordSecondaryText(std::string_view v
     return std::nullopt;
 }
 
+const char* LyricsTextAlignmentText(LyricsTextAlignment alignment) noexcept {
+    switch (alignment) {
+    case LyricsTextAlignment::Left: return "left";
+    case LyricsTextAlignment::Center: return "center";
+    case LyricsTextAlignment::Right: return "right";
+    }
+    return "left";
+}
+
+std::optional<LyricsTextAlignment> ParseLyricsTextAlignment(std::string_view value) noexcept {
+    if (value == "left") return LyricsTextAlignment::Left;
+    if (value == "center") return LyricsTextAlignment::Center;
+    if (value == "right") return LyricsTextAlignment::Right;
+    return std::nullopt;
+}
+
 } // namespace rivan::config
