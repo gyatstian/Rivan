@@ -44,6 +44,12 @@ std::optional<std::filesystem::path> YoutubeService::LocateFfmpeg() {
     return std::nullopt;
 }
 
+std::optional<std::filesystem::path> YoutubeService::LocateDeno() {
+    const auto tools = ToolsDirectory() / L"deno.exe";
+    if (detail::PathExistsFile(tools)) return tools;
+    return std::nullopt;
+}
+
 bool YoutubeService::LooksLikeUrl(std::wstring_view text) noexcept {
     auto trimmed = detail::Trim(std::wstring(text));
     if (trimmed.empty()) return false;
@@ -95,6 +101,7 @@ std::filesystem::path YoutubeService::DownloadDirectory(
 void YoutubeService::WriteToolFlagsLocked() {
     state_.ytDlpInstalled = LocateYtDlp().has_value();
     state_.ffmpegInstalled = LocateFfmpeg().has_value();
+    state_.denoInstalled = LocateDeno().has_value();
 }
 
 void YoutubeService::RefreshToolStatus() {
@@ -149,9 +156,11 @@ void YoutubeService::Reset() {
             std::scoped_lock lock(mutex_);
             const bool yt = LocateYtDlp().has_value();
             const bool ff = LocateFfmpeg().has_value();
+            const bool deno = LocateDeno().has_value();
             state_ = YoutubeSnapshot{};
             state_.ytDlpInstalled = yt;
             state_.ffmpegInstalled = ff;
+            state_.denoInstalled = deno;
             searchCache_.clear();
             ++state_.generation;
             callback = notify_;

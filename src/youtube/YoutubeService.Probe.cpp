@@ -167,8 +167,30 @@ void YoutubeService::RunProbe(std::stop_token stop, std::uint64_t entryId) {
     DWORD exitCode = 1;
     std::optional<YoutubeProbe> result;
     if (ytDlp && !url.empty()) {
-        const auto arguments = L"--ignore-config --no-cache-dir --dump-single-json --no-warnings --no-playlist " +
-                               detail::QuoteArg(url);
+        if (!LocateDeno()) {
+            std::scoped_lock lock(mutex_);
+            state_.busy = false;
+            state_.job = YoutubeJobKind::Idle;
+            state_.status =
+                L"Deno (JS runtime) required for YouTube formats — install in Settings → Online";
+            WriteToolFlagsLocked();
+            for (auto& entry : state_.entries) {
+                if (entry.id != entryId) continue;
+                entry.downloading = false;
+                entry.failed = true;
+                entry.downloadProgress = -1.0F;
+            }
+            ++state_.generation;
+            Notify();
+            return;
+        }
+        // web_embedded is the player client that (with deno present) resolves URL-signed
+        // media streams; the android_vr default now returns HTTP 403 on those streams.
+        const auto arguments =
+            L"--ignore-config --no-cache-dir --extractor-args "
+            L"\"youtube:player_client=web_embedded\" --dump-single-json --no-warnings "
+            L"--no-playlist " +
+            detail::QuoteArg(url);
         if (detail::RunProcessCapture(*ytDlp, arguments, stop, output, error, &exitCode) &&
             exitCode == 0 && !stop.stop_requested()) {
             result = detail::ParseProbeJson(output);

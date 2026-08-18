@@ -108,6 +108,29 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
         return;
     }
 
+    // YouTube extraction needs a JavaScript runtime (EJS challenge solving); without
+    // deno next to yt-dlp, media stream URLs are unsigned and every download fails
+    // with "unable to download video data: HTTP Error 403".
+    if (!LocateDeno()) {
+        {
+            std::scoped_lock lock(mutex_);
+            state_.busy = false;
+            state_.job = YoutubeJobKind::Idle;
+            state_.status = L"Deno (JS runtime) required for YouTube downloads — install in Settings → Online";
+            WriteToolFlagsLocked();
+            for (auto& entry : state_.entries) {
+                if (entry.id == entryId) {
+                    entry.downloading = false;
+                    entry.failed = true;
+                    entry.downloadProgress = -1.0F;
+                }
+            }
+            ++state_.generation;
+        }
+        Notify();
+        return;
+    }
+
     if ((convertAudio || isVideo) && !LocateFfmpeg()) {
         {
             std::scoped_lock lock(mutex_);
@@ -227,20 +250,23 @@ void YoutubeService::RunDownload(std::stop_token stop, std::uint64_t entryId,
                      : (isVideo ? L" --embed-thumbnail --add-metadata" : L"");
     std::wstring arguments;
     if (isVideo) {
-        arguments = L"--ignore-config --no-cache-dir -f " + detail::QuoteArg(videoFormat) +
+        arguments = L"--ignore-config --no-cache-dir --extractor-args "
+                    L"\"youtube:player_client=web_embedded\" -f " + detail::QuoteArg(videoFormat) +
                     L" --merge-output-format mp4 --concurrent-fragments 4 --newline "
                     L"--progress --no-warnings --no-playlist" + embedArt +
                     detail::FfmpegLocationArg() + L" -o " + detail::QuoteArg(outputTemplate) +
                     L" " + detail::QuoteArg(url);
     } else if (convertAudio) {
-        arguments = L"--ignore-config --no-cache-dir -f " + detail::QuoteArg(selectedAudio) +
+        arguments = L"--ignore-config --no-cache-dir --extractor-args "
+                    L"\"youtube:player_client=web_embedded\" -f " + detail::QuoteArg(selectedAudio) +
                     L" -x --audio-format " + audioFormatName() +
                     L" --audio-quality " + std::to_wstring(selection.audioQuality) +
                     L" --concurrent-fragments 4 --newline --progress --no-warnings "
                     L"--no-playlist" + embedArt + detail::FfmpegLocationArg() + L" -o " +
                     detail::QuoteArg(outputTemplate) + L" " + detail::QuoteArg(url);
     } else {
-        arguments = L"--ignore-config --no-cache-dir -f " + detail::QuoteArg(selectedAudio) +
+        arguments = L"--ignore-config --no-cache-dir --extractor-args "
+                    L"\"youtube:player_client=web_embedded\" -f " + detail::QuoteArg(selectedAudio) +
                     L" --concurrent-fragments 4 --newline --progress --no-warnings "
                     L"--no-playlist" + embedArt + L" -o " + detail::QuoteArg(outputTemplate) +
                     L" " + detail::QuoteArg(url);

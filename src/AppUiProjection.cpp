@@ -402,8 +402,10 @@ void App::SnapshotUiModel(ui::UiModel& out) {
     out.youtubeBusy = youtubeView_.busy;
     out.youtubeYtDlpInstalled = youtubeView_.ytDlpInstalled;
     out.youtubeFfmpegInstalled = youtubeView_.ffmpegInstalled;
+    out.youtubeDenoInstalled = youtubeView_.denoInstalled;
     out.youtubeInstallingYtDlp = youtubeView_.installingYtDlp;
     out.youtubeInstallingFfmpeg = youtubeView_.installingFfmpeg;
+    out.youtubeInstallingDeno = youtubeView_.installingDeno;
     out.youtubeStatus = youtubeView_.status;
     out.youtubeChooserVisible = youtubeChooserVisible_;
     out.youtubeChooserEntryId = youtubeChooserEntryId_;

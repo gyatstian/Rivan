@@ -32,7 +32,9 @@ struct YoutubeEntry final {
 
 enum class YoutubeJobKind : std::uint8_t { Idle, Search, Probe, Download, Install };
 
-enum class YoutubeTool : std::uint8_t { YtDlp, Ffmpeg };
+// Deno is the JavaScript runtime yt-dlp uses to solve YouTube's JS challenges
+// (EJS). Without it recent yt-dlp builds get HTTP 403 on media streams.
+enum class YoutubeTool : std::uint8_t { YtDlp, Ffmpeg, Deno };
 
 struct YoutubeVideoFormat final {
     std::wstring formatId;
@@ -88,8 +90,10 @@ struct YoutubeSnapshot final {
     std::uint64_t generation{};
     bool ytDlpInstalled{};
     bool ffmpegInstalled{};
+    bool denoInstalled{};
     bool installingYtDlp{};
     bool installingFfmpeg{};
+    bool installingDeno{};
     // Client-side pages over the last search batch (yt-dlp fetch is capped).
     std::size_t searchPage{};
     std::size_t searchPageCount{1};
@@ -110,6 +114,7 @@ public:
     [[nodiscard]] static std::filesystem::path ToolsDirectory();
     [[nodiscard]] static std::optional<std::filesystem::path> LocateYtDlp();
     [[nodiscard]] static std::optional<std::filesystem::path> LocateFfmpeg();
+    [[nodiscard]] static std::optional<std::filesystem::path> LocateDeno();
     [[nodiscard]] static bool LooksLikeUrl(std::wstring_view text) noexcept;
     [[nodiscard]] static bool LooksLikeYoutubeUrl(std::wstring_view text) noexcept;
     [[nodiscard]] static std::filesystem::path DownloadDirectory(

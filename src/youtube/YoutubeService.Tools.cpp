@@ -295,19 +295,24 @@ void YoutubeService::InstallTool(YoutubeTool tool) {
         {
             std::scoped_lock lock(mutex_);
             WriteToolFlagsLocked();
-            if (tool == YoutubeTool::YtDlp && state_.ytDlpInstalled) {
-                state_.status = L"yt-dlp already installed";
-                ++state_.generation;
-            } else if (tool == YoutubeTool::Ffmpeg && state_.ffmpegInstalled) {
-                state_.status = L"ffmpeg already installed";
+            const bool already =
+                (tool == YoutubeTool::YtDlp && state_.ytDlpInstalled) ||
+                (tool == YoutubeTool::Ffmpeg && state_.ffmpegInstalled) ||
+                (tool == YoutubeTool::Deno && state_.denoInstalled);
+            if (already) {
+                state_.status = tool == YoutubeTool::YtDlp ? L"yt-dlp already installed"
+                               : tool == YoutubeTool::Ffmpeg ? L"ffmpeg already installed"
+                                                              : L"deno already installed";
                 ++state_.generation;
             } else {
                 state_.busy = true;
                 state_.job = YoutubeJobKind::Install;
                 state_.installingYtDlp = tool == YoutubeTool::YtDlp;
                 state_.installingFfmpeg = tool == YoutubeTool::Ffmpeg;
+                state_.installingDeno = tool == YoutubeTool::Deno;
                 state_.status = tool == YoutubeTool::YtDlp ? L"Installing yt-dlp..."
-                                                           : L"Installing ffmpeg...";
+                               : tool == YoutubeTool::Ffmpeg ? L"Installing ffmpeg..."
+                                                              : L"Installing deno...";
                 ++state_.generation;
                 start = true;
             }
@@ -336,7 +341,7 @@ void YoutubeService::RunInstall(std::stop_token stop, YoutubeTool tool) {
             ok = false;
             error = L"yt-dlp.exe missing after download";
         }
-    } else {
+    } else if (tool == YoutubeTool::Ffmpeg) {
         const auto zipPath = tools / L"ffmpeg-essentials.zip";
         const auto extractDir = tools / L"ffmpeg-extract";
         ok = detail::DownloadUrlToFile(
@@ -373,6 +378,41 @@ void YoutubeService::RunInstall(std::stop_token stop, YoutubeTool tool) {
         // removed; an installed ffmpeg.exe is never deleted.
         std::filesystem::remove_all(extractDir, ec);
         std::filesystem::remove(zipPath, ec);
+    } else {
+        const auto zipPath = tools / L"deno.zip";
+        const auto extractDir = tools / L"deno-extract";
+        ok = detail::DownloadUrlToFile(
+            L"https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip",
+            zipPath, error, stop);
+        if (ok && !stop.stop_requested()) {
+            std::filesystem::remove_all(extractDir, ec);
+            std::filesystem::create_directories(extractDir, ec);
+            std::string out;
+            std::string err;
+            DWORD code = 1;
+            const std::wstring args = L"-xf " + detail::QuoteArg(zipPath.wstring()) + L" -C " +
+                                       detail::QuoteArg(extractDir.wstring());
+            const auto tar = detail::SystemTarPath();
+            if (!tar || !detail::RunProcessCapture(*tar, args, stop, out, err, &code) || code != 0) {
+                ok = false;
+                error = L"Unable to extract deno archive (Windows tar.exe is required)";
+            } else if (auto found = detail::FindFileRecursive(extractDir, L"deno.exe")) {
+                const auto dest = tools / L"deno.exe";
+                std::filesystem::copy_file(*found, dest,
+                                           std::filesystem::copy_options::overwrite_existing, ec);
+                if (ec || !detail::PathExistsFile(dest)) {
+                    ok = false;
+                    error = L"Unable to copy deno.exe";
+                }
+            } else {
+                ok = false;
+                error = L"deno.exe not found in archive";
+            }
+        }
+        // Same cleanup contract as the ffmpeg branch: never leave the per-install
+        // download/extract artifacts behind, but keep an installed deno.exe.
+        std::filesystem::remove_all(extractDir, ec);
+        std::filesystem::remove(zipPath, ec);
     }
 
     {
@@ -381,11 +421,14 @@ void YoutubeService::RunInstall(std::stop_token stop, YoutubeTool tool) {
         state_.job = YoutubeJobKind::Idle;
         state_.installingYtDlp = false;
         state_.installingFfmpeg = false;
+        state_.installingDeno = false;
         WriteToolFlagsLocked();
         if (stop.stop_requested()) {
             state_.status = L"Cancelled";
         } else if (ok) {
-            state_.status = tool == YoutubeTool::YtDlp ? L"yt-dlp installed" : L"ffmpeg installed";
+            state_.status = tool == YoutubeTool::YtDlp ? L"yt-dlp installed"
+                           : tool == YoutubeTool::Ffmpeg ? L"ffmpeg installed"
+                                                          : L"deno installed";
         } else {
             state_.status = error.empty() ? L"Install failed" : error;
         }

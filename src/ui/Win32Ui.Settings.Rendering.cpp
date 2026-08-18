@@ -382,14 +382,26 @@ void Win32Ui::Impl::DrawIntegrationsSection(const float left, const float right,
     y += 22;
     const bool showYtInstall = !model.youtubeYtDlpInstalled || model.youtubeInstallingYtDlp;
     const bool showFfInstall = !model.youtubeFfmpegInstalled || model.youtubeInstallingFfmpeg;
-    if (showYtInstall || showFfInstall) {
-        const wchar_t* yt = model.youtubeInstallingYtDlp ? L"INSTALLING YT-DLP..." : L"INSTALL YT-DLP";
-        const wchar_t* ff = model.youtubeInstallingFfmpeg ? L"INSTALLING FFMPEG..." : L"INSTALL FFMPEG";
-        if (showYtInstall && showFfInstall) {
-            const float width = (right - left - 8) * 0.5F;
-            SettingsButton(Rect(left, y, left + width, y + 24), yt, 5, b);
-            SettingsButton(Rect(left + width + 8, y, right, y + 24), ff, 6, b);
-        } else SettingsButton(Rect(left, y, right, y + 24), showYtInstall ? yt : ff, showYtInstall ? 5 : 6, b);
+    const bool showDenoInstall = !model.youtubeDenoInstalled || model.youtubeInstallingDeno;
+    const wchar_t* const yt =
+        model.youtubeInstallingYtDlp ? L"INSTALLING YT-DLP..." : L"INSTALL YT-DLP";
+    const wchar_t* const ff =
+        model.youtubeInstallingFfmpeg ? L"INSTALLING FFMPEG..." : L"INSTALL FFMPEG";
+    const wchar_t* const de =
+        model.youtubeInstallingDeno ? L"INSTALLING DENO..." : L"INSTALL DENO";
+    int toolActions[3]{};
+    const wchar_t* toolLabels[3]{};
+    int toolCount = 0;
+    if (showYtInstall) { toolActions[toolCount] = 5; toolLabels[toolCount] = yt; ++toolCount; }
+    if (showFfInstall) { toolActions[toolCount] = 6; toolLabels[toolCount] = ff; ++toolCount; }
+    if (showDenoInstall) { toolActions[toolCount] = 8; toolLabels[toolCount] = de; ++toolCount; }
+    if (toolCount > 0) {
+        const float gap = 8.0F;
+        const float width = (right - left - gap * (toolCount - 1)) / static_cast<float>(toolCount);
+        for (int i = 0; i < toolCount; ++i) {
+            const float x0 = left + static_cast<float>(i) * (width + gap);
+            SettingsButton(Rect(x0, y, x0 + width, y + 24), toolLabels[i], toolActions[i], b);
+        }
         y += 28;
     }
     DrawSettingsSectionGap(y, b);

@@ -37,8 +37,9 @@ void Win32Ui::Impl::HandleSettingsAction(std::uint64_t action) {
         }
         switch (action) {
         case 4: host.SetYoutubeEnabled(!model.youtubeEnabled); break;
-        case 5: if (!model.youtubeYtDlpInstalled && !model.youtubeInstallingYtDlp) host.InstallYoutubeTool(true); break;
-        case 6: if (!model.youtubeFfmpegInstalled && !model.youtubeInstallingFfmpeg) host.InstallYoutubeTool(false); break;
+        case 5: if (!model.youtubeYtDlpInstalled && !model.youtubeInstallingYtDlp) host.InstallYoutubeTool(youtube::YoutubeTool::YtDlp); break;
+        case 6: if (!model.youtubeFfmpegInstalled && !model.youtubeInstallingFfmpeg) host.InstallYoutubeTool(youtube::YoutubeTool::Ffmpeg); break;
+        case 8: if (!model.youtubeDenoInstalled && !model.youtubeInstallingDeno) host.InstallYoutubeTool(youtube::YoutubeTool::Deno); break;
         case 7: host.SetLyricsCacheEnabled(!model.lyricsCacheEnabled); break;
         case 29: host.SetLyricsOnlineEnabled(!model.lyricsOnlineEnabled); break;
         case 30: host.SetLyricsFakeTimestampsEnabled(!model.lyricsFakeTimestampsEnabled); break;

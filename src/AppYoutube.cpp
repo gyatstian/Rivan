@@ -214,8 +214,8 @@ bool App::SetYoutubeGrabberHotkey(std::uint32_t modifiers,
     return true;
 }
 
-void App::InstallYoutubeTool(bool ytDlp) {
-    youtube_.InstallTool(ytDlp ? youtube::YoutubeTool::YtDlp : youtube::YoutubeTool::Ffmpeg);
+void App::InstallYoutubeTool(youtube::YoutubeTool tool) {
+    youtube_.InstallTool(tool);
     youtubeView_ = youtube_.Snapshot();
     ++revision_;
     if (window_) window_->Refresh();
@@ -548,8 +548,10 @@ void App::ShowYoutubeLocalLibrary() {
     youtubeView_.job = youtube::YoutubeJobKind::Idle;
     youtubeView_.ytDlpInstalled = tools.ytDlpInstalled;
     youtubeView_.ffmpegInstalled = tools.ffmpegInstalled;
+    youtubeView_.denoInstalled = tools.denoInstalled;
     youtubeView_.installingYtDlp = tools.installingYtDlp;
     youtubeView_.installingFfmpeg = tools.installingFfmpeg;
+    youtubeView_.installingDeno = tools.installingDeno;
     youtubeView_.searchIsPaged = false;
     youtubeView_.searchPage = 0;
     youtubeView_.searchPageCount = 1;

@@ -88,7 +88,7 @@ public:
     void SetDiscordSecondaryText(config::DiscordSecondaryText mode) override;
     void SetDiscordFallbackToTotalStreams(bool enabled) override;
     void SetDiscordShowGithubButton(bool enabled) override;
-    void InstallYoutubeTool(bool ytDlp) override;
+    void InstallYoutubeTool(youtube::YoutubeTool tool) override;
     void SubmitYoutubeQuery(std::wstring query) override;
     void ActivateYoutubeResult(std::uint64_t id) override;
     void SetYoutubeChooserVisible(bool visible) override;

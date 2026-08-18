@@ -216,8 +216,10 @@ struct UiModel {
     bool youtubeBusy{};
     bool youtubeYtDlpInstalled{};
     bool youtubeFfmpegInstalled{};
+    bool youtubeDenoInstalled{};
     bool youtubeInstallingYtDlp{};
     bool youtubeInstallingFfmpeg{};
+    bool youtubeInstallingDeno{};
     std::wstring youtubeStatus;
     // Visible page of search results (already sliced in App).
     std::size_t youtubePage{};
@@ -341,8 +343,10 @@ public:
     virtual void SetDiscordSecondaryText(config::DiscordSecondaryText mode) = 0;
     virtual void SetDiscordFallbackToTotalStreams(bool enabled) = 0;
     virtual void SetDiscordShowGithubButton(bool enabled) = 0;
-    // One-click install of yt-dlp or ffmpeg into %LOCALAPPDATA%\Rivan\tools.
-    virtual void InstallYoutubeTool(bool ytDlp) = 0;
+    // One-click install of yt-dlp, ffmpeg, or the deno JS runtime into
+    // %LOCALAPPDATA%\Rivan\tools. yt-dlp needs deno (and ffmpeg for merging/conversion)
+    // to download YouTube streams.
+    virtual void InstallYoutubeTool(youtube::YoutubeTool tool) = 0;
     // Search or resolve a URL when the Youtube playlist is selected.
     virtual void SubmitYoutubeQuery(std::wstring query) = 0;
     // Opens a locally downloaded result or its download format chooser.
