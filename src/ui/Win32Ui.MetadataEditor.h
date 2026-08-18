@@ -9,6 +9,7 @@
 namespace rivan::ui {
 
 enum class TrackMetadataField : std::uint8_t {
+    Title,
     Author,
     Album,
     Genre,

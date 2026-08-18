@@ -16,9 +16,24 @@ using TrackId = std::uint64_t;
 [[nodiscard]] std::uint64_t FnvHashFoldCase(std::wstring_view text,
                                             std::uint64_t seed) noexcept;
 
+// Platform file identity that survives a rename on one volume/filesystem
+// (Windows volume serial + file index; ext4 dev + inode on the future Linux port).
+// Used to bridge a renamed file back to its previous catalog entry. Zero when the
+// file could not be opened (missing external track, exotic filesystem, ...).
+struct FileIdentity final {
+    std::uint64_t volume{};
+    std::uint64_t index{};
+
+    [[nodiscard]] bool HasValue() const noexcept { return volume != 0 || index != 0; }
+    [[nodiscard]] auto operator<=>(const FileIdentity&) const noexcept = default;
+};
+
 struct Track final {
     TrackId id{};
     std::filesystem::path filePath;
+    // Backing-file identity captured when the path existed on disk. Kept on the value
+    // model so Scan-to-Scan rename bridging has a stable key independent of TrackId.
+    FileIdentity fileIdentity;
     std::wstring title;
     std::wstring artist;
     std::wstring album;

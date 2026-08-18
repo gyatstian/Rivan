@@ -107,6 +107,12 @@ App::App(HINSTANCE instance)
             (void)PostThreadMessageW(uiThreadId_, ui::kUpdateServiceMessage, 0, 0);
         }
     });
+    libraryWatcher_.SetNotify([this]() {
+        libraryDirty_.store(true, std::memory_order_release);
+        if (window_ && window_->WindowHandle()) {
+            (void)PostMessageW(window_->WindowHandle(), ui::kAudioSignalMessage, 0, 0);
+        }
+    });
 }
 
 App::~App() {
@@ -117,6 +123,8 @@ App::~App() {
     youtube_.Reset();
     lyrics_.Reset();
     lyrics_.Shutdown();
+    // Stop the folder watcher first so no new rescans are requested during teardown.
+    libraryWatcher_.Shutdown();
     if (scanThread_.joinable()) {
         scanThread_.request_stop();
         scanThread_.join();
@@ -245,6 +253,7 @@ bool App::Initialize() {
     }
     audioNotificationWindow_.store(window_->WindowHandle(), std::memory_order_release);
     updateNotificationWindow_.store(window_->WindowHandle(), std::memory_order_release);
+    UpdateLibraryWatcherRoots();
 
     if (!miniPlayer_) {
         const auto& rectangle = settings_.Session().window;
@@ -433,6 +442,16 @@ void App::RefreshLibrary() {
     if (window_) window_->Refresh();
 }
 
+void App::UpdateLibraryWatcherRoots() {
+    std::vector<std::filesystem::path> roots;
+    const auto root = EffectiveMusicRoot();
+    if (!root.empty()) roots.push_back(root);
+    for (const auto& additional : settings_.Settings().additionalMusicRoots) {
+        roots.push_back(additional);
+    }
+    libraryWatcher_.SetRoots(std::move(roots));
+}
+
 void App::ActivateTrack(std::uint64_t id) {
     auto findInQueue = [this, id]() {
         const auto& tracks = queue_.Tracks();
@@ -506,6 +525,7 @@ void App::SetMusicFolder(std::size_t index, std::filesystem::path folder) {
     // An explicit folder change overrides any startup fallback.
     musicRootOverride_.clear();
     (void)settings_.SaveSettings(&error);
+    UpdateLibraryWatcherRoots();
     RefreshLibrary();  // Rescan with the new folder set.
 }
 

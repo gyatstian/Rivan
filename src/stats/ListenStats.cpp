@@ -266,6 +266,53 @@ std::optional<std::string> DecodeSectionName(std::string_view section) {
     return std::string(section.substr(5));
 }
 
+std::size_t RewriteSnapshotSongIdentifier(
+    const std::filesystem::path& statsDirectory,
+    const std::filesystem::path& skipFile,
+    std::uint64_t oldId,
+    std::uint64_t newId,
+    std::string oldUtf8Path,
+    std::string newUtf8Path) {
+    if (statsDirectory.empty() || oldId == newId) return 0;
+    const std::string oldSection = SongSectionName(oldId);
+    const std::string newSection = SongSectionName(newId);
+    if (oldSection == newSection) return 0;
+    std::size_t rewritten = 0;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(statsDirectory, ec), end;
+         it != end && !ec; it.increment(ec)) {
+        if (ec) {
+            ec.clear();
+            continue;
+        }
+        if (!it->is_regular_file(ec) || ec) {
+            ec.clear();
+            continue;
+        }
+        const auto path = it->path();
+        if (path.extension() != L".ini") continue;
+        if (!skipFile.empty() && path.filename() == skipFile.filename()) continue;
+        auto document = core::IniDocument::Load(path, nullptr);
+        if (!document) continue;
+        const auto& sections = document->Data();
+        if (!sections.contains(oldSection)) continue;
+        core::IniDocument output;
+        for (const auto& [section, values] : sections) {
+            for (const auto& [key, value] : values) {
+                const auto& targetSection = section == oldSection ? newSection : section;
+                std::string newValue = value;
+                if (section == oldSection && key == "path" &&
+                    (value == oldUtf8Path || value.empty())) {
+                    newValue = newUtf8Path;
+                }
+                output.Set(targetSection, key, std::move(newValue));
+            }
+        }
+        if (output.SaveAtomic(path, nullptr)) ++rewritten;
+    }
+    return rewritten;
+}
+
 // ---------------------------------------------------------------------------
 // Local-time period computation and snapshot naming.
 // ---------------------------------------------------------------------------

@@ -38,6 +38,18 @@ ui::RepeatMode ToUiRepeat(playlist::RepeatMode mode) noexcept {
 void App::SnapshotUiModel(ui::UiModel& out) {
     ApplyCompletedScan();
     HandleAudioSignals();
+    // Files changed under the library roots: rescan so renamed/added/removed files
+    // surface without a manual refresh.
+    if (libraryDirty_.exchange(false, std::memory_order_acq_rel)) {
+        RefreshLibrary();
+        // The Youtube local-library list reads the download folder directly and only
+        // re-lists on entry; refresh it here when it is the visible view so Explorer
+        // renames/downloads in <root>/youtube appear immediately.
+        if (YoutubeFeatureOn() && selectedPlaylist_ == playlist::YoutubePlaylistId &&
+            !youtubeView_.busy && youtubeView_.job == youtube::YoutubeJobKind::Idle) {
+            ShowYoutubeLocalLibrary();
+        }
+    }
     if (youtubeDirty_.exchange(false, std::memory_order_acq_rel)) {
         OnYoutubeServiceUpdated();
     }

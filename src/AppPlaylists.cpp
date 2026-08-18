@@ -318,11 +318,22 @@ void App::RenameTrackAt(std::size_t index, std::wstring name) {
     std::filesystem::rename(oldPath, newPath, ec);
     if (ec) return;
 
-    const auto replacement = library::Track::FromFile(newPath);
+    // A file rename leaves the embedded title tag untouched, so the displayed name
+    // (which prefers the tag over the file name) would keep the old name in the
+    // library and Rich Presence. Write the new name into the tag too so every
+    // surface and future rescans agree. Best effort: formats without a writable tag
+    // (or a missing ffmpeg fallback) still get the in-memory title below.
+    (void)ui::WriteTrackMetadataValue(newPath.wstring(), ui::TrackMetadataField::Title, name);
+
+    auto replacement = library::Track::FromFile(newPath);
+    replacement.title = name;
     (void)playlists_.ReplaceTrack(*id, replacement);
+    stats_.ApplyTrackRename(*id, replacement.id, oldPath, replacement.filePath);
+    lyrics_.NotifyTrackRenamed(*id, replacement.id, oldPath, replacement.filePath);
     if (activeTrack_ && activeTrack_->id == *id) {
         activeTrack_ = replacement;
         selectedTrack_ = replacement.id;
+        RefreshActiveLyrics();
     }
     ReseedSelectedUserQueue();
     SaveUserPlaylists();

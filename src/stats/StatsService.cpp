@@ -15,6 +15,20 @@ namespace {
 constexpr auto kSampleInterval = std::chrono::milliseconds(500);
 constexpr auto kPersistInterval = std::chrono::seconds(10);
 
+void MergePeriod(PeriodData& target, const PeriodData& source) noexcept {
+    target.plays += source.plays;
+    target.seconds += source.seconds;
+}
+
+void MergeEntity(EntityData& target, const EntityData& source) noexcept {
+    MergePeriod(target.week, source.week);
+    MergePeriod(target.fourWeeks, source.fourWeeks);
+    MergePeriod(target.month, source.month);
+    MergePeriod(target.sixMonths, source.sixMonths);
+    MergePeriod(target.year, source.year);
+    MergePeriod(target.lifetime, source.lifetime);
+}
+
 } // namespace
 
 StatsService::StatsService(TransportSource transportSource,
@@ -231,6 +245,45 @@ void StatsService::OnPlaybackRestarted() {
 void StatsService::SetActiveTrack(std::optional<library::Track> track) {
     std::lock_guard<std::mutex> lock(mutex_);
     activeTrack_ = std::move(track);
+}
+
+void StatsService::ApplyTrackRename(std::uint64_t oldId, std::uint64_t newId,
+                                    const std::filesystem::path& oldPath,
+                                    const std::filesystem::path& newPath) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto oldSection = SongSectionName(oldId);
+        const auto newSection = SongSectionName(newId);
+        if (oldSection != newSection) {
+            const auto found = model_.entities.find(oldSection);
+            if (found != model_.entities.end()) {
+                auto entity = std::move(found->second);
+                model_.entities.erase(found);
+                entity.songPath = core::WideToUtf8(newPath.wstring());
+                const auto target = model_.entities.find(newSection);
+                if (target != model_.entities.end()) {
+                    MergeEntity(target->second, entity);
+                } else {
+                    model_.entities.emplace(newSection, std::move(entity));
+                }
+                dirty_ = true;
+                PublishSnapshotLocked();
+            }
+            // Redirect the live session so post-rename seconds keep accumulating under
+            // the renamed song instead of recreating the old section on the next tick.
+            if (sessionActive_ && sessionSongSection_ == oldSection) {
+                sessionSongSection_ = newSection;
+                sessionPath_ = newPath;
+                dirty_ = true;
+            }
+            wake_ = true;
+        }
+    }
+    cv_.notify_one();
+    // Historical period snapshots keyed by the old id move too (best effort).
+    (void)RewriteSnapshotSongIdentifier(statsDirectory_, mainFile_, oldId, newId,
+                                        core::WideToUtf8(oldPath.wstring()),
+                                        core::WideToUtf8(newPath.wstring()));
 }
 
 std::shared_ptr<const ListenStatsModel> StatsService::Snapshot() const noexcept {

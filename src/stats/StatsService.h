@@ -52,6 +52,14 @@ public:
     // cannot see EndOfStream -> Loading -> Playing collapsing under one tick.
     void OnPlaybackRestarted();
 
+    // A library file was renamed (same backing file, new id and path). Moves the
+    // accumulated counters to the new song section in the current model and in every
+    // persisted period snapshot, and redirects the live session so it keeps writing
+    // under the renamed id. Best effort; must not fail or throw.
+    void ApplyTrackRename(std::uint64_t oldId, std::uint64_t newId,
+                          const std::filesystem::path& oldPath,
+                          const std::filesystem::path& newPath);
+
 private:
     void Run(std::stop_token stop);
     void SampleTick(const audio::LiveTransport& live,

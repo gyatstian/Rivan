@@ -1,5 +1,6 @@
 #include "LyricsService.h"
 
+#include "../core/Json.h"
 #include "../core/Text.h"
 
 #ifndef NOMINMAX
@@ -9,7 +10,6 @@
 #include <winhttp.h>
 
 #include <algorithm>
-#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -80,78 +80,42 @@ std::wstring NormalizeSearchText(std::wstring value) {
     return Trim(std::move(result));
 }
 
-void AppendUtf8(std::string& output, std::uint32_t codePoint) {
-    if (codePoint <= 0x7fu) {
-        output.push_back(static_cast<char>(codePoint));
-    } else if (codePoint <= 0x7ffu) {
-        output.push_back(static_cast<char>(0xc0u | (codePoint >> 6)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    } else if (codePoint <= 0xffffu) {
-        output.push_back(static_cast<char>(0xe0u | (codePoint >> 12)));
-        output.push_back(static_cast<char>(0x80u | ((codePoint >> 6) & 0x3fu)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    } else if (codePoint <= 0x10ffffu) {
-        output.push_back(static_cast<char>(0xf0u | (codePoint >> 18)));
-        output.push_back(static_cast<char>(0x80u | ((codePoint >> 12) & 0x3fu)));
-        output.push_back(static_cast<char>(0x80u | ((codePoint >> 6) & 0x3fu)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    }
+std::optional<std::string> JsonString(const core::JsonValue& object, std::string_view field) {
+    const auto* member = core::JsonMember(object, field);
+    return member && member->kind == core::JsonValue::Kind::String
+               ? std::optional<std::string>(member->string)
+               : std::nullopt;
 }
 
-std::optional<std::string> UnescapeJson(std::string_view value) {
-    std::string result;
-    result.reserve(value.size());
-    for (std::size_t index = 0; index < value.size(); ++index) {
-        if (value[index] != '\\') {
-            result.push_back(value[index]);
-            continue;
-        }
-        if (++index >= value.size()) return std::nullopt;
-        switch (value[index]) {
-        case '"': result.push_back('"'); break;
-        case '\\': result.push_back('\\'); break;
-        case '/': result.push_back('/'); break;
-        case 'b': result.push_back('\b'); break;
-        case 'f': result.push_back('\f'); break;
-        case 'n': result.push_back('\n'); break;
-        case 'r': result.push_back('\r'); break;
-        case 't': result.push_back('\t'); break;
-        case 'u': {
-            if (index + 4 >= value.size()) return std::nullopt;
-            std::uint32_t codePoint = 0;
-            for (std::size_t digit = 1; digit <= 4; ++digit) {
-                const char character = value[index + digit];
-                codePoint <<= 4;
-                if (character >= '0' && character <= '9') codePoint += static_cast<unsigned>(character - '0');
-                else if (character >= 'a' && character <= 'f') codePoint += static_cast<unsigned>(character - 'a' + 10);
-                else if (character >= 'A' && character <= 'F') codePoint += static_cast<unsigned>(character - 'A' + 10);
-                else return std::nullopt;
-            }
-            index += 4;
-            if (codePoint >= 0xd800u && codePoint <= 0xdbffu &&
-                index + 6 < value.size() && value[index + 1] == '\\' && value[index + 2] == 'u') {
-                std::uint32_t low = 0;
-                for (std::size_t digit = 3; digit <= 6; ++digit) {
-                    const char character = value[index + digit];
-                    low <<= 4;
-                    if (character >= '0' && character <= '9') low += static_cast<unsigned>(character - '0');
-                    else if (character >= 'a' && character <= 'f') low += static_cast<unsigned>(character - 'a' + 10);
-                    else if (character >= 'A' && character <= 'F') low += static_cast<unsigned>(character - 'A' + 10);
-                    else return std::nullopt;
-                }
-                if (low < 0xdc00u || low > 0xdfffu) return std::nullopt;
-                codePoint = 0x10000u + ((codePoint - 0xd800u) << 10) + (low - 0xdc00u);
-                index += 6;
-            } else if (codePoint >= 0xd800u && codePoint <= 0xdfffu) {
-                return std::nullopt;
-            }
-            AppendUtf8(result, codePoint);
-            break;
-        }
-        default: return std::nullopt;
+std::optional<double> JsonNumber(const core::JsonValue& object, std::string_view field) {
+    const auto* member = core::JsonMember(object, field);
+    return member && member->kind == core::JsonValue::Kind::Number &&
+                   std::isfinite(member->number)
+               ? std::optional<double>(member->number)
+               : std::nullopt;
+}
+
+std::wstring JsonWideString(const core::JsonValue& object, std::string_view field) {
+    const auto value = JsonString(object, field);
+    return value ? core::Utf8ToWide(*value) : std::wstring{};
+}
+
+// Builds a lyrics document from one already-parsed lrclib.net response object (or the
+// lyrics.ovh fallback object, which just reads "lyrics"). A missing field or an explicit
+// null falls through to the next source exactly like the former text-scanning parser did.
+LyricsDocument ParseLrclibObject(const core::JsonValue& root) {
+    LyricsDocument document;
+    if (const auto synced = JsonString(root, "syncedLyrics"); synced && !synced->empty()) {
+        document = LyricsService::ParseLrc(core::Utf8ToWide(*synced));
+    }
+    if (document.Empty()) {
+        if (const auto plain = JsonString(root, "plainLyrics"); plain && !plain->empty()) {
+            document = LyricsService::ParseLrc(core::Utf8ToWide(*plain));
+            document.synced = false;
+            for (auto& line : document.lines) line.timestampSeconds = -1.0;
         }
     }
-    return result;
+    return document;
 }
 
 std::wstring RemoveBracketedSuffix(std::wstring value) {
@@ -178,130 +142,6 @@ std::vector<std::wstring> QueryVariants(std::wstring value) {
     add(normalized);
     add(RemoveBracketedSuffix(normalized));
     return result;
-}
-
-std::optional<std::size_t> JsonFieldValueStart(std::string_view json, std::string_view field) {
-    for (std::size_t index = 0; index < json.size();) {
-        if (json[index] != '"') {
-            ++index;
-            continue;
-        }
-        const auto keyStart = index;
-        bool escaped = false;
-        ++index;
-        while (index < json.size()) {
-            if (!escaped && json[index] == '"') break;
-            if (!escaped && json[index] == '\\') escaped = true;
-            else escaped = false;
-            ++index;
-        }
-        if (index >= json.size()) return std::nullopt;
-        const auto key = UnescapeJson(json.substr(keyStart + 1, index - keyStart - 1));
-        ++index;
-        const auto colon = json.find(':', index);
-        if (colon == std::string_view::npos) return std::nullopt;
-        const auto valueStart = json.find_first_not_of(" \t\r\n", colon + 1);
-        if (key && *key == field && valueStart != std::string_view::npos) return valueStart;
-        index = valueStart == std::string_view::npos ? json.size() : valueStart;
-        if (index < json.size() && json[index] == '"') {
-            escaped = false;
-            ++index;
-            while (index < json.size()) {
-                if (!escaped && json[index] == '"') {
-                    ++index;
-                    break;
-                }
-                if (!escaped && json[index] == '\\') escaped = true;
-                else escaped = false;
-                ++index;
-            }
-        }
-    }
-    return std::nullopt;
-}
-
-std::optional<std::string> JsonStringAt(std::string_view json, const std::size_t valueStart) {
-    if (valueStart >= json.size() || json[valueStart] != '"') return std::nullopt;
-    std::string value;
-    bool escaped = false;
-    for (std::size_t index = valueStart + 1; index < json.size(); ++index) {
-        const char character = json[index];
-        if (!escaped && character == '"') return UnescapeJson(value);
-        if (!escaped && character == '\\') {
-            escaped = true;
-            value.push_back(character);
-            continue;
-        }
-        value.push_back(character);
-        escaped = false;
-    }
-    return std::nullopt;
-}
-
-std::optional<std::string> JsonString(std::string_view json, std::string_view field) {
-    const auto valueStart = JsonFieldValueStart(json, field);
-    return valueStart && json.substr(*valueStart, 4) != "null"
-               ? JsonStringAt(json, *valueStart)
-               : std::nullopt;
-}
-
-std::optional<double> JsonNumber(std::string_view json, std::string_view field) {
-    const auto valueStart = JsonFieldValueStart(json, field);
-    if (!valueStart) return std::nullopt;
-    const auto valueEnd = json.find_first_of(",}\r\n \t", *valueStart);
-    const auto value = json.substr(*valueStart, valueEnd == std::string_view::npos
-                                                     ? json.size() - *valueStart
-                                                     : valueEnd - *valueStart);
-    double number{};
-    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
-    return error == std::errc{} && end == value.data() + value.size() && std::isfinite(number)
-               ? std::optional<double>(number)
-               : std::nullopt;
-}
-
-std::vector<std::string_view> JsonArrayObjects(std::string_view json, std::string_view field) {
-    std::size_t arrayStart = std::string_view::npos;
-    if (field.empty()) {
-        arrayStart = json.find('[');
-    } else {
-        const std::string needle = "\"" + std::string(field) + "\"";
-        const auto fieldStart = json.find(needle);
-        if (fieldStart == std::string_view::npos) return {};
-        const auto colon = json.find(':', fieldStart + needle.size());
-        arrayStart = colon == std::string_view::npos ? std::string_view::npos
-                                                       : json.find('[', colon + 1);
-    }
-    if (arrayStart == std::string_view::npos) return {};
-    std::vector<std::string_view> objects;
-    std::size_t objectStart = std::string_view::npos;
-    int depth = 0;
-    bool quoted = false;
-    bool escaped = false;
-    for (std::size_t index = arrayStart + 1; index < json.size(); ++index) {
-        const char character = json[index];
-        if (quoted) {
-            if (escaped) escaped = false;
-            else if (character == '\\') escaped = true;
-            else if (character == '"') quoted = false;
-            continue;
-        }
-        if (character == '"') {
-            quoted = true;
-        } else if (character == '{') {
-            if (depth++ == 0) objectStart = index;
-        } else if (character == '}' && depth > 0 && --depth == 0 && objectStart != std::string_view::npos) {
-            objects.push_back(json.substr(objectStart, index - objectStart + 1));
-            objectStart = std::string_view::npos;
-        } else if (character == ']' && depth == 0) {
-            break;
-        }
-    }
-    return objects;
-}
-
-std::wstring JsonWideString(std::string_view json, std::string_view field) {
-    const auto value = JsonString(json, field);
-    return value ? core::Utf8ToWide(*value) : std::wstring{};
 }
 
 std::uint64_t HashText(std::wstring_view value, std::uint64_t hash) noexcept {
@@ -621,19 +461,13 @@ LyricsDocument LyricsService::ParseLrc(std::wstring_view text) {
     return document;
 }
 
+// Whole-document strictness: any malformed token anywhere in the response (not just in
+// the fields read) rejects the entire document -- stricter than the former field scanner,
+// which tolerated stray garbage outside the fields it looked at.
 LyricsDocument LyricsService::ParseLrclibResponse(std::string_view json) {
-    LyricsDocument document;
-    if (const auto synced = JsonString(json, "syncedLyrics"); synced && !synced->empty()) {
-        document = ParseLrc(core::Utf8ToWide(*synced));
-    }
-    if (document.Empty()) {
-        if (const auto plain = JsonString(json, "plainLyrics"); plain && !plain->empty()) {
-            document = ParseLrc(core::Utf8ToWide(*plain));
-            document.synced = false;
-            for (auto& line : document.lines) line.timestampSeconds = -1.0;
-        }
-    }
-    return document;
+    const auto root = core::ParseJson(json);
+    if (!root || root->kind != core::JsonValue::Kind::Object) return {};
+    return ParseLrclibObject(*root);
 }
 
 std::wstring LyricsService::NormalizedTrackPath(const std::filesystem::path& path) {
@@ -970,6 +804,68 @@ void LyricsService::SaveCache(const RequestData& request, const LyricsDocument& 
     PruneCacheIfNeeded(cacheDirectory_);
 }
 
+void LyricsService::NotifyTrackRenamed(std::uint64_t oldTrackId, std::uint64_t newTrackId,
+                                       const std::filesystem::path& oldPath,
+                                       const std::filesystem::path& newPath) {
+    {
+        std::scoped_lock lock(mutex_);
+        if (pending_ && pending_->trackId == oldTrackId) {
+            pending_->trackId = newTrackId;
+            pending_->filePath = newPath;
+        }
+        if (snapshot_.trackId == oldTrackId) snapshot_.trackId = newTrackId;
+    }
+    (void)RetargetLyricsFilePaths(cacheDirectory_, oldPath, newPath);
+}
+
+std::size_t LyricsService::RetargetLyricsFilePaths(const std::filesystem::path& directory,
+                                                   const std::filesystem::path& oldPath,
+                                                   const std::filesystem::path& newPath) {
+    if (directory.empty() || oldPath.empty() || newPath.empty()) return 0;
+    const auto expectedOld = NormalizePathText(oldPath);
+    std::size_t rewritten = 0;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(directory, ec), end; it != end && !ec;
+         it.increment(ec)) {
+        if (ec) {
+            ec.clear();
+            continue;
+        }
+        if (!it->is_regular_file(ec) || ec) {
+            ec.clear();
+            continue;
+        }
+        const auto path = it->path();
+        if (path.extension() != kCustomLyricsExtension) continue;
+        auto text = ReadTextFileWide(path);
+        if (!text) continue;
+        if (NormalizePathText(UserLyricsTrackPath(*text)) != expectedOld) continue;
+        // Rebuild the body, retargeting the song-path header line to the new path.
+        std::wistringstream input(*text);
+        std::wstring output;
+        std::wstring line;
+        bool changed = false;
+        while (std::getline(input, line)) {
+            if (!changed && line.rfind(kSongFileHeader, 0) == 0 &&
+                NormalizePathText(Trim(line.substr(kSongFileHeader.size()))) == expectedOld) {
+                line = std::wstring(kSongFileHeader) + L" " + newPath.wstring();
+                changed = true;
+            }
+            output += line;
+            output += L'\n';
+        }
+        if (!changed) continue;
+        const auto utf8 = core::WideToUtf8(output);
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        constexpr char kUtf8Bom[] = "\xef\xbb\xbf";
+        file.write(kUtf8Bom, static_cast<std::streamsize>(sizeof(kUtf8Bom) - 1));
+        file.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
+        file.close();
+        if (file) ++rewritten;
+    }
+    return rewritten;
+}
+
 std::optional<LyricsDocument> LyricsService::Fetch(const RequestData& request,
                                                    std::stop_token stop) const {
     if (request.title.empty()) return std::nullopt;
@@ -1022,10 +918,13 @@ std::optional<LyricsDocument> LyricsService::Fetch(const RequestData& request,
         const auto requestedTitle = NormalizeSearchText(std::wstring(title));
         const auto requestedArtist = NormalizeSearchText(std::wstring(artist));
         const auto requestedAlbum = NormalizeSearchText(request.album);
+        const auto root = core::ParseJson(response->body);
+        if (!root || root->kind != core::JsonValue::Kind::Array) return std::nullopt;
         int bestScore = std::numeric_limits<int>::min();
         bool ambiguousBest = false;
         LyricsDocument best;
-        for (const auto object : JsonArrayObjects(response->body, "")) {
+        for (const auto& object : root->array) {
+            if (object.kind != core::JsonValue::Kind::Object) continue;
             const auto candidateTitle = JsonWideString(object, "trackName");
             const auto candidateArtist = JsonWideString(object, "artistName");
             const auto candidateAlbum = JsonWideString(object, "albumName");
@@ -1040,7 +939,7 @@ std::optional<LyricsDocument> LyricsService::Fetch(const RequestData& request,
                 if (difference > 8.0) continue;
                 score += difference < 1.5 ? 30 : difference < 4.0 ? 15 : 0;
             }
-            auto document = ParseLrclibResponse(object);
+            auto document = ParseLrclibObject(object);
             if (!document.Empty()) {
                 if (score > bestScore) {
                     bestScore = score;
@@ -1072,11 +971,14 @@ std::optional<LyricsDocument> LyricsService::Fetch(const RequestData& request,
                               L"/" + UrlEncode(request.title);
         if (const auto response = HttpGet(fallback, stop); response && response->status >= 200 &&
             response->status < 300) {
-            if (const auto lyrics = JsonString(response->body, "lyrics"); lyrics && !lyrics->empty()) {
-            auto document = ParseLrc(core::Utf8ToWide(*lyrics));
-            document.synced = false;
-            for (auto& line : document.lines) line.timestampSeconds = -1.0;
-            if (!document.Empty()) return document;
+            const auto root = core::ParseJson(response->body);
+            if (root && root->kind == core::JsonValue::Kind::Object) {
+                if (const auto lyrics = JsonString(*root, "lyrics"); lyrics && !lyrics->empty()) {
+                    auto document = ParseLrc(core::Utf8ToWide(*lyrics));
+                    document.synced = false;
+                    for (auto& line : document.lines) line.timestampSeconds = -1.0;
+                    if (!document.Empty()) return document;
+                }
             }
         }
     }

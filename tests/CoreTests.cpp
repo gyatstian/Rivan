@@ -5,6 +5,7 @@
 #include "../src/config/SettingsManager.h"
 #include "../src/core/IniDocument.h"
 #include "../src/core/IniValueCodec.h"
+#include "../src/core/Json.h"
 #include "../src/core/Text.h"
 #include "../src/library/LibraryScanner.h"
 #include "../src/playlist/PlaybackQueue.h"
@@ -3817,18 +3818,132 @@ void TestStatisticsDashboardDerivation() {
           "dashboard period cycle visits week 4weeks month 6months year all time");
 }
 
+void TestCoreJsonParsing() {
+    using namespace rivan::core;
+
+    const auto nested = ParseJson(
+        R"({"a":{"b":[1,2,3]},"c":true,"d":null,"e":"hi","f":-1.5e2,"g":false})");
+    Check(nested.has_value(), "core JSON parses a nested document");
+    if (nested) {
+        Check(nested->kind == JsonValue::Kind::Object, "core JSON root reports Object kind");
+        const auto* a = JsonMember(*nested, "a");
+        Check(a && a->kind == JsonValue::Kind::Object, "core JSON nested object member");
+        const auto* b = a ? JsonMember(*a, "b") : nullptr;
+        Check(b && b->kind == JsonValue::Kind::Array && b->array.size() == 3,
+              "core JSON array member with three elements");
+        if (b) {
+            Check(b->array[0].kind == JsonValue::Kind::Number && b->array[0].number == 1.0,
+                  "core JSON first array element is the number 1");
+            Check(b->array[2].kind == JsonValue::Kind::Number && b->array[2].number == 3.0,
+                  "core JSON third array element is the number 3");
+        }
+        const auto* c = JsonMember(*nested, "c");
+        Check(c && c->kind == JsonValue::Kind::Bool && c->boolean, "core JSON true literal");
+        const auto* g = JsonMember(*nested, "g");
+        Check(g && g->kind == JsonValue::Kind::Bool && !g->boolean, "core JSON false literal");
+        const auto* d = JsonMember(*nested, "d");
+        Check(d && d->kind == JsonValue::Kind::Null, "core JSON null literal");
+        const auto* e = JsonMember(*nested, "e");
+        Check(e && e->kind == JsonValue::Kind::String && e->string == "hi",
+              "core JSON string member");
+        const auto* f = JsonMember(*nested, "f");
+        Check(f && f->kind == JsonValue::Kind::Number && f->number == -150.0,
+              "core JSON negative exponent number");
+        Check(JsonMember(*nested, "nope") == nullptr, "core JSON missing member returns nullptr");
+    }
+
+    const auto escaped = ParseJson(R"("Caf\u00e9 \u0027 \/ \\ \n")");
+    Check(escaped && escaped->kind == JsonValue::Kind::String &&
+              escaped->string == "Café ' / \\ \n",
+          "core JSON decodes unicode, slash, backslash, and newline escapes");
+    const auto whitespaceEscapes = ParseJson(R"("tab\t back\b form\f ret\r")");
+    Check(whitespaceEscapes && whitespaceEscapes->string == "tab\t back\b form\f ret\r",
+          "core JSON decodes tab, backspace, form feed, and carriage return escapes");
+    Check(!ParseJson("\"a\001b\"").has_value(),
+          "core JSON rejects a raw control character inside a string");
+    Check(!ParseJson(R"("\ud800")").has_value(), "core JSON rejects a lone high surrogate");
+    Check(!ParseJson(R"("\udc00")").has_value(), "core JSON rejects a lone low surrogate");
+    const auto astral = ParseJson(R"("\ud83d\ude00")");
+    Check(astral && astral->kind == JsonValue::Kind::String && astral->string == "😀",
+          "core JSON combines surrogate pairs into one astral code point");
+
+    const auto integer = ParseJson("123");
+    Check(integer && integer->kind == JsonValue::Kind::Number && integer->number == 123.0,
+          "core JSON parses an integer");
+    const auto negative = ParseJson("-0.5");
+    Check(negative && negative->kind == JsonValue::Kind::Number && negative->number == -0.5,
+          "core JSON parses a negative fraction");
+    const auto exponent = ParseJson("1e3");
+    Check(exponent && exponent->kind == JsonValue::Kind::Number && exponent->number == 1000.0,
+          "core JSON parses a positive exponent");
+    const auto fractionalExponent = ParseJson("1.5e-2");
+    Check(fractionalExponent && std::abs(fractionalExponent->number - 0.015) < 1e-9,
+          "core JSON parses a fractional exponent");
+    Check(!ParseJson("01").has_value(), "core JSON rejects leading-zero numbers");
+    Check(!ParseJson("-01").has_value(), "core JSON rejects negative leading-zero numbers");
+    Check(!ParseJson("1e999").has_value(), "core JSON rejects out-of-range numbers");
+    Check(!ParseJson("1.").has_value(), "core JSON rejects a fraction without digits");
+    Check(!ParseJson(".5").has_value(), "core JSON rejects a number without an integer part");
+
+    const auto array = ParseJson(R"([1,"two",null,true])");
+    Check(array && array->kind == JsonValue::Kind::Array && array->array.size() == 4,
+          "core JSON parses a top-level array");
+    Check(array && JsonMember(*array, "x") == nullptr,
+          "core JSON JsonMember returns nullptr for non-objects");
+    const auto string = ParseJson(R"("top")");
+    Check(string && string->kind == JsonValue::Kind::String && string->string == "top",
+          "core JSON parses a top-level string");
+    const auto number = ParseJson("42");
+    Check(number && number->kind == JsonValue::Kind::Number && number->number == 42.0,
+          "core JSON parses a top-level number");
+    const auto emptyObject = ParseJson("{}");
+    Check(emptyObject && emptyObject->kind == JsonValue::Kind::Object &&
+              emptyObject->object.empty(),
+          "core JSON parses an empty object");
+    const auto emptyArray = ParseJson("[]");
+    Check(emptyArray && emptyArray->kind == JsonValue::Kind::Array && emptyArray->array.empty(),
+          "core JSON parses an empty array");
+
+    Check(!ParseJson(R"({"a":1} junk)").has_value(), "core JSON rejects trailing garbage");
+    Check(!ParseJson(R"("abc)").has_value(), "core JSON rejects an unterminated string");
+    Check(!ParseJson(R"({"a":1)").has_value(), "core JSON rejects an unterminated object");
+    Check(!ParseJson(R"({"a":)").has_value(), "core JSON rejects a missing value");
+    Check(!ParseJson(R"("\q")").has_value(), "core JSON rejects an unknown escape");
+    Check(!ParseJson(R"({"a":1,})").has_value(), "core JSON rejects a trailing comma");
+    Check(!ParseJson(R"([1,])").has_value(), "core JSON rejects an array trailing comma");
+    Check(!ParseJson("").has_value(), "core JSON rejects empty input");
+    Check(!ParseJson("   ").has_value(), "core JSON rejects whitespace-only input");
+    Check(!ParseJson("nul").has_value(), "core JSON rejects a truncated literal");
+
+    const auto duplicate = ParseJson(R"({"a":1,"a":2})");
+    const auto* duplicateA = duplicate ? JsonMember(*duplicate, "a") : nullptr;
+    Check(duplicateA && duplicateA->kind == JsonValue::Kind::Number && duplicateA->number == 1.0,
+          "core JSON duplicate keys resolve first-wins");
+
+    std::string deep;
+    for (int level = 0; level < 70; ++level) deep += '[';
+    deep += '0';
+    for (int level = 0; level < 70; ++level) deep += ']';
+    Check(!ParseJson(deep).has_value(), "core JSON rejects nesting beyond the depth cap");
+    std::string shallow;
+    for (int level = 0; level < 64; ++level) shallow += '[';
+    shallow += '0';
+    for (int level = 0; level < 64; ++level) shallow += ']';
+    Check(ParseJson(shallow).has_value(), "core JSON accepts nesting at the depth cap");
+}
+
 void TestUpdateReleaseParsing() {
     using rivan::update::UpdateService;
 
-    constexpr std::string_view matching = R"({"tag_name":"1.99","html_url":"https:\/\/github.com\/gyatstian\/Rivan\/releases\/tag\/v1.99"})";
+    constexpr std::string_view matching = R"({"tag_name":"v2.0","html_url":"https:\/\/github.com\/gyatstian\/Rivan\/releases\/tag\/v2.0"})";
     const auto equal = UpdateService::ParseLatestReleaseJson(matching);
-    Check(equal.has_value() && !equal->updateAvailable && equal->latestVersion == L"1.99" &&
-              equal->releaseUrl == L"https://github.com/gyatstian/Rivan/releases/tag/v1.99",
+    Check(equal.has_value() && !equal->updateAvailable && equal->latestVersion == L"v2.0" &&
+              equal->releaseUrl == L"https://github.com/gyatstian/Rivan/releases/tag/v2.0",
           "update parser accepts escaped GitHub release URLs and strips only one leading v for equality");
 
     constexpr std::string_view latest = R"({"html_url":"https://github.com/gyatstian/Rivan/releases/tag/v1.2","tag_name":"V1.2","assets":[{"name":"ignored"}]})";
     const auto newer = UpdateService::ParseLatestReleaseJson(latest);
-    Check(newer.has_value() && newer->updateAvailable && newer->currentVersion == L"v1.99" &&
+    Check(newer.has_value() && newer->updateAvailable && newer->currentVersion == L"v2.0" &&
               newer->latestVersion == L"V1.2",
           "update parser reports every normalized-version mismatch without semantic ordering");
 
@@ -3846,6 +3961,171 @@ void TestUpdateReleaseParsing() {
               !UpdateService::VersionsMatch(L"vv1.1", L"v1.1") &&
               !UpdateService::VersionsMatch(L"v1.1", L"1.1.0"),
           "update version normalization removes at most one leading v or V without semantic comparison");
+}
+
+void TestRenameBridging() {
+    using namespace rivan;
+    TemporaryLibrary files;
+    library::LibraryScanner scanner;
+    const auto scan = scanner.Scan(files.Root());
+
+    playlist::PlaylistManager manager;
+    manager.ApplyScan(scan);
+
+    // Rock/one.MP3 seeds a user playlist entry that must survive a rename and rescan.
+    const auto originalIt = std::find_if(scan.tracks.begin(), scan.tracks.end(),
+                                         [](const auto& track) {
+                                             return track.filePath.filename() == L"one.MP3";
+                                         });
+    Check(originalIt != scan.tracks.end() && originalIt->fileIdentity.HasValue(),
+          "scanned track carries a file identity");
+    if (originalIt == scan.tracks.end()) return;
+    const library::Track& original = *originalIt;
+    const auto playlistId = manager.CreatePlaylist(L"Before Rename");
+    Check(manager.AddExternalTrack(playlistId, original),
+          "user playlist holds the pre-rename track");
+
+    // Rename the backing file and re-scan; the rescan no longer knows the old id.
+    const auto renamedPath = original.filePath.parent_path() / L"one-renamed.mp3";
+    std::error_code ec;
+    std::filesystem::rename(original.filePath, renamedPath, ec);
+    Check(!ec, "renaming the backing file succeeds");
+    const auto rescanned = scanner.Scan(files.Root());
+
+    const auto renames = manager.ApplyScan(rescanned);
+    const auto bridged = std::find_if(renames.begin(), renames.end(),
+                                      [oldId = original.id](const auto& rename) {
+                                          return rename.oldId == oldId;
+                                      });
+    Check(bridged != renames.end(), "rename is bridged from the old id to the new file");
+    if (bridged == renames.end()) return;
+    Check(bridged->replacement.filePath == renamedPath &&
+              bridged->replacement.id != original.id,
+          "bridged replacement points at the renamed file with a fresh id");
+    Check(bridged->replacement.fileIdentity == original.fileIdentity,
+          "bridged replacement shares the old file identity");
+
+    // The user playlist resolves to the renamed track; the old id is gone.
+    const auto resolved = manager.ResolveTracks(playlistId);
+    Check(resolved.size() == 1 && resolved[0].id == bridged->replacement.id &&
+              resolved[0].filePath == renamedPath,
+          "renamed track keeps its user-playlist entry");
+    Check(manager.FindTrack(bridged->replacement.id) != nullptr &&
+              manager.FindTrack(original.id) == nullptr,
+          "new id resolves while the old id is gone");
+}
+
+void TestRenameBridgingFallback() {
+    using namespace rivan;
+    TemporaryLibrary files;
+    const auto oldPath = files.Root() / L"Rock" / L"one.MP3";
+    // Catalog records without file identities (equivalent to volumes/clouds that expose
+    // no stable id). Titles are stem-derived because FromPathOnly avoids metadata reads.
+    library::Track oldTrack = library::Track::FromPathOnly(oldPath);
+    library::Track sibling = library::Track::FromPathOnly(files.Root() / L"Rock" / L"two.flac");
+    Check(!oldTrack.fileIdentity.HasValue(), "fallback fixture has no file identity");
+    playlist::PlaylistManager manager;
+    manager.ApplyScan(MakeScan({oldTrack, sibling}, {}));
+
+    const auto renamedPath = files.Root() / L"Rock" / L"one-renamed.mp3";
+    std::error_code ec;
+    std::filesystem::rename(oldPath, renamedPath, ec);
+    Check(!ec, "renaming the backing file succeeds");
+    library::Track newTrack = library::Track::FromPathOnly(renamedPath);
+    library::Track siblingAgain =
+        library::Track::FromPathOnly(files.Root() / L"Rock" / L"two.flac");
+    const auto renames = manager.ApplyScan(MakeScan({newTrack, siblingAgain}, {}));
+
+    const auto bridged = std::find_if(renames.begin(), renames.end(),
+                                      [old = oldTrack.id](const auto& rename) {
+                                          return rename.oldId == old;
+                                      });
+    Check(bridged != renames.end(),
+          "identity-less rename bridged via the directory one-in/one-out fallback");
+    if (bridged != renames.end()) {
+        Check(bridged->replacement.id == newTrack.id &&
+                  bridged->replacement.filePath == renamedPath,
+              "fallback bridge lands on the renamed file");
+    }
+}
+
+void TestStatsSnapshotRenameMigration() {
+    using namespace rivan;
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanStatsRenameTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+
+    const std::filesystem::path oldPath = root / L"old.mp3";
+    const std::filesystem::path newPath = root / L"new.mp3";
+    const auto oldId = library::Track::FromPathOnly(oldPath).id;
+    const auto newId = library::Track::FromPathOnly(newPath).id;
+
+    // A weekly snapshot holding data for the old song id.
+    core::IniDocument snapshot;
+    snapshot.Set("meta", "format", "rivan-stats-weekly");
+    snapshot.Set("meta", "period", "17082026-23082026");
+    snapshot.Set(stats::SongSectionName(oldId), "path", core::WideToUtf8(oldPath.wstring()));
+    snapshot.Set(stats::SongSectionName(oldId), "p", "5|120");
+    const auto snapshotFile = root / L"17082026-23082026.ini";
+    Check(snapshot.SaveAtomic(snapshotFile, nullptr), "snapshot file saved");
+
+    const std::size_t rewritten = stats::RewriteSnapshotSongIdentifier(
+        root, {}, oldId, newId, core::WideToUtf8(oldPath.wstring()),
+        core::WideToUtf8(newPath.wstring()));
+    Check(rewritten == 1, "renamed song section rewritten in the snapshot");
+
+    const auto reloaded = core::IniDocument::Load(snapshotFile, nullptr);
+    Check(reloaded && reloaded->HasMetaFormat("rivan-stats-weekly"),
+          "snapshot meta format survives the rewrite");
+    const auto plays = reloaded ? reloaded->Get(stats::SongSectionName(newId), "p") : std::nullopt;
+    Check(plays && *plays == "5|120", "counters moved to the new id section");
+    const auto path = reloaded ? reloaded->Get(stats::SongSectionName(newId), "path") : std::nullopt;
+    Check(path && *path == core::WideToUtf8(newPath.wstring()),
+          "stored path updated to the renamed file");
+    Check(reloaded && !reloaded->Data().contains(stats::SongSectionName(oldId)),
+          "old id section removed from the snapshot");
+
+    std::filesystem::remove_all(root, ec);
+}
+
+void TestLyricsRenameRetarget() {
+    using namespace rivan;
+    const auto root = std::filesystem::temp_directory_path() /
+                      (L"RivanLyricsRetargetTests-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    const auto directory = root / L"lyrics";
+    const auto oldPath = root / L"Song.mp3";
+    const auto newPath = root / L"Song Renamed.mp3";
+
+    const auto synced = lyrics::LyricsService::ParseLrc(L"[00:01.00]Hello\n");
+    const auto saved = lyrics::LyricsService::SaveLyricsFile(directory, L"Song", oldPath, synced);
+    Check(!saved.empty(), "lyrics file saved for the old path");
+
+    const auto rewritten =
+        lyrics::LyricsService::RetargetLyricsFilePaths(directory, oldPath, newPath);
+    Check(rewritten == 1, "lyrics file retargeted to the renamed path");
+
+    {
+        std::string bytes;
+        {
+            std::ifstream input(saved, std::ios::binary);
+            bytes.assign(std::istreambuf_iterator<char>(input),
+                         std::istreambuf_iterator<char>());
+        }
+        const auto oldUtf8 = core::WideToUtf8(oldPath.wstring());
+        const auto newUtf8 = core::WideToUtf8(newPath.wstring());
+        Check(bytes.find(newUtf8) != std::string::npos &&
+                  bytes.find(oldUtf8) == std::string::npos,
+              "lyrics header now references the new path only");
+    }
+    Check(lyrics::LyricsService::RetargetLyricsFilePaths(directory, oldPath, newPath) == 0,
+          "already-retargeted files are not rewritten again");
+
+    std::filesystem::remove_all(root, ec);
 }
 
 } // namespace
@@ -3884,6 +4164,10 @@ int main() {
     TestNestedRootDedup();
     TestSiblingRootRetention();
     TestAddExternalTrackDuplicateGuard();
+    TestRenameBridging();
+    TestRenameBridgingFallback();
+    TestStatsSnapshotRenameMigration();
+    TestLyricsRenameRetarget();
     TestCollapseShiftIsolation();
     TestTabStripProportionalWidths();
     TestListenStatsPeriodKeys();
@@ -3894,6 +4178,7 @@ int main() {
     TestListenStatsStartupRollover();
     TestListenSessionPlayRule();
     TestStatisticsDashboardDerivation();
+    TestCoreJsonParsing();
     TestUpdateReleaseParsing();
     if (failures == 0) std::cout << "Rivan core tests passed\n";
     return failures == 0 ? 0 : 1;

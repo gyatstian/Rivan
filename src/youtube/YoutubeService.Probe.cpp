@@ -1,279 +1,38 @@
 // YoutubeService.Probe.cpp
 #include "YoutubeService.Internal.h"
 
+#include "../core/Json.h"
+
 #include <algorithm>
-#include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <utility>
 
 namespace rivan::youtube::detail {
 namespace {
 
-struct JsonValue final {
-    enum class Kind : std::uint8_t { Null, Bool, Number, String, Object, Array };
-    Kind kind{Kind::Null};
-    double number{};
-    std::string string;
-    std::vector<std::pair<std::string, JsonValue>> object;
-    std::vector<JsonValue> array;
-};
-
-class JsonParser final {
-public:
-    explicit JsonParser(std::string_view text) : text_(text) {}
-
-    [[nodiscard]] bool Parse(JsonValue& value) {
-        SkipWhitespace();
-        return ParseValue(value, 0);
-    }
-
-private:
-    void SkipWhitespace() {
-        while (position_ < text_.size()) {
-            const char ch = text_[position_];
-            if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') break;
-            ++position_;
-        }
-    }
-
-    [[nodiscard]] bool Consume(char expected) {
-        SkipWhitespace();
-        if (position_ >= text_.size() || text_[position_] != expected) return false;
-        ++position_;
-        return true;
-    }
-
-    [[nodiscard]] bool ParseValue(JsonValue& value, std::size_t depth) {
-        if (depth > 64) return false;
-        SkipWhitespace();
-        if (position_ >= text_.size()) return false;
-        switch (text_[position_]) {
-        case '{': return ParseObject(value, depth + 1);
-        case '[': return ParseArray(value, depth + 1);
-        case '"':
-            value.kind = JsonValue::Kind::String;
-            return ParseString(value.string);
-        case 't': return ParseLiteral(value, "true", JsonValue::Kind::Bool);
-        case 'f': return ParseLiteral(value, "false", JsonValue::Kind::Bool);
-        case 'n': return ParseLiteral(value, "null", JsonValue::Kind::Null);
-        default: return ParseNumber(value);
-        }
-    }
-
-    [[nodiscard]] bool ParseLiteral(JsonValue& value, std::string_view literal,
-                                    JsonValue::Kind kind) {
-        if (text_.substr(position_, literal.size()) != literal) return false;
-        position_ += literal.size();
-        value.kind = kind;
-        return true;
-    }
-
-    [[nodiscard]] bool ParseNumber(JsonValue& value) {
-        const std::size_t start = position_;
-        if (position_ < text_.size() && text_[position_] == '-') ++position_;
-        if (position_ >= text_.size()) return false;
-        if (text_[position_] == '0') {
-            ++position_;
-        } else {
-            if (text_[position_] < '1' || text_[position_] > '9') return false;
-            while (position_ < text_.size() && text_[position_] >= '0' &&
-                   text_[position_] <= '9') {
-                ++position_;
-            }
-        }
-        if (position_ < text_.size() && text_[position_] == '.') {
-            ++position_;
-            const std::size_t fractionStart = position_;
-            while (position_ < text_.size() && text_[position_] >= '0' &&
-                   text_[position_] <= '9') {
-                ++position_;
-            }
-            if (position_ == fractionStart) return false;
-        }
-        if (position_ < text_.size() && (text_[position_] == 'e' || text_[position_] == 'E')) {
-            ++position_;
-            if (position_ < text_.size() && (text_[position_] == '+' || text_[position_] == '-')) {
-                ++position_;
-            }
-            const std::size_t exponentStart = position_;
-            while (position_ < text_.size() && text_[position_] >= '0' &&
-                   text_[position_] <= '9') {
-                ++position_;
-            }
-            if (position_ == exponentStart) return false;
-        }
-        const auto numberText = text_.substr(start, position_ - start);
-        const auto [end, error] = std::from_chars(
-            numberText.data(), numberText.data() + numberText.size(), value.number);
-        if (error != std::errc{} || end != numberText.data() + numberText.size()) return false;
-        value.kind = JsonValue::Kind::Number;
-        return true;
-    }
-
-    static void AppendUtf8(std::string& out, std::uint32_t codePoint) {
-        if (codePoint <= 0x7f) {
-            out.push_back(static_cast<char>(codePoint));
-        } else if (codePoint <= 0x7ff) {
-            out.push_back(static_cast<char>(0xc0 | (codePoint >> 6)));
-            out.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
-        } else if (codePoint <= 0xffff) {
-            out.push_back(static_cast<char>(0xe0 | (codePoint >> 12)));
-            out.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
-            out.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
-        } else if (codePoint <= 0x10ffff) {
-            out.push_back(static_cast<char>(0xf0 | (codePoint >> 18)));
-            out.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3f)));
-            out.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
-            out.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
-        }
-    }
-
-    [[nodiscard]] bool ParseHex4(std::uint32_t& codeUnit) {
-        if (position_ + 4 > text_.size()) return false;
-        codeUnit = 0;
-        for (int n = 0; n < 4; ++n) {
-            const char digit = text_[position_++];
-            codeUnit <<= 4;
-            if (digit >= '0' && digit <= '9') codeUnit += digit - '0';
-            else if (digit >= 'a' && digit <= 'f') codeUnit += digit - 'a' + 10;
-            else if (digit >= 'A' && digit <= 'F') codeUnit += digit - 'A' + 10;
-            else return false;
-        }
-        return true;
-    }
-
-    [[nodiscard]] bool ParseString(std::string& value) {
-        if (position_ >= text_.size() || text_[position_] != '"') return false;
-        ++position_;
-        value.clear();
-        while (position_ < text_.size()) {
-            const unsigned char ch = static_cast<unsigned char>(text_[position_++]);
-            if (ch == '"') return true;
-            if (ch < 0x20) return false;
-            if (ch != '\\') {
-                value.push_back(static_cast<char>(ch));
-                continue;
-            }
-            if (position_ >= text_.size()) return false;
-            const char escaped = text_[position_++];
-            switch (escaped) {
-            case '"': value.push_back('"'); break;
-            case '\\': value.push_back('\\'); break;
-            case '/': value.push_back('/'); break;
-            case 'b': value.push_back('\b'); break;
-            case 'f': value.push_back('\f'); break;
-            case 'n': value.push_back('\n'); break;
-            case 'r': value.push_back('\r'); break;
-            case 't': value.push_back('\t'); break;
-            case 'u': {
-                std::uint32_t codePoint = 0;
-                if (!ParseHex4(codePoint)) return false;
-                if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
-                    if (position_ + 2 > text_.size() || text_[position_] != '\\' ||
-                        text_[position_ + 1] != 'u') {
-                        return false;
-                    }
-                    position_ += 2;
-                    std::uint32_t lowSurrogate = 0;
-                    if (!ParseHex4(lowSurrogate) || lowSurrogate < 0xdc00 ||
-                        lowSurrogate > 0xdfff) {
-                        return false;
-                    }
-                    codePoint = 0x10000 + ((codePoint - 0xd800) << 10) +
-                                (lowSurrogate - 0xdc00);
-                } else if (codePoint >= 0xdc00 && codePoint <= 0xdfff) {
-                    return false;
-                }
-                AppendUtf8(value, codePoint);
-                break;
-            }
-            default: return false;
-            }
-        }
-        return false;
-    }
-
-    [[nodiscard]] bool ParseObject(JsonValue& value, std::size_t depth) {
-        value.kind = JsonValue::Kind::Object;
-        value.object.clear();
-        ++position_;
-        SkipWhitespace();
-        if (position_ < text_.size() && text_[position_] == '}') {
-            ++position_;
-            return true;
-        }
-        for (;;) {
-            SkipWhitespace();
-            std::string key;
-            if (!ParseString(key) || !Consume(':')) return false;
-            JsonValue child;
-            if (!ParseValue(child, depth)) return false;
-            value.object.emplace_back(std::move(key), std::move(child));
-            SkipWhitespace();
-            if (position_ >= text_.size()) return false;
-            if (text_[position_] == '}') {
-                ++position_;
-                return true;
-            }
-            if (text_[position_] != ',') return false;
-            ++position_;
-        }
-    }
-
-    [[nodiscard]] bool ParseArray(JsonValue& value, std::size_t depth) {
-        value.kind = JsonValue::Kind::Array;
-        value.array.clear();
-        ++position_;
-        SkipWhitespace();
-        if (position_ < text_.size() && text_[position_] == ']') {
-            ++position_;
-            return true;
-        }
-        for (;;) {
-            JsonValue child;
-            if (!ParseValue(child, depth)) return false;
-            value.array.push_back(std::move(child));
-            SkipWhitespace();
-            if (position_ >= text_.size()) return false;
-            if (text_[position_] == ']') {
-                ++position_;
-                return true;
-            }
-            if (text_[position_] != ',') return false;
-            ++position_;
-        }
-    }
-
-    std::string_view text_;
-    std::size_t position_{};
-};
-
-const JsonValue* Member(const JsonValue& object, std::string_view name) {
-    if (object.kind != JsonValue::Kind::Object) return nullptr;
-    const auto found = std::find_if(
-        object.object.begin(), object.object.end(),
-        [name](const auto& member) { return member.first == name; });
-    return found == object.object.end() ? nullptr : &found->second;
+const core::JsonValue* Member(const core::JsonValue& object, std::string_view name) {
+    return core::JsonMember(object, name);
 }
 
-std::string StringMember(const JsonValue& object, std::string_view name) {
+std::string StringMember(const core::JsonValue& object, std::string_view name) {
     const auto* value = Member(object, name);
-    return value && value->kind == JsonValue::Kind::String ? value->string : std::string{};
+    return value && value->kind == core::JsonValue::Kind::String ? value->string : std::string{};
 }
 
-std::wstring VideoIdMember(const JsonValue& object) {
+std::wstring VideoIdMember(const core::JsonValue& object) {
     return Utf8ToWide(StringMember(object, "id"));
 }
 
-double NumberMember(const JsonValue& object, std::string_view name) {
+double NumberMember(const core::JsonValue& object, std::string_view name) {
     const auto* value = Member(object, name);
-    return value && value->kind == JsonValue::Kind::Number && std::isfinite(value->number)
+    return value && value->kind == core::JsonValue::Kind::Number && std::isfinite(value->number)
                ? std::max(0.0, value->number)
                : 0.0;
 }
 
-std::uint64_t SizeMember(const JsonValue& object) {
+std::uint64_t SizeMember(const core::JsonValue& object) {
     const double exact = NumberMember(object, "filesize");
     const double approximate = NumberMember(object, "filesize_approx");
     const double value = exact > 0.0 ? exact : approximate;
@@ -282,24 +41,55 @@ std::uint64_t SizeMember(const JsonValue& object) {
                : static_cast<std::uint64_t>(value);
 }
 
+// External-process output may append trailing text after the JSON document (e.g. a
+// yt-dlp warning line on stdout). Strict ParseJson needs the whole span to be valid, so
+// this tolerance is restored for such output only. Returns the candidate's first
+// balanced root-object span, or the full candidate when the braces never balance.
+[[nodiscard]] std::string_view FirstObjectSpan(std::string_view candidate) noexcept {
+    int depth = 0;
+    bool quoted = false;
+    bool escaped = false;
+    for (std::size_t index = 0; index < candidate.size(); ++index) {
+        const char value = candidate[index];
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (value == '\\') escaped = true;
+            else if (value == '"') quoted = false;
+            continue;
+        }
+        if (value == '"') {
+            quoted = true;
+        } else if (value == '{') {
+            ++depth;
+        } else if (value == '}' && --depth == 0) {
+            return candidate.substr(0, index + 1U);
+        }
+    }
+    return candidate;
+}
+
 } // namespace
 
 std::optional<YoutubeProbe> ParseProbeJson(const std::string& stdoutText) {
     for (std::size_t start = stdoutText.find('{'); start != std::string::npos;
          start = stdoutText.find('{', start + 1)) {
-        JsonValue root;
-        JsonParser parser(std::string_view(stdoutText).substr(start));
-        if (!parser.Parse(root)) continue;
-        const auto title = StringMember(root, "title");
-        const auto* formats = Member(root, "formats");
-        if (title.empty() || !formats || formats->kind != JsonValue::Kind::Array) continue;
+        const auto candidate = std::string_view(stdoutText).substr(start);
+        // The shared parser is intentionally strict (full-input consumption), but yt-dlp
+        // may append a trailing warning line; retry the balanced root-object span so
+        // external-process output keeps the former trailing-garbage tolerance.
+        auto root = core::ParseJson(candidate);
+        if (!root) root = core::ParseJson(FirstObjectSpan(candidate));
+        if (!root || root->kind != core::JsonValue::Kind::Object) continue;
+        const auto title = StringMember(*root, "title");
+        const auto* formats = Member(*root, "formats");
+        if (title.empty() || !formats || formats->kind != core::JsonValue::Kind::Array) continue;
 
         YoutubeProbe probe;
-        probe.videoId = VideoIdMember(root);
+        probe.videoId = VideoIdMember(*root);
         probe.title = Utf8ToWide(title);
-        probe.durationSeconds = NumberMember(root, "duration");
+        probe.durationSeconds = NumberMember(*root, "duration");
         for (const auto& format : formats->array) {
-            if (format.kind != JsonValue::Kind::Object) continue;
+            if (format.kind != core::JsonValue::Kind::Object) continue;
             const auto id = StringMember(format, "format_id");
             const auto extension = StringMember(format, "ext");
             if (id.empty() || extension.empty()) continue;

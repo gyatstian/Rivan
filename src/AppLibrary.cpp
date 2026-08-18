@@ -190,10 +190,27 @@ void App::ApplyCompletedScan() {
     // Apply the completed catalog before exposing it to the UI.  The scan result is
     // moved into PlaylistManager here; no UI callback may observe the intermediate
     // vector replacement.
-    playlists_.ApplyScan(*result);
+    const auto renames = playlists_.ApplyScan(*result);
+    for (const auto& rename : renames) {
+        // Migrate per-song stores so a renamed file keeps its play counts and lyrics.
+        stats_.ApplyTrackRename(rename.oldId, rename.replacement.id, rename.oldPath,
+                                rename.replacement.filePath);
+        lyrics_.NotifyTrackRenamed(rename.oldId, rename.replacement.id, rename.oldPath,
+                                   rename.replacement.filePath);
+        if (activeTrack_ && activeTrack_->id == rename.oldId) {
+            activeTrack_ = rename.replacement;
+            selectedTrack_ = rename.replacement.id;
+            // Re-resolve lyrics under the new id so ongoing lyric presence still matches.
+            RefreshActiveLyrics();
+        }
+    }
     ApplyFolderOrderAfterScan();
     ApplyTrackOrderAfterScan();
     RestoreSessionAfterScan();
+    if (!renames.empty()) {
+        // Reflect renamed tracks in Rich Presence right away, even while paused.
+        UpdateDiscordPresence();
+    }
     ++revision_;
 }
 

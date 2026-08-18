@@ -148,6 +148,20 @@ struct ListenStatsModel {
     ListenStatsModel& model,
     const PeriodKeys& current);
 
+// After a library file is renamed its track id changes (ids derive from the path), so
+// every period-snapshot file that stored the old id must move to the new id and update
+// its stored path, or the song disappears from historical periods. Rewrites all
+// "*.ini" files under `statsDirectory` except `skipFile` (the live main file, which is
+// migrated in memory). Returns the number of files rewritten. Best effort: unreadable
+// or malformed files are left untouched.
+[[nodiscard]] std::size_t RewriteSnapshotSongIdentifier(
+    const std::filesystem::path& statsDirectory,
+    const std::filesystem::path& skipFile,
+    std::uint64_t oldId,
+    std::uint64_t newId,
+    std::string oldUtf8Path,
+    std::string newUtf8Path);
+
 // ---------------------------------------------------------------------------
 // One continuous listening session: accumulated actual seconds + the 30% play rule.
 // ---------------------------------------------------------------------------

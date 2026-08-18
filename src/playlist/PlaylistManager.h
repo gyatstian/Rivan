@@ -4,6 +4,7 @@
 
 #include "Playlist.h"
 
+#include <filesystem>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -14,9 +15,22 @@ struct LibraryScanResult;
 
 namespace rivan::playlist {
 
+// A backing file detected as renamed between two scans: the old id/path is gone and a
+// new catalog entry carries the same file identity. `replacement` is the fresh scan
+// record (new id + new path). Returned by ApplyScan so callers can migrate per-song
+// stores (statistics, lyrics) before the catalog swap lands.
+struct TrackRename final {
+    library::TrackId oldId{};
+    std::filesystem::path oldPath;
+    library::Track replacement;
+};
+
 class PlaylistManager final {
 public:
-    void ApplyScan(const library::LibraryScanResult& scan);
+    // Applies a scan result; detects renames by matching the previous catalog's file
+    // identities against the new scan and remaps playlist entries (old id -> new id
+    // and path) before the catalog is replaced. Returns the renames detected.
+    std::vector<TrackRename> ApplyScan(const library::LibraryScanResult& scan);
 
     [[nodiscard]] const std::vector<Playlist>& Playlists() const noexcept;
     // Current deduplicated library catalog, including tracks retained as external imports.
@@ -77,6 +91,10 @@ public:
 private:
     void ReplaceLibrary(std::vector<library::Track> tracks,
                         std::vector<Playlist> generatedPlaylists);
+    // Matches renamed backing files between the current catalog and a fresh scan by
+    // file identity. Reported before ReplaceLibrary so empty user playlists stay intact.
+    [[nodiscard]] std::vector<TrackRename> DetectRenames(
+        std::span<const library::Track> newTracks);
     [[nodiscard]] Playlist* FindMutableUserPlaylist(PlaylistId id) noexcept;
     // Track reorder is allowed on both User playlists and Directory folders (the latter
     // persists to the folder track-order INI), so it uses a broader lookup than the

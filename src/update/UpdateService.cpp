@@ -1,6 +1,8 @@
 // UpdateService.cpp
 #include "UpdateService.h"
 
+#include "../core/Json.h"
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -34,233 +36,6 @@ constexpr std::string_view kReleaseUrlPrefix{
     }
     return version;
 }
-
-[[nodiscard]] bool AppendUtf8CodePoint(std::string& output, const std::uint32_t codePoint) {
-    if (codePoint <= 0x7fU) {
-        output.push_back(static_cast<char>(codePoint));
-    } else if (codePoint <= 0x7ffU) {
-        output.push_back(static_cast<char>(0xc0U | (codePoint >> 6U)));
-        output.push_back(static_cast<char>(0x80U | (codePoint & 0x3fU)));
-    } else if (codePoint <= 0xffffU) {
-        output.push_back(static_cast<char>(0xe0U | (codePoint >> 12U)));
-        output.push_back(static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3fU)));
-        output.push_back(static_cast<char>(0x80U | (codePoint & 0x3fU)));
-    } else if (codePoint <= 0x10ffffU) {
-        output.push_back(static_cast<char>(0xf0U | (codePoint >> 18U)));
-        output.push_back(static_cast<char>(0x80U | ((codePoint >> 12U) & 0x3fU)));
-        output.push_back(static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3fU)));
-        output.push_back(static_cast<char>(0x80U | (codePoint & 0x3fU)));
-    } else {
-        return false;
-    }
-    return true;
-}
-
-class JsonReader final {
-public:
-    explicit JsonReader(const std::string_view text) : text_(text) {}
-
-    [[nodiscard]] bool ParseLatestRelease(std::string& tagName, std::string& htmlUrl) {
-        SkipWhitespace();
-        if (!Consume('{')) return false;
-        SkipWhitespace();
-        if (Consume('}')) return false;
-
-        bool hasTagName = false;
-        bool hasHtmlUrl = false;
-        for (;;) {
-            std::string key;
-            if (!ParseString(key)) return false;
-            SkipWhitespace();
-            if (!Consume(':')) return false;
-            SkipWhitespace();
-
-            if (key == "tag_name") {
-                if (hasTagName || !ParseString(tagName)) return false;
-                hasTagName = true;
-            } else if (key == "html_url") {
-                if (hasHtmlUrl || !ParseString(htmlUrl)) return false;
-                hasHtmlUrl = true;
-            } else if (!SkipValue(0)) {
-                return false;
-            }
-
-            SkipWhitespace();
-            if (Consume('}')) break;
-            if (!Consume(',')) return false;
-            SkipWhitespace();
-        }
-        SkipWhitespace();
-        return position_ == text_.size() && hasTagName && hasHtmlUrl;
-    }
-
-private:
-    void SkipWhitespace() noexcept {
-        while (position_ < text_.size()) {
-            const char value = text_[position_];
-            if (value != ' ' && value != '\t' && value != '\r' && value != '\n') return;
-            ++position_;
-        }
-    }
-
-    [[nodiscard]] bool Consume(const char expected) noexcept {
-        if (position_ == text_.size() || text_[position_] != expected) return false;
-        ++position_;
-        return true;
-    }
-
-    [[nodiscard]] static int HexValue(const char value) noexcept {
-        if (value >= '0' && value <= '9') return value - '0';
-        if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-        if (value >= 'A' && value <= 'F') return value - 'A' + 10;
-        return -1;
-    }
-
-    [[nodiscard]] bool ParseUnicodeEscape(std::uint32_t& value) {
-        if (position_ + 4 > text_.size()) return false;
-        value = 0;
-        for (int index = 0; index < 4; ++index) {
-            const int digit = HexValue(text_[position_++]);
-            if (digit < 0) return false;
-            value = (value << 4U) | static_cast<std::uint32_t>(digit);
-        }
-        return true;
-    }
-
-    [[nodiscard]] bool ParseString(std::string& output) {
-        if (!Consume('"')) return false;
-        output.clear();
-        while (position_ < text_.size()) {
-            const unsigned char value = static_cast<unsigned char>(text_[position_++]);
-            if (value == '"') return true;
-            if (value < 0x20U) return false;
-            if (value != '\\') {
-                output.push_back(static_cast<char>(value));
-                continue;
-            }
-            if (position_ == text_.size()) return false;
-            switch (text_[position_++]) {
-            case '"': output.push_back('"'); break;
-            case '\\': output.push_back('\\'); break;
-            case '/': output.push_back('/'); break;
-            case 'b': output.push_back('\b'); break;
-            case 'f': output.push_back('\f'); break;
-            case 'n': output.push_back('\n'); break;
-            case 'r': output.push_back('\r'); break;
-            case 't': output.push_back('\t'); break;
-            case 'u': {
-                std::uint32_t codePoint{};
-                if (!ParseUnicodeEscape(codePoint)) return false;
-                if (codePoint >= 0xd800U && codePoint <= 0xdbffU) {
-                    if (position_ + 2 > text_.size() || text_[position_] != '\\' ||
-                        text_[position_ + 1] != 'u') {
-                        return false;
-                    }
-                    position_ += 2;
-                    std::uint32_t lowSurrogate{};
-                    if (!ParseUnicodeEscape(lowSurrogate) || lowSurrogate < 0xdc00U ||
-                        lowSurrogate > 0xdfffU) {
-                        return false;
-                    }
-                    codePoint = 0x10000U + ((codePoint - 0xd800U) << 10U) +
-                                (lowSurrogate - 0xdc00U);
-                } else if (codePoint >= 0xdc00U && codePoint <= 0xdfffU) {
-                    return false;
-                }
-                if (!AppendUtf8CodePoint(output, codePoint)) return false;
-                break;
-            }
-            default:
-                return false;
-            }
-        }
-        return false;
-    }
-
-    [[nodiscard]] bool SkipLiteral(const std::string_view literal) noexcept {
-        if (text_.substr(position_, literal.size()) != literal) return false;
-        position_ += literal.size();
-        return true;
-    }
-
-    [[nodiscard]] bool SkipNumber() noexcept {
-        const std::size_t start = position_;
-        (void)Consume('-');
-        if (Consume('0')) {
-            // JSON disallows leading zeroes. The next parser stage rejects any trailing digit.
-        } else {
-            if (position_ == text_.size() || text_[position_] < '1' || text_[position_] > '9') {
-                return false;
-            }
-            do {
-                ++position_;
-            } while (position_ < text_.size() && text_[position_] >= '0' && text_[position_] <= '9');
-        }
-        if (Consume('.')) {
-            const std::size_t fractionStart = position_;
-            while (position_ < text_.size() && text_[position_] >= '0' && text_[position_] <= '9') {
-                ++position_;
-            }
-            if (position_ == fractionStart) return false;
-        }
-        if (position_ < text_.size() && (text_[position_] == 'e' || text_[position_] == 'E')) {
-            ++position_;
-            if (position_ < text_.size() && (text_[position_] == '+' || text_[position_] == '-')) {
-                ++position_;
-            }
-            const std::size_t exponentStart = position_;
-            while (position_ < text_.size() && text_[position_] >= '0' && text_[position_] <= '9') {
-                ++position_;
-            }
-            if (position_ == exponentStart) return false;
-        }
-        return position_ != start;
-    }
-
-    [[nodiscard]] bool SkipValue(const unsigned depth) {
-        if (depth > 32U) return false;
-        SkipWhitespace();
-        if (position_ == text_.size()) return false;
-        switch (text_[position_]) {
-        case '"': {
-            std::string ignored;
-            return ParseString(ignored);
-        }
-        case '{':
-            ++position_;
-            SkipWhitespace();
-            if (Consume('}')) return true;
-            for (;;) {
-                std::string ignored;
-                if (!ParseString(ignored)) return false;
-                SkipWhitespace();
-                if (!Consume(':') || !SkipValue(depth + 1U)) return false;
-                SkipWhitespace();
-                if (Consume('}')) return true;
-                if (!Consume(',')) return false;
-                SkipWhitespace();
-            }
-        case '[':
-            ++position_;
-            SkipWhitespace();
-            if (Consume(']')) return true;
-            for (;;) {
-                if (!SkipValue(depth + 1U)) return false;
-                SkipWhitespace();
-                if (Consume(']')) return true;
-                if (!Consume(',')) return false;
-                SkipWhitespace();
-            }
-        case 't': return SkipLiteral("true");
-        case 'f': return SkipLiteral("false");
-        case 'n': return SkipLiteral("null");
-        default: return SkipNumber();
-        }
-    }
-
-    std::string_view text_;
-    std::size_t position_{};
-};
 
 [[nodiscard]] std::optional<std::wstring> Utf8ToWide(const std::string_view value) {
     if (value.empty()) return std::wstring{};
@@ -353,14 +128,20 @@ std::optional<UpdateSnapshot> UpdateService::ParseLatestReleaseJson(const std::s
                             static_cast<int>(json.size()), nullptr, 0) <= 0) {
         return std::nullopt;
     }
-    std::string tagName;
-    std::string htmlUrl;
-    JsonReader reader(json);
-    if (!reader.ParseLatestRelease(tagName, htmlUrl) || tagName.empty() || !IsSafeReleaseUrl(htmlUrl)) {
+    // Shared-parser semantic: duplicate keys resolve first-wins. The former streaming
+    // reader rejected duplicates outright, which no release payload relied on.
+    const auto root = core::ParseJson(json);
+    if (!root || root->kind != core::JsonValue::Kind::Object) return std::nullopt;
+    const auto* tag = core::JsonMember(*root, "tag_name");
+    if (!tag || tag->kind != core::JsonValue::Kind::String || tag->string.empty()) {
         return std::nullopt;
     }
-    auto latestVersion = Utf8ToWide(tagName);
-    auto releaseUrl = Utf8ToWide(htmlUrl);
+    const auto* url = core::JsonMember(*root, "html_url");
+    if (!url || url->kind != core::JsonValue::Kind::String || !IsSafeReleaseUrl(url->string)) {
+        return std::nullopt;
+    }
+    auto latestVersion = Utf8ToWide(tag->string);
+    auto releaseUrl = Utf8ToWide(url->string);
     if (!latestVersion || !releaseUrl) return std::nullopt;
     const bool updateAvailable = !VersionsMatch(kCurrentVersion, *latestVersion);
     return UpdateSnapshot(std::move(*latestVersion), std::move(*releaseUrl), updateAvailable);

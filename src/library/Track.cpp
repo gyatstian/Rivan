@@ -8,8 +8,18 @@
 #include <propvarutil.h>
 #include <wrl/client.h>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+
 #include <cwctype>
 #include <system_error>
+
+#ifdef _WIN32
+#else
+#include <sys/stat.h>
+#endif
 
 namespace rivan::library {
 namespace {
@@ -55,6 +65,34 @@ TrackId PathId(const std::filesystem::path& path) noexcept {
     constexpr std::uint64_t offset = 14695981039346656037ull;
     const auto hash = FnvHashFoldCase(path.generic_wstring(), offset);
     return hash == 0 ? 1 : hash;
+}
+
+// Reads the platform file identity (volume serial + file index on Windows,
+// device + inode on POSIX filesystems) so a rename on the same volume is still
+// recognized as the same backing file. Returns nullopt when the file cannot be
+// opened or the filesystem exposes no stable id.
+std::optional<FileIdentity> QueryFileIdentity(const std::filesystem::path& path) noexcept {
+    FileIdentity identity;
+#ifdef _WIN32
+    const HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS,
+                                      nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return std::nullopt;
+    BY_HANDLE_FILE_INFORMATION info{};
+    const BOOL ok = GetFileInformationByHandle(handle, &info);
+    CloseHandle(handle);
+    if (!ok) return std::nullopt;
+    identity.volume = info.dwVolumeSerialNumber;
+    identity.index = (static_cast<std::uint64_t>(info.nFileIndexHigh) << 32) |
+                     info.nFileIndexLow;
+#else
+    struct stat status {};
+    if (stat(path.c_str(), &status) != 0) return std::nullopt;
+    identity.volume = static_cast<std::uint64_t>(status.st_dev);
+    identity.index = static_cast<std::uint64_t>(status.st_ino);
+#endif
+    return identity.HasValue() ? std::optional<FileIdentity>(identity) : std::nullopt;
 }
 
 std::wstring Lowercase(std::wstring value) noexcept {
@@ -106,12 +144,18 @@ Track Track::FromFile(const std::filesystem::path& path) {
     Track track;
     track.filePath = NormalizePath(path);
     track.id = PathId(track.filePath);
+    if (const auto identity = QueryFileIdentity(track.filePath); identity) {
+        track.fileIdentity = *identity;
+    }
     ReadEmbeddedMetadata(track.filePath, track);
     if (track.title.empty()) track.title = track.filePath.stem().wstring();
     return track;
 }
 
 Track Track::FromPathOnly(const std::filesystem::path& path) {
+    // Path-only construction skips the shell metadata read and the handle open; callers
+    // that only need the stable id or the normalized path avoid both. The file identity
+    // is left zero so rename bridging never matches a record that was never scanned.
     Track track;
     track.filePath = NormalizePath(path);
     track.id = PathId(track.filePath);

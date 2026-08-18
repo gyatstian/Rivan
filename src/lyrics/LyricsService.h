@@ -65,6 +65,12 @@ public:
     void Request(std::uint64_t trackId, std::wstring title, std::wstring artist,
                  std::wstring album, double durationSeconds,
                  std::filesystem::path filePath = {});
+    // A library file was renamed (same backing file, new track id and path). Rekeys the
+    // in-memory snapshots/pending request for the old id and rewrites the '#Song file:'
+    // headers of cached lyrics files so the renamed path still resolves its lyrics.
+    void NotifyTrackRenamed(std::uint64_t oldTrackId, std::uint64_t newTrackId,
+                            const std::filesystem::path& oldPath,
+                            const std::filesystem::path& newPath);
     void Reset();
     void Shutdown();
 
@@ -106,6 +112,14 @@ public:
     [[nodiscard]] static std::filesystem::path SaveLyricsFile(
         const std::filesystem::path& directory, std::wstring title,
         const std::filesystem::path& filePath, const LyricsDocument& document);
+
+    // Rewrites the '#Song file:' header in every unified lyrics file under `directory`
+    // that still references `oldPath` so a renamed media file keeps its lyrics.
+    // Returns the number of files updated. Best effort; malformed files are untouched.
+    [[nodiscard]] static std::size_t RetargetLyricsFilePaths(
+        const std::filesystem::path& directory,
+        const std::filesystem::path& oldPath,
+        const std::filesystem::path& newPath);
 
 private:
     struct RequestData final {

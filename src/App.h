@@ -6,6 +6,7 @@
 #include "audio/AudioEngine.h"
 #include "config/SettingsManager.h"
 #include "library/LibraryScanner.h"
+#include "library/LibraryWatcher.h"
 #include "playlist/PlaybackQueue.h"
 #include "playlist/PlaylistManager.h"
 #include "skin/SkinManager.h"
@@ -149,6 +150,9 @@ public:
 
 private:
     void StartLibraryScan();
+    // Restarts the folder watcher for the current music roots (configured or override)
+    // plus the additional roots.
+    void UpdateLibraryWatcherRoots();
     // Root the session actually runs on: musicRootOverride_ when set (startup fallback),
     // else the configured settings_.Settings().musicRoot. Never persisted; the configured
     // root always stays in settings_ and on disk.
@@ -231,6 +235,9 @@ private:
     std::atomic_bool discordTrackTransitionLoadingObserved_{false};
     std::atomic<HWND> audioNotificationWindow_{nullptr};
     std::atomic_bool youtubeDirty_{false};
+    // Set by the library folder watcher when files under the roots changed on disk; a
+    // scan is triggered on the next UI projection pass.
+    std::atomic_bool libraryDirty_{false};
     // True while a library scan is in flight or its result has not been applied yet.
     bool scanRunning_{};
     // Session-only override used when the configured music root is temporarily
@@ -257,6 +264,9 @@ private:
     std::jthread scanThread_;
     std::mutex scanMutex_;
     std::optional<library::LibraryScanResult> completedScan_;
+    // Watches the library roots so externally renamed/added/removed files rescan
+    // without a manual refresh. Started in Initialize after the window exists.
+    library::LibraryWatcher libraryWatcher_;
 
     playlist::PlaylistId selectedPlaylist_{playlist::AllMusicPlaylistId};
     // Folder tree nodes the user has expanded. Absent = collapsed.

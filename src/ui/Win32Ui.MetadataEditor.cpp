@@ -47,6 +47,7 @@ constexpr wchar_t kDialogClassName[] = L"RivanMetadataInput";
 // Map a TrackMetadataField to the label shown above the edit box.
 const wchar_t* FieldName(TrackMetadataField field) noexcept {
     switch (field) {
+    case TrackMetadataField::Title:  return L"Title";
     case TrackMetadataField::Author: return L"Author";
     case TrackMetadataField::Album:  return L"Album";
     case TrackMetadataField::Genre:  return L"Genre";
@@ -58,6 +59,7 @@ const wchar_t* FieldName(TrackMetadataField field) noexcept {
 // Map a TrackMetadataField to the corresponding Windows property key.
 REFPROPERTYKEY FieldToPKey(TrackMetadataField field) noexcept {
     switch (field) {
+    case TrackMetadataField::Title:  return PKEY_Title;
     case TrackMetadataField::Author: return PKEY_Music_Artist;
     case TrackMetadataField::Album:  return PKEY_Music_AlbumTitle;
     case TrackMetadataField::Genre:  return PKEY_Music_Genre;
@@ -317,6 +319,7 @@ std::wstring SimpleQuote(const std::wstring& value) {
 // Map a TrackMetadataField to the ffmpeg metadata key name.
 const wchar_t* FfmpegKeyForField(TrackMetadataField field) noexcept {
     switch (field) {
+    case TrackMetadataField::Title:  return L"title";
     case TrackMetadataField::Author: return L"artist";
     case TrackMetadataField::Album:  return L"album";
     case TrackMetadataField::Genre:  return L"genre";
@@ -356,6 +359,7 @@ bool RunFfmpegWithArgs(const std::wstring& ffmpegPath, const std::wstring& args)
 
 const wchar_t* MetadataFieldLabel(TrackMetadataField field) noexcept {
     switch (field) {
+    case TrackMetadataField::Title:  return L"Change title";
     case TrackMetadataField::Author: return L"Change author";
     case TrackMetadataField::Album:  return L"Change album";
     case TrackMetadataField::Genre:  return L"Change genre";

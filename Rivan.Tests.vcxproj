@@ -41,6 +41,7 @@
     <ClCompile Include="src\playlist\PlaylistManager.cpp" />
     <ClCompile Include="src\core\IniDocument.cpp" />
     <ClCompile Include="src\core\IniValueCodec.cpp" />
+    <ClCompile Include="src\core\Json.cpp" />
     <ClCompile Include="src\core\AppPaths.cpp" />
     <ClCompile Include="src\config\SettingsManager.cpp" />
     <ClCompile Include="src\config\SettingsManager.Settings.cpp" />
@@ -60,6 +61,7 @@
     <ClInclude Include="src\ui\SongRowLayoutGeometry.h" />
     <ClInclude Include="src\ui\TrackCoverCache.h" />
     <ClInclude Include="src\config\SettingsManager.Persistence.h" />
+    <ClInclude Include="src\core\Json.h" />
     <ClInclude Include="src\lyrics\LyricsService.h" />
     <ClInclude Include="src\stats\ListenStats.h" />
     <ClInclude Include="src\stats\StatsService.h" />
