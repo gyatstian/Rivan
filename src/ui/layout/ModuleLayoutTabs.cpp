@@ -362,6 +362,27 @@ void ModuleLayout::RemoveTab(ModuleId id) noexcept {
     NormalizeTabState();
 }
 
+void ModuleLayout::DetachModuleFromTabs(ModuleId id) noexcept {
+    if (!IsTabbed(id)) return;
+    const auto* root = Find(TabRoot(id));
+    if (!root) return;
+    const auto geometry = *root;
+    // When the root tab is removed, the remaining tab must keep the group's
+    // visible rectangle instead of reverting to its old hidden rectangle.
+    const auto groupTabCount = GroupTabCount(id);
+    for (std::size_t index = 0; index < groupTabCount; ++index) {
+        const auto tab = GroupMember(id, index);
+        if (tab == id) continue;
+        if (auto* item = Find(tab)) {
+            item->x = geometry.x;
+            item->y = geometry.y;
+            item->width = geometry.width;
+            item->height = geometry.height;
+        }
+    }
+    RemoveTab(id);
+}
+
 void ModuleLayout::TabWith(ModuleId source, ModuleId target) noexcept {
     NormalizeTabState();
     if (source == target || Find(source) == nullptr || Find(target) == nullptr) return;

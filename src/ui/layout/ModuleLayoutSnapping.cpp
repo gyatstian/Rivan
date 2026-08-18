@@ -1,22 +1,12 @@
 // ModuleLayoutSnapping.cpp
 #include "ModuleLayout.h"
+#include "ModuleLayoutInternal.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace rivan::ui {
-
-namespace {
-
-bool HasFiniteOrderedRectangle(const ModuleNormalizedRect& bounds) noexcept {
-    return std::isfinite(bounds.left) && std::isfinite(bounds.top) &&
-           std::isfinite(bounds.right) && std::isfinite(bounds.bottom) &&
-           bounds.right > bounds.left && bounds.bottom > bounds.top &&
-           std::isfinite(bounds.right - bounds.left) &&
-           std::isfinite(bounds.bottom - bounds.top);
-}
-
-} // namespace
 
 bool ModuleLayout::SnapTo(ModuleId source, ModuleId target, ModuleDropZone zone) noexcept {
     if (source == target || !IsSideDrop(zone)) return false;
@@ -318,6 +308,226 @@ bool ModuleLayout::SnapToWindow(ModuleId source, ModuleWindowDropZone zone,
         return false;
     }
     return true;
+}
+
+bool ModuleLayout::FindplusWindowRectangle(
+    ModuleId source, ModuleNormalizedRect region, float pointerX, float pointerY,
+    float minimumWidth, float minimumHeight, ModuleNormalizedRect& result,
+    std::optional<ModuleCollapseSide> attachedSide, bool attachWindowEdge) const noexcept {
+    if (!std::isfinite(region.left) || !std::isfinite(region.top) ||
+        !std::isfinite(region.right) || !std::isfinite(region.bottom) ||
+        !std::isfinite(pointerX) || !std::isfinite(pointerY) ||
+        !std::isfinite(minimumWidth) || !std::isfinite(minimumHeight) ||
+        !(region.right > region.left) || !(region.bottom > region.top) ||
+        !(minimumWidth > 0.0F) || !(minimumHeight > 0.0F)) {
+        return false;
+    }
+
+    std::array<ModuleId, 6> moving{};
+    const auto movingCount = MovingMembers(source, moving);
+    std::array<ModuleNormalizedRect, 6> obstacles{};
+    std::size_t obstacleCount = 0;
+    for (const auto& item : items) {
+        if (!item.visible ||
+            (IsEffectivelyCollapsed(item.id) && !item.collapsed) ||
+            Contains(moving, movingCount, item.id)) continue;
+        if (IsTabbed(item.id) && TabRoot(item.id) != item.id) continue;
+        const auto bounds = Bounds(item);
+        if (!HasFiniteOrderedRectangle(bounds)) return false;
+        if (bounds.right <= region.left || bounds.left >= region.right ||
+            bounds.bottom <= region.top || bounds.top >= region.bottom) {
+            continue;
+        }
+        if (obstacleCount < obstacles.size()) obstacles[obstacleCount++] = bounds;
+    }
+
+    std::array<float, 16> xCoordinates{};
+    std::array<float, 16> yCoordinates{};
+    std::size_t xCount = 0;
+    std::size_t yCount = 0;
+    const auto appendCoordinate = [](auto& coordinates, std::size_t& count, float value) {
+        if (count >= coordinates.size()) return;
+        for (std::size_t index = 0; index < count; ++index) {
+            if (std::abs(coordinates[index] - value) < 0.00001F) return;
+        }
+        coordinates[count++] = value;
+    };
+    appendCoordinate(xCoordinates, xCount, region.left);
+    appendCoordinate(xCoordinates, xCount, region.right);
+    appendCoordinate(yCoordinates, yCount, region.top);
+    appendCoordinate(yCoordinates, yCount, region.bottom);
+    for (std::size_t index = 0; index < obstacleCount; ++index) {
+        appendCoordinate(xCoordinates, xCount,
+                         std::clamp(obstacles[index].left, region.left, region.right));
+        appendCoordinate(xCoordinates, xCount,
+                         std::clamp(obstacles[index].right, region.left, region.right));
+        appendCoordinate(yCoordinates, yCount,
+                         std::clamp(obstacles[index].top, region.top, region.bottom));
+        appendCoordinate(yCoordinates, yCount,
+                         std::clamp(obstacles[index].bottom, region.top, region.bottom));
+    }
+    std::sort(xCoordinates.begin(),
+              xCoordinates.begin() + static_cast<std::ptrdiff_t>(xCount));
+    std::sort(yCoordinates.begin(),
+              yCoordinates.begin() + static_cast<std::ptrdiff_t>(yCount));
+
+    bool found = false;
+    float bestScore = -std::numeric_limits<float>::infinity();
+    for (std::size_t leftIndex = 0; leftIndex + 1 < xCount; ++leftIndex) {
+        for (std::size_t rightIndex = leftIndex + 1; rightIndex < xCount; ++rightIndex) {
+            for (std::size_t topIndex = 0; topIndex + 1 < yCount; ++topIndex) {
+                for (std::size_t bottomIndex = topIndex + 1; bottomIndex < yCount; ++bottomIndex) {
+                    const ModuleNormalizedRect candidate{
+                        xCoordinates[leftIndex], yCoordinates[topIndex],
+                        xCoordinates[rightIndex], yCoordinates[bottomIndex]};
+                    if (candidate.right - candidate.left < minimumWidth ||
+                        candidate.bottom - candidate.top < minimumHeight) {
+                        continue;
+                    }
+                    if (attachedSide) {
+                        constexpr float edgeTolerance = 0.00001F;
+                        const bool attached = attachWindowEdge
+                            ? (*attachedSide == ModuleCollapseSide::Left
+                                ? std::abs(candidate.left - region.left) < edgeTolerance
+                                : *attachedSide == ModuleCollapseSide::Right
+                                    ? std::abs(candidate.right - region.right) < edgeTolerance
+                                    : *attachedSide == ModuleCollapseSide::Top
+                                        ? std::abs(candidate.top - region.top) < edgeTolerance
+                                        : *attachedSide == ModuleCollapseSide::Bottom &&
+                                          std::abs(candidate.bottom - region.bottom) < edgeTolerance)
+                            : (*attachedSide == ModuleCollapseSide::Left
+                                ? std::abs(candidate.right - region.right) < edgeTolerance
+                                : *attachedSide == ModuleCollapseSide::Right
+                                    ? std::abs(candidate.left - region.left) < edgeTolerance
+                                    : *attachedSide == ModuleCollapseSide::Top
+                                        ? std::abs(candidate.bottom - region.bottom) < edgeTolerance
+                                        : *attachedSide == ModuleCollapseSide::Bottom &&
+                                          std::abs(candidate.top - region.top) < edgeTolerance);
+                        if (!attached) continue;
+                    }
+                    bool blocked = false;
+                    for (std::size_t obstacle = 0; obstacle < obstacleCount; ++obstacle) {
+                        if (Intersects(candidate, obstacles[obstacle])) {
+                            blocked = true;
+                            break;
+                        }
+                    }
+                    if (blocked) continue;
+
+                    const float candidateWidth = candidate.right - candidate.left;
+                    const float candidateHeight = candidate.bottom - candidate.top;
+                    const float area = candidateWidth * candidateHeight;
+                    const bool containsPointer = pointerX >= candidate.left &&
+                        pointerX <= candidate.right && pointerY >= candidate.top &&
+                        pointerY <= candidate.bottom;
+                    const float distanceX = pointerX < candidate.left
+                        ? candidate.left - pointerX
+                        : pointerX > candidate.right ? pointerX - candidate.right : 0.0F;
+                    const float distanceY = pointerY < candidate.top
+                        ? candidate.top - pointerY
+                        : pointerY > candidate.bottom ? pointerY - candidate.bottom : 0.0F;
+                    const float score = (containsPointer ? 1000.0F : 0.0F) + area -
+                        (distanceX * distanceX + distanceY * distanceY);
+                    if (!found || score > bestScore) {
+                        found = true;
+                        bestScore = score;
+                        result = candidate;
+                    }
+                }
+            }
+        }
+    }
+    return found;
+}
+
+bool ModuleLayout::IsSnapGrouped(ModuleId id) const noexcept {
+    const auto root = SnapRoot(id);
+    std::size_t count = 0;
+    for (const auto& item : items) {
+        if (item.visible && SnapRoot(item.id) == root) ++count;
+    }
+    return count > 1;
+}
+
+void ModuleLayout::DetachSnapModule(ModuleId id) noexcept {
+    if (!IsSnapGrouped(id)) return;
+    const auto oldRoot = SnapRoot(id);
+    std::array<ModuleId, 6> remaining{};
+    std::size_t remainingCount = 0;
+    for (const auto& item : items) {
+        if (item.visible && item.id != id && SnapRoot(item.id) == oldRoot) {
+            remaining[remainingCount++] = item.id;
+        }
+    }
+
+    const auto newRoot = oldRoot == id && remainingCount > 0 ? remaining[0] : oldRoot;
+    for (auto& item : items) {
+        const auto index = static_cast<std::size_t>(&item - items.data());
+        if (item.id == id) {
+            snapGroup[index] = id;
+            item.dockState = ModuleDockState::Floating;
+        } else if (SnapRoot(item.id) == oldRoot) {
+            snapGroup[index] = newRoot;
+            item.dockState = remainingCount > 1 ? ModuleDockState::Snapped
+                                                 : ModuleDockState::Floating;
+        }
+    }
+}
+
+void ModuleLayout::DetachSnapMembers(const std::array<ModuleId, 6>& members,
+                                     std::size_t count) noexcept {
+    count = std::min(count, members.size());
+    if (count == 0) return;
+
+    std::array<ModuleId, 6> oldRoots{};
+    for (std::size_t index = 0; index < items.size(); ++index) {
+        oldRoots[index] = SnapRoot(items[index].id);
+    }
+
+    const auto isDetached = [&members, count](ModuleId id) noexcept {
+        return ModuleLayout::Contains(members, count, id);
+    };
+    std::array<ModuleId, 6> affectedRoots{};
+    std::size_t affectedCount = 0;
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto* item = Find(members[index]);
+        if (!item) continue;
+        const auto itemIndex = static_cast<std::size_t>(item - items.data());
+        const ModuleId root = oldRoots[itemIndex];
+        if (!Contains(affectedRoots, affectedCount, root) &&
+            affectedCount < affectedRoots.size()) {
+            affectedRoots[affectedCount++] = root;
+        }
+    }
+
+    for (std::size_t index = 0; index < count; ++index) {
+        if (auto* item = Find(members[index])) {
+            const auto itemIndex = static_cast<std::size_t>(item - items.data());
+            snapGroup[itemIndex] = item->id;
+            item->dockState = ModuleDockState::Floating;
+        }
+    }
+
+    for (std::size_t rootIndex = 0; rootIndex < affectedCount; ++rootIndex) {
+        const ModuleId oldRoot = affectedRoots[rootIndex];
+        std::array<std::size_t, 6> remaining{};
+        std::size_t remainingCount = 0;
+        for (std::size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex) {
+            if (items[itemIndex].visible && !isDetached(items[itemIndex].id) &&
+                oldRoots[itemIndex] == oldRoot && remainingCount < remaining.size()) {
+                remaining[remainingCount++] = itemIndex;
+            }
+        }
+        const ModuleId newRoot = remainingCount == 0
+            ? oldRoot
+            : (isDetached(oldRoot) ? items[remaining[0]].id : oldRoot);
+        for (std::size_t index = 0; index < remainingCount; ++index) {
+            auto& item = items[remaining[index]];
+            snapGroup[remaining[index]] = newRoot;
+            item.dockState = remainingCount > 1
+                ? ModuleDockState::Snapped : ModuleDockState::Floating;
+        }
+    }
 }
 
 } // namespace rivan::ui

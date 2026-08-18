@@ -32,43 +32,34 @@ void App::OnLyricsServiceUpdated() {
 }
 
 void App::SetLyricsCacheEnabled(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.lyricsCacheEnabled == enabled) return;
-    settings.lyricsCacheEnabled = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            if (settings.lyricsCacheEnabled == enabled) return false;
+            settings.lyricsCacheEnabled = enabled;
+            return true;
+        })) return;
     lyrics_.SetCacheEnabled(enabled);
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::SetLyricsOnlineEnabled(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.lyricsOnlineEnabled == enabled) return;
-    settings.lyricsOnlineEnabled = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            if (settings.lyricsOnlineEnabled == enabled) return false;
+            settings.lyricsOnlineEnabled = enabled;
+            return true;
+        })) return;
     lyrics_.SetOnlineEnabled(enabled);
     // Local-only mode must stop showing previously fetched online lyrics; online mode
     // may now fetch a track that had no local lyrics. Re-resolve the active track.
     RefreshActiveLyrics();
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::SetLyricsFakeTimestampsEnabled(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.lyricsFakeTimestampsEnabled == enabled) return;
-    settings.lyricsFakeTimestampsEnabled = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            if (settings.lyricsFakeTimestampsEnabled == enabled) return false;
+            settings.lyricsFakeTimestampsEnabled = enabled;
+            return true;
+        })) return;
     lyrics_.SetFakeTimestampsEnabled(enabled);
     RefreshActiveLyrics();
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::RefreshActiveLyrics() {
@@ -132,14 +123,11 @@ void App::SaveDisabledLyrics() const {
 }
 
 void App::SetLyricsAlignment(config::LyricsTextAlignment alignment) {
-    auto settings = settings_.Settings();
-    if (settings.lyricsAlignment == alignment) return;
-    settings.lyricsAlignment = alignment;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([alignment](config::AppSettings& settings) {
+        if (settings.lyricsAlignment == alignment) return false;
+        settings.lyricsAlignment = alignment;
+        return true;
+    });
 }
 
 void App::AddYourOwnLyrics() {

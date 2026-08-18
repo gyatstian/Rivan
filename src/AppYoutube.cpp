@@ -128,27 +128,25 @@ void App::PersistYoutubeChooserSelection() {
     settings.youtubeVideoExtension = NarrowAscii(youtubeDownloadSelection_.preferredVideoExtension);
     settings.youtubeAudioExtension = NarrowAscii(youtubeDownloadSelection_.preferredAudioExtension);
     settings.youtubeAudioBitrate = std::max(0, youtubeDownloadSelection_.preferredAudioBitrate);
-    std::string error;
-    const bool accepted = settings_.SetSettings(std::move(settings), &error);
+    const bool accepted = settings_.SetSettings(std::move(settings), nullptr);
     // Throttle the INI write; preferences stay in memory on every click. The final
     // state is still persisted by PersistState on exit.
     const auto now = std::chrono::steady_clock::now();
     if (accepted && now - lastYoutubeChooserSave_ >= std::chrono::milliseconds(1500)) {
-        (void)settings_.SaveSettings(&error);
+        (void)settings_.SaveSettings(nullptr);
         lastYoutubeChooserSave_ = now;
     }
 }
 
 void App::SetYoutubeEnabled(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.youtubeEnabled == enabled) return;
+    if (settings_.Settings().youtubeEnabled == enabled) return;
     const bool grabberHotkeyAvailable = !enabled || !window_ ||
-        window_->UpdateYoutubeGrabberHotkey(settings.youtubeGrabberHotkeyModifiers,
-                                             settings.youtubeGrabberHotkeyVirtualKey);
-    settings.youtubeEnabled = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+        window_->UpdateYoutubeGrabberHotkey(settings_.Settings().youtubeGrabberHotkeyModifiers,
+                                             settings_.Settings().youtubeGrabberHotkeyVirtualKey);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            settings.youtubeEnabled = enabled;
+            return true;
+        })) return;
 
     if (!enabled) {
         if (window_) (void)window_->UpdateYoutubeGrabberHotkey(0, 0);
@@ -182,8 +180,6 @@ void App::SetYoutubeEnabled(bool enabled) {
             youtubeView_.status = L"Ready — search or paste a YouTube URL";
         }
     }
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::GrabYoutubeLink(std::wstring url) {
@@ -201,20 +197,20 @@ void App::GrabYoutubeLink(std::wstring url) {
 
 bool App::SetYoutubeGrabberHotkey(std::uint32_t modifiers,
                                   std::uint32_t virtualKey) {
-    auto settings = settings_.Settings();
-    settings.youtubeGrabberHotkeyModifiers = modifiers;
-    settings.youtubeGrabberHotkeyVirtualKey = virtualKey;
-    std::string error;
-    if (!config::SettingsManager::Validate(settings, &error)) return false;
+    config::AppSettings candidate = settings_.Settings();
+    candidate.youtubeGrabberHotkeyModifiers = modifiers;
+    candidate.youtubeGrabberHotkeyVirtualKey = virtualKey;
+    if (!config::SettingsManager::Validate(candidate, nullptr)) return false;
     if (YoutubeFeatureOn() && window_ &&
         !window_->UpdateYoutubeGrabberHotkey(modifiers, virtualKey)) {
         return false;
     }
-    if (!settings_.SetSettings(settings, &error)) return false;
+    if (!ApplySettingsChange([modifiers, virtualKey](config::AppSettings& settings) {
+            settings.youtubeGrabberHotkeyModifiers = modifiers;
+            settings.youtubeGrabberHotkeyVirtualKey = virtualKey;
+            return true;
+        })) return false;
     youtubeGrabberHotkeyAvailable_ = true;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
     return true;
 }
 

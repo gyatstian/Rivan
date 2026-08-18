@@ -49,6 +49,9 @@
     <ClCompile Include="src\skin\Skin.cpp" />
     <ClCompile Include="src\visualization\Visualization.cpp" />
     <ClCompile Include="src\lyrics\LyricsService.cpp" />
+    <ClCompile Include="src\lyrics\LyricsService.Network.cpp" />
+    <ClCompile Include="src\lyrics\LyricsService.Parsing.cpp" />
+    <ClCompile Include="src\lyrics\LyricsService.Storage.cpp" />
     <ClCompile Include="src\stats\ListenStats.cpp" />
     <ClCompile Include="src\stats\StatsDashboard.cpp" />
     <ClCompile Include="src\update\UpdateService.cpp" />
@@ -63,6 +66,7 @@
     <ClInclude Include="src\config\SettingsManager.Persistence.h" />
     <ClInclude Include="src\core\Json.h" />
     <ClInclude Include="src\lyrics\LyricsService.h" />
+    <ClInclude Include="src\lyrics\LyricsService.Internal.h" />
     <ClInclude Include="src\stats\ListenStats.h" />
     <ClInclude Include="src\stats\StatsService.h" />
     <ClInclude Include="src\stats\StatsDashboard.h" />

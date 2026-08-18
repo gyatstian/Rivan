@@ -147,7 +147,7 @@ bool App::Initialize() {
         // Best-effort one-time repair: rewrite defaults so a corrupt file does not
         // re-fail (and silently re-reset) on every boot. A read-only drive just fails
         // again; the in-memory defaults remain valid either way.
-        (void)settings_.SaveSettings(&error);
+        (void)settings_.SaveSettings(nullptr);
     }
     if (!settings_.LoadSession(&error, nullptr)) settings_.ResetSession();
 
@@ -170,7 +170,7 @@ bool App::Initialize() {
         musicRootOverride_ = applicationSettings.musicRoot;
         applicationSettings.musicRoot = configuredRoot;
     }
-    (void)settings_.SetSettings(applicationSettings, &error);
+    (void)settings_.SetSettings(applicationSettings, nullptr);
     lyrics_.SetCacheEnabled(applicationSettings.lyricsCacheEnabled);
     lyrics_.SetOnlineEnabled(applicationSettings.lyricsOnlineEnabled);
     lyrics_.SetFakeTimestampsEnabled(applicationSettings.lyricsFakeTimestampsEnabled);
@@ -182,8 +182,8 @@ bool App::Initialize() {
     // path also persists the configured root, never the fallback.
     if (!SyncStartupRegistration(applicationSettings.startAtStartup, &startupError)) {
         applicationSettings.startAtStartup = false;
-        (void)settings_.SetSettings(applicationSettings, &error);
-        (void)settings_.SaveSettings(&error);
+        (void)settings_.SetSettings(applicationSettings, nullptr);
+        (void)settings_.SaveSettings(nullptr);
     }
 
     (void)skins_.Refresh(&error, nullptr);
@@ -266,6 +266,9 @@ bool App::Initialize() {
     // User playlists are restored lazily on the first scan application (see
     // ApplyCompletedScan) so per-track metadata reads do not delay the scan start.
     library::LibraryScanner::SetDurationCachePath(core::AppPaths::LocalDataRoot() / L"library-durations.cache");
+    // Seed the previous-session catalog so the first scan application can bridge files
+    // renamed while the app was closed, exactly like an in-session watcher rescan.
+    playlists_.SetStartupCatalog(library::LibraryScanner::LoadPreviousCatalog());
     StartLibraryScan();
     // Start only after the window exists: worker notifications are always marshalled to
     // the UI thread and never delay startup or first paint.
@@ -313,14 +316,13 @@ void App::SetModuleLayout(ui::ModuleLayout layout) {
     moduleLayout_ = layout;
     auto session = settings_.Session();
     session.moduleLayout = moduleLayout_;
-    std::string error;
-    (void)settings_.SetSession(std::move(session), &error);
+    (void)settings_.SetSession(std::move(session), nullptr);
     // Layout messages stream in during interactive resize; keep the in-memory session in
     // sync every time but throttle the INI write to at most once per ~1.5 s.
     const auto now = std::chrono::steady_clock::now();
     if (now - lastSessionSave_ >= std::chrono::milliseconds(1500)) {
         lastSessionSave_ = now;
-        (void)settings_.SaveSession(&error);
+        (void)settings_.SaveSession(nullptr);
     }
     ++revision_;
     if (window_) window_->Refresh();
@@ -520,58 +522,46 @@ void App::SetMusicFolder(std::size_t index, std::filesystem::path folder) {
             return;  // Gap not allowed.
         }
     }
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
+    if (!settings_.SetSettings(std::move(settings), nullptr)) return;
     // An explicit folder change overrides any startup fallback.
     musicRootOverride_.clear();
-    (void)settings_.SaveSettings(&error);
+    (void)settings_.SaveSettings(nullptr);
     UpdateLibraryWatcherRoots();
     RefreshLibrary();  // Rescan with the new folder set.
 }
 
 void App::SetFilePreviewEnabled(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.filePreviewEnabled == enabled) return;
-    settings.filePreviewEnabled = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([enabled](config::AppSettings& settings) {
+        if (settings.filePreviewEnabled == enabled) return false;
+        settings.filePreviewEnabled = enabled;
+        return true;
+    });
 }
 
 void App::SetPreviewFitWindow(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.previewFitWindow == enabled) return;
-    settings.previewFitWindow = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([enabled](config::AppSettings& settings) {
+        if (settings.previewFitWindow == enabled) return false;
+        settings.previewFitWindow = enabled;
+        return true;
+    });
 }
 
 void App::SetSongRowLayout(ui::SongRowLayout layout) {
-    auto settings = settings_.Settings();
-    if (settings.songRowLayout.rowHeight == layout.rowHeight &&
-        settings.songRowLayout.fields == layout.fields) return;
-    settings.songRowLayout = layout;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([layout](config::AppSettings& settings) {
+        if (settings.songRowLayout.rowHeight == layout.rowHeight &&
+            settings.songRowLayout.fields == layout.fields) return false;
+        settings.songRowLayout = layout;
+        return true;
+    });
 }
 
 void App::PreviewSongRowLayout(ui::SongRowLayout layout) {
-    auto settings = settings_.Settings();
-    if (settings.songRowLayout.rowHeight == layout.rowHeight &&
-        settings.songRowLayout.fields == layout.fields) return;
-    settings.songRowLayout = layout;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplyTransientSettingsChange([layout](config::AppSettings& settings) {
+        if (settings.songRowLayout.rowHeight == layout.rowHeight &&
+            settings.songRowLayout.fields == layout.fields) return false;
+        settings.songRowLayout = layout;
+        return true;
+    });
 }
 
 bool App::SyncStartupRegistration(bool enabled, std::wstring* error) {
@@ -617,60 +607,45 @@ bool App::SyncStartupRegistration(bool enabled, std::wstring* error) {
 }
 
 void App::SetStartAtStartup(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.startAtStartup == enabled) return;
+    if (settings_.Settings().startAtStartup == enabled) return;
     // Only persist the toggle if the registry write/removal actually succeeds.
     if (!SyncStartupRegistration(enabled)) return;
-    settings.startAtStartup = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([enabled](config::AppSettings& settings) {
+        settings.startAtStartup = enabled;
+        return true;
+    });
 }
 
 void App::SetExitToTray(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.exitToTray == enabled) return;
-    settings.exitToTray = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([enabled](config::AppSettings& settings) {
+        if (settings.exitToTray == enabled) return false;
+        settings.exitToTray = enabled;
+        return true;
+    });
 }
 
 void App::SetModuleExpansionBehavior(ui::ModuleExpansionBehavior behavior) {
-    auto settings = settings_.Settings();
-    if (settings.moduleExpansionBehavior == behavior) return;
-    settings.moduleExpansionBehavior = behavior;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([behavior](config::AppSettings& settings) {
+        if (settings.moduleExpansionBehavior == behavior) return false;
+        settings.moduleExpansionBehavior = behavior;
+        return true;
+    });
 }
 
 void App::SetWindowResizeBehavior(ui::WindowResizeBehavior behavior) {
-    auto settings = settings_.Settings();
-    if (settings.windowResizeBehavior == behavior) return;
-    settings.windowResizeBehavior = behavior;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([behavior](config::AppSettings& settings) {
+        if (settings.windowResizeBehavior == behavior) return false;
+        settings.windowResizeBehavior = behavior;
+        return true;
+    });
 }
 
 void App::SetModuleResizeBehavior(ui::ModuleResizeBehavior behavior) {
-    auto settings = settings_.Settings();
-    if (settings.moduleResizeBehavior == behavior) return;
-    settings.moduleResizeBehavior = behavior;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([behavior](config::AppSettings& settings) {
+        if (settings.moduleResizeBehavior == behavior) return false;
+        settings.moduleResizeBehavior = behavior;
+        return true;
+    });
 }
 
 std::filesystem::path App::EffectiveMusicRoot() const noexcept {

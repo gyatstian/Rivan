@@ -137,6 +137,9 @@ struct ModuleLayout final {
     void NormalizeTabState() noexcept;
     void MakeTab(ModuleId first, ModuleId second) noexcept;
     void RemoveTab(ModuleId id) noexcept;
+    // Detaches a tabbed member from its group, keeping the group's visible
+    // rectangle on the remaining member. Pure tab-membership operation.
+    void DetachModuleFromTabs(ModuleId id) noexcept;
     void TabWith(ModuleId source, ModuleId target) noexcept;
     [[nodiscard]] bool SnapTo(ModuleId source, ModuleId target,
                               ModuleDropZone zone) noexcept;

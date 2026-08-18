@@ -93,6 +93,18 @@
     <ClCompile Include="src\library\Track.cpp">
       <Filter>Pliki �r�d�owe</Filter>
     </ClCompile>
+    <ClCompile Include="src\lyrics\LyricsService.cpp">
+      <Filter>Pliki �r�d�owe</Filter>
+    </ClCompile>
+    <ClCompile Include="src\lyrics\LyricsService.Network.cpp">
+      <Filter>Pliki �r�d�owe</Filter>
+    </ClCompile>
+    <ClCompile Include="src\lyrics\LyricsService.Parsing.cpp">
+      <Filter>Pliki �r�d�owe</Filter>
+    </ClCompile>
+    <ClCompile Include="src\lyrics\LyricsService.Storage.cpp">
+      <Filter>Pliki �r�d�owe</Filter>
+    </ClCompile>
     <ClCompile Include="src\playlist\PlaybackQueue.cpp">
       <Filter>Pliki �r�d�owe</Filter>
     </ClCompile>
@@ -168,7 +180,16 @@
     <ClCompile Include="src\ui\Win32Ui.RowInteraction.cpp">
       <Filter>Pliki �r�d�owe</Filter>
     </ClCompile>
-    <ClCompile Include="src\ui\Win32Ui.Settings.cpp">
+    <ClCompile Include="src\ui\Win32Ui.Settings.Rendering.cpp">
+      <Filter>Pliki �r�d�owe</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Win32Ui.Settings.Statistics.cpp">
+      <Filter>Pliki �r�d�owe</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Win32Ui.Settings.SongRowLayoutEditor.cpp">
+      <Filter>Pliki �r�d�owe</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\Win32Ui.Settings.Actions.cpp">
       <Filter>Pliki �r�d�owe</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\Win32Ui.ModuleRenderer.cpp">
@@ -287,6 +308,12 @@
     <ClInclude Include="src\library\Track.h">
       <Filter>Pliki nag��wkowe</Filter>
     </ClInclude>
+    <ClInclude Include="src\lyrics\LyricsService.h">
+      <Filter>Pliki nag��wkowe</Filter>
+    </ClInclude>
+    <ClInclude Include="src\lyrics\LyricsService.Internal.h">
+      <Filter>Pliki nag��wkowe</Filter>
+    </ClInclude>
     <ClInclude Include="src\playlist\PlaybackQueue.h">
       <Filter>Pliki nag��wkowe</Filter>
     </ClInclude>
@@ -321,6 +348,9 @@
       <Filter>Pliki nag��wkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\layout\ModuleLayout.h">
+      <Filter>Pliki nag��wkowe</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\layout\ModuleLayoutInternal.h">
       <Filter>Pliki nag��wkowe</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\layout\ModulePixelGeometry.h">

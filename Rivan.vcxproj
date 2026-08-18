@@ -93,6 +93,7 @@
     <ClInclude Include="src\library\LibraryScanner.h" />
     <ClInclude Include="src\library\Track.h" />
     <ClInclude Include="src\lyrics\LyricsService.h" />
+    <ClInclude Include="src\lyrics\LyricsService.Internal.h" />
     <ClInclude Include="src\playlist\PlaybackQueue.h" />
     <ClInclude Include="src\playlist\Playlist.h" />
     <ClInclude Include="src\playlist\PlaylistManager.h" />
@@ -108,6 +109,7 @@
     <ClInclude Include="src\ui\TrackCoverCache.h" />
     <ClInclude Include="src\ui\layout\ModuleDropZones.h" />
     <ClInclude Include="src\ui\layout\ModuleLayout.h" />
+    <ClInclude Include="src\ui\layout\ModuleLayoutInternal.h" />
     <ClInclude Include="src\ui\layout\ModulePixelGeometry.h" />
     <ClInclude Include="src\ui\layout\ModuleTypes.h" />
     <ClInclude Include="src\ui\Win32Ui.h" />
@@ -151,6 +153,9 @@
     <ClCompile Include="src\library\LibraryWatcher.cpp" />
     <ClCompile Include="src\library\Track.cpp" />
     <ClCompile Include="src\lyrics\LyricsService.cpp" />
+    <ClCompile Include="src\lyrics\LyricsService.Network.cpp" />
+    <ClCompile Include="src\lyrics\LyricsService.Parsing.cpp" />
+    <ClCompile Include="src\lyrics\LyricsService.Storage.cpp" />
     <ClCompile Include="src\playlist\PlaybackQueue.cpp" />
     <ClCompile Include="src\playlist\PlaylistManager.cpp" />
     <ClCompile Include="src\skin\Skin.cpp" />
@@ -175,7 +180,10 @@
     <ClCompile Include="src\ui\Win32Ui.YoutubeChooser.cpp" />
     <ClCompile Include="src\ui\Win32Ui.UpdateNotifier.cpp" />
     <ClCompile Include="src\ui\Win32Ui.RowInteraction.cpp" />
-    <ClCompile Include="src\ui\Win32Ui.Settings.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Settings.Rendering.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Settings.Statistics.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Settings.SongRowLayoutEditor.cpp" />
+    <ClCompile Include="src\ui\Win32Ui.Settings.Actions.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Actions.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Color.cpp" />
     <ClCompile Include="src\ui\Win32Ui.SkinStudio.Input.cpp" />

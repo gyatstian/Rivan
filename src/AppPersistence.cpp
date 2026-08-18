@@ -35,8 +35,7 @@ void App::SyncPlaybackSession() {
     auto session = settings_.Session();
     session.selectedPlaylist = std::to_string(selectedPlaylist_);
     session.selectedTrack = selectedTrack_ == 0 ? std::string{} : std::to_string(selectedTrack_);
-    std::string ignored;
-    (void)settings_.SetSession(std::move(session), &ignored);
+    (void)settings_.SetSession(std::move(session), nullptr);
 }
 
 void App::PersistState() {

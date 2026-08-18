@@ -756,7 +756,6 @@ struct Win32Ui::Impl : Win32UiModuleState, Win32UiSkinStudioState,
     void BeginModuleDrag(ModuleId id, float x, float y,
                          const ModuleLayout* layoutOverride = nullptr,
                          bool detachTabOnMove = false);
-    void DetachModuleFromTabs(ModuleLayout& layout, ModuleId id) const noexcept;
     void UpdateModuleDrag(float x, float y);
     void FinishModuleDrag() noexcept;
     void ResetModuleDropPreview() noexcept;

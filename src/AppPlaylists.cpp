@@ -315,8 +315,53 @@ void App::RenameTrackAt(std::size_t index, std::wstring name) {
 
     std::error_code ec;
     if (std::filesystem::exists(newPath, ec) || ec) return;
-    std::filesystem::rename(oldPath, newPath, ec);
-    if (ec) return;
+
+    // --- Audio release for playing track ---
+    // The audio backend opens files without delete-sharing, so renaming the currently
+    // loaded file would fail with a sharing violation. Pause the song, unload it, rename,
+    // then resume at the same position below.
+    AudioReleaseGuard guard;
+    bool releaseObserved = false;
+    if (activeTrack_ && audio_.Live().hasMedia && activeTrack_->id == *id) {
+        const auto live = audio_.Live();
+        guard.wasPlaying = live.state == audio::PlaybackState::Playing;
+        guard.position = live.position;
+        guard.filePath = oldPath;
+        audio_.Pause();
+        audio_.Load(L"__RIVAN_EDIT__");
+        guard.released = true;      // restore is owed once the placeholder load is enqueued
+        releaseObserved = WaitForAudioRelease();
+    }
+    // --- End audio release ---
+
+    // The audio worker may still hold the file when the bounded wait expired; renaming
+    // it would then fail with a sharing violation, so leave the file untouched. Files
+    // that were never playing skip the release entirely and rename normally.
+    const bool mayRename = !guard.released || releaseObserved;
+    if (mayRename) {
+        // A concurrent scan probe can briefly hold the file without delete-sharing too;
+        // retry a short burst on sharing violations before giving up.
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            ec.clear();
+            std::filesystem::rename(oldPath, newPath, ec);
+            if (!ec || ec.value() != ERROR_SHARING_VIOLATION) break;
+            if (attempt + 1 < 3) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+    if (ec || !mayRename) {
+        if (guard.released) {
+            // Nothing moved; resume under the unchanged path.
+            audio_.Load(oldPath);
+            audio_.Seek(guard.position);
+            if (guard.wasPlaying) audio_.Play();
+        }
+        return;
+    }
+
+    // The file is no longer held by the audio backend, so the tag write below can open
+    // and replace it freely. Do this before resuming playback: Media Foundation holds
+    // files without delete-sharing, and the ffmpeg replace step (MoveFileEx with
+    // REPLACE_EXISTING) needs delete access on the target.
 
     // A file rename leaves the embedded title tag untouched, so the displayed name
     // (which prefers the tag over the file name) would keep the old name in the
@@ -324,6 +369,13 @@ void App::RenameTrackAt(std::size_t index, std::wstring name) {
     // surface and future rescans agree. Best effort: formats without a writable tag
     // (or a missing ffmpeg fallback) still get the in-memory title below.
     (void)ui::WriteTrackMetadataValue(newPath.wstring(), ui::TrackMetadataField::Title, name);
+
+    if (guard.released) {
+        // Resume the song from the renamed file at the position it was released at.
+        audio_.Load(newPath);
+        audio_.Seek(guard.position);
+        if (guard.wasPlaying) audio_.Play();
+    }
 
     auto replacement = library::Track::FromFile(newPath);
     replacement.title = name;
@@ -549,14 +601,11 @@ void App::MovePlaylistInto(std::uint64_t id, std::uint64_t parentId) {
 }
 
 void App::SetDuplicateAsFile(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.duplicateAsFile == enabled) return;
-    settings.duplicateAsFile = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([enabled](config::AppSettings& settings) {
+        if (settings.duplicateAsFile == enabled) return false;
+        settings.duplicateAsFile = enabled;
+        return true;
+    });
 }
 
 std::filesystem::path App::DuplicateFileOnDisk(const std::filesystem::path& source) const {

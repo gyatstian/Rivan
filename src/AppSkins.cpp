@@ -90,13 +90,10 @@ void App::ApplySkin(std::wstring_view id) {
     if (skins_.Find(narrowId) == nullptr) return;
     committedSkin_ = skins_.Resolve(narrowId);
     activeSkin_ = committedSkin_;
-    auto settings = settings_.Settings();
-    settings.skinId = committedSkin_.id;
-    std::string ignored;
-    (void)settings_.SetSettings(settings, &ignored);
-    (void)settings_.SaveSettings(&ignored);
-    ++revision_;
-    if (window_) window_->Refresh();
+    ApplySettingsChange([this](config::AppSettings& settings) {
+        settings.skinId = committedSkin_.id;
+        return true;
+    });
 }
 
 void App::EditSkin(std::wstring_view id) {
@@ -150,8 +147,8 @@ bool App::RenameSkin(std::wstring_view id, std::wstring_view name, std::wstring&
         activeSkin_ = committedSkin_;
         auto settings = settings_.Settings();
         settings.skinId = committedSkin_.id;
-        (void)settings_.SetSettings(settings, &narrowError);
-        (void)settings_.SaveSettings(&narrowError);
+        (void)settings_.SetSettings(settings, nullptr);
+        (void)settings_.SaveSettings(nullptr);
     }
     ++revision_;
     if (window_) window_->Refresh();
@@ -196,8 +193,8 @@ bool App::DeleteSkin(std::wstring_view id, std::wstring& error) {
         activeSkin_ = committedSkin_;
         auto settings = settings_.Settings();
         settings.skinId = committedSkin_.id;
-        (void)settings_.SetSettings(settings, &narrowError);
-        (void)settings_.SaveSettings(&narrowError);
+        (void)settings_.SetSettings(settings, nullptr);
+        (void)settings_.SaveSettings(nullptr);
     }
     ++revision_;
     if (window_) window_->Refresh();

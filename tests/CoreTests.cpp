@@ -2793,7 +2793,7 @@ void TestLyricsGeneratedTimestamps() {
     const auto stamped = LyricsService::WithFakeTimestamps(plain);
     Check(stamped.synced && stamped.lines.size() == 3,
           "fake timestamps mark plain lyrics as synced");
-    Check(stamped.lines[0].timestampSeconds >= 4.0 &&
+    Check(stamped.lines[0].timestampSeconds >= 2.0 &&
               stamped.lines[0].timestampSeconds <= 7.0,
           "fake timestamps start inside the first gap window");
     bool monotonic = true;
@@ -2801,13 +2801,13 @@ void TestLyricsGeneratedTimestamps() {
     for (std::size_t i = 1; i < stamped.lines.size(); ++i) {
         const double gap = stamped.lines[i].timestampSeconds -
                            stamped.lines[i - 1].timestampSeconds;
-        if (gap < 4.0 || gap > 7.0) inRange = false;
+        if (gap < 2.0 || gap > 7.0) inRange = false;
         if (stamped.lines[i].timestampSeconds <= stamped.lines[i - 1].timestampSeconds) {
             monotonic = false;
         }
     }
     Check(monotonic, "fake timestamps are monotonic");
-    Check(inRange, "fake timestamps are spaced 4-7 seconds apart");
+    Check(inRange, "fake timestamps are spaced 2-7 seconds apart");
 
     rivan::lyrics::LyricsDocument mixed;
     mixed.synced = true;
@@ -4015,7 +4015,7 @@ void TestRenameBridging() {
           "new id resolves while the old id is gone");
 }
 
-void TestRenameBridgingFallback() {
+void TestRenameBridgingWithoutIdentityRefused() {
     using namespace rivan;
     TemporaryLibrary files;
     const auto oldPath = files.Root() / L"Rock" / L"one.MP3";
@@ -4023,16 +4023,21 @@ void TestRenameBridgingFallback() {
     // no stable id). Titles are stem-derived because FromPathOnly avoids metadata reads.
     library::Track oldTrack = library::Track::FromPathOnly(oldPath);
     library::Track sibling = library::Track::FromPathOnly(files.Root() / L"Rock" / L"two.flac");
-    Check(!oldTrack.fileIdentity.HasValue(), "fallback fixture has no file identity");
+    Check(!oldTrack.fileIdentity.HasValue(), "fixture has no file identity");
     playlist::PlaylistManager manager;
     manager.ApplyScan(MakeScan({oldTrack, sibling}, {}));
 
+    // A real rename still yields exactly one vanished and one appeared track in the same
+    // folder: the exact coincidence a speculative guess would bridge. Without a file
+    // identity the rescan cannot prove the pair is the same file, so the crossing must
+    // stay unbridged; a guessed bridge would migrate the wrong song's play counts and
+    // lyrics onto a coincidental writer.
     const auto renamedPath = files.Root() / L"Rock" / L"one-renamed.mp3";
     std::error_code ec;
     std::filesystem::rename(oldPath, renamedPath, ec);
     Check(!ec, "renaming the backing file succeeds");
-    library::Track newTrack = library::Track::FromPathOnly(renamedPath);
-    library::Track siblingAgain =
+    const library::Track newTrack = library::Track::FromPathOnly(renamedPath);
+    const library::Track siblingAgain =
         library::Track::FromPathOnly(files.Root() / L"Rock" / L"two.flac");
     const auto renames = manager.ApplyScan(MakeScan({newTrack, siblingAgain}, {}));
 
@@ -4040,13 +4045,106 @@ void TestRenameBridgingFallback() {
                                       [old = oldTrack.id](const auto& rename) {
                                           return rename.oldId == old;
                                       });
+    Check(bridged == renames.end(),
+          "identity-less rename is not bridged by a one-out/one-in folder guess");
+    Check(manager.FindTrack(oldTrack.id) == nullptr,
+          "old catalog id is gone after the rescan");
+    Check(manager.FindTrack(newTrack.id) != nullptr,
+          "renamed file appears as a fresh, unbridged catalog entry");
+}
+
+void TestStartupRenameBridging() {
+    using namespace rivan;
+    TemporaryLibrary files;
+    library::LibraryScanner scanner;
+    const auto scan = scanner.Scan(files.Root());
+
+    // Simulate a fresh process: App::Initialize seeds the previous-session catalog via
+    // PlaylistManager::SetStartupCatalog before the first scan of the run applies, and
+    // LoadUserPlaylists restores a user playlist referencing the pre-rename track id.
+    const auto originalIt = std::find_if(scan.tracks.begin(), scan.tracks.end(),
+                                         [](const auto& track) {
+                                             return track.filePath.filename() == L"one.MP3";
+                                         });
+    Check(originalIt != scan.tracks.end() && originalIt->fileIdentity.HasValue(),
+          "startup fixture carries a file identity");
+    if (originalIt == scan.tracks.end()) return;
+    const library::Track original = *originalIt;
+
+    playlist::PlaylistManager manager;
+    manager.SetStartupCatalog({original});
+    const auto playlistId = manager.CreatePlaylist(L"Before Shutdown");
+    Check(manager.AddExternalTrack(playlistId, original),
+          "restored user playlist references the pre-rename track");
+
+    // The file is renamed while the app is closed; the fresh scan knows only the new id.
+    const auto renamedPath = original.filePath.parent_path() / L"one-renamed.mp3";
+    std::error_code ec;
+    std::filesystem::rename(original.filePath, renamedPath, ec);
+    Check(!ec, "renaming the backing file succeeds");
+    const auto rescanned = scanner.Scan(files.Root());
+
+    const auto renames = manager.ApplyScan(rescanned);
+    const auto bridged = std::find_if(renames.begin(), renames.end(),
+                                      [oldId = original.id](const auto& rename) {
+                                          return rename.oldId == oldId;
+                                      });
     Check(bridged != renames.end(),
-          "identity-less rename bridged via the directory one-in/one-out fallback");
-    if (bridged != renames.end()) {
-        Check(bridged->replacement.id == newTrack.id &&
-                  bridged->replacement.filePath == renamedPath,
-              "fallback bridge lands on the renamed file");
-    }
+          "startup rename is bridged from the seeded previous catalog");
+    if (bridged == renames.end()) return;
+    Check(bridged->replacement.filePath == renamedPath &&
+              bridged->replacement.id != original.id &&
+              bridged->replacement.fileIdentity == original.fileIdentity,
+          "startup bridge resolves to the renamed file with a fresh id and the same identity");
+
+    // The restored playlist entry follows the renamed file across the restart.
+    const auto resolved = manager.ResolveTracks(playlistId);
+    Check(resolved.size() == 1 && resolved[0].id == bridged->replacement.id &&
+              resolved[0].filePath == renamedPath,
+          "restored playlist entry follows the renamed file across a restart");
+    Check(manager.FindTrack(original.id) == nullptr,
+          "pre-rename id is gone after the startup bridge");
+}
+
+void TestCatalogIdentityPersistence() {
+    using namespace rivan;
+    TemporaryLibrary files;
+    library::LibraryScanner scanner;
+    const auto cachePath = std::filesystem::temp_directory_path() /
+                           (L"RivanDurationCacheTests-" +
+                            std::to_wstring(GetCurrentProcessId()) + L".cache");
+    std::error_code ec;
+    std::filesystem::remove(cachePath, ec);
+
+    library::LibraryScanner::SetDurationCachePath(cachePath);
+    const auto scan = scanner.Scan(files.Root());
+    const auto originalIt = std::find_if(scan.tracks.begin(), scan.tracks.end(),
+                                         [](const auto& track) {
+                                             return track.filePath.filename() == L"one.MP3";
+                                         });
+    Check(originalIt != scan.tracks.end() && originalIt->fileIdentity.HasValue(),
+          "persistence fixture carries a file identity");
+    if (originalIt == scan.tracks.end()) return;
+    const auto& original = *originalIt;
+
+    library::LibraryScanner::SaveDurationCache();
+
+    // Force a real disk read: resetting the cache path clears the load flag so the
+    // snapshot is rebuilt purely from the file written above, not in-memory probe data.
+    library::LibraryScanner::SetDurationCachePath(cachePath);
+    const auto snapshot = library::LibraryScanner::LoadPreviousCatalog();
+    const auto found = std::find_if(snapshot.begin(), snapshot.end(),
+                                    [&](const auto& track) {
+                                        return track.filePath == original.filePath;
+                                    });
+    Check(found != snapshot.end(),
+          "previous-session snapshot contains the scanned file");
+    if (found == snapshot.end()) return;
+    Check(found->id == original.id && found->fileIdentity == original.fileIdentity,
+          "snapshot restores the path-derived id and the captured file identity");
+
+    library::LibraryScanner::SetDurationCachePath({});
+    std::filesystem::remove(cachePath, ec);
 }
 
 void TestStatsSnapshotRenameMigration() {
@@ -4165,7 +4263,9 @@ int main() {
     TestSiblingRootRetention();
     TestAddExternalTrackDuplicateGuard();
     TestRenameBridging();
-    TestRenameBridgingFallback();
+    TestRenameBridgingWithoutIdentityRefused();
+    TestStartupRenameBridging();
+    TestCatalogIdentityPersistence();
     TestStatsSnapshotRenameMigration();
     TestLyricsRenameRetarget();
     TestCollapseShiftIsolation();

@@ -5,8 +5,6 @@
 #include "../library/LibraryScanner.h"
 
 #include <algorithm>
-#include <cmath>
-#include <cwctype>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -17,41 +15,6 @@ namespace rivan::playlist {
 namespace {
 
 constexpr PlaylistId UserIdMask = PlaylistId{1} << 63;
-
-// Case-folded path key so folder comparisons are case-insensitive on Windows.
-std::wstring LowerKey(const std::filesystem::path& path) {
-    auto value = path.generic_wstring();
-    for (auto& character : value) {
-        character = static_cast<wchar_t>(std::towlower(character));
-    }
-    return value;
-}
-
-// Decides whether an old (vanished) track and a new (appeared) track are the same file
-// renamed, when the platform file identity could not be used. Requires the extension to
-// match, the old title to have been derived from the file name (otherwise the embedded
-// title tag is authoritative and a rename must not change the displayed name), the artist
-// and album to agree, and the probed duration to be consistent.
-bool FallbackRenameMatches(const library::Track& removed, const library::Track& added) {
-    const auto extensionOf = [](const std::filesystem::path& path) {
-        auto extension = path.extension().wstring();
-        for (auto& character : extension) {
-            character = static_cast<wchar_t>(std::towlower(character));
-        }
-        return extension;
-    };
-    const auto removedExtension = extensionOf(removed.filePath);
-    if (removedExtension.empty() || removedExtension != extensionOf(added.filePath)) {
-        return false;
-    }
-    if (removed.title != removed.filePath.stem().wstring()) return false;
-    if (removed.artist != added.artist || removed.album != added.album) return false;
-    if (removed.durationSeconds > 0.0 && added.durationSeconds > 0.0 &&
-        std::abs(removed.durationSeconds - added.durationSeconds) > 0.5) {
-        return false;
-    }
-    return true;
-}
 
 } // namespace
 
@@ -70,69 +33,31 @@ std::vector<TrackRename> PlaylistManager::ApplyScan(const library::LibraryScanRe
 std::vector<TrackRename> PlaylistManager::DetectRenames(
     std::span<const library::Track> newTracks) {
     std::unordered_set<library::TrackId> newIds;
-    std::unordered_set<library::TrackId> oldIds;
     newIds.reserve(newTracks.size());
-    oldIds.reserve(tracks_.size());
-    for (const auto& track : tracks_) oldIds.insert(track.id);
+    for (const auto& track : newTracks) newIds.insert(track.id);
     // New catalog keyed by file identity. A duplicate identity (hard-linked copies)
     // is ambiguous: mark it with a null record so no orphan bridges onto it.
     std::map<library::FileIdentity, const library::Track*> newByIdentity;
     for (const auto& track : newTracks) {
-        newIds.insert(track.id);
         if (!track.fileIdentity.HasValue()) continue;
         const auto [it, inserted] = newByIdentity.emplace(track.fileIdentity, &track);
         if (!inserted) it->second = nullptr;
     }
 
+    // Rename bridging requires the platform file identity. Without it there is no way
+    // to tell a renamed file from a deletion plus an unrelated addition, and a guess
+    // (for example one-vanished/one-appeared in the same folder) would silently migrate
+    // the wrong song's play counts and lyrics across the scan boundary. Such
+    // identity-less crossings are intentionally left unbridged.
     std::vector<TrackRename> renames;
-    std::unordered_set<library::TrackId> bridgedAddedIds;
-    std::vector<const library::Track*> identityMissed;
-    identityMissed.reserve(tracks_.size());
     for (const auto& track : tracks_) {
         if (newIds.contains(track.id)) continue;  // still present, no bridge needed
-        if (track.fileIdentity.HasValue()) {
-            const auto found = newByIdentity.find(track.fileIdentity);
-            if (found != newByIdentity.end() && found->second != nullptr) {
-                const auto* replacement = found->second;
-                if (replacement->id == track.id) continue;  // defensive
-                renames.push_back(TrackRename{track.id, track.filePath, *replacement});
-                bridgedAddedIds.insert(replacement->id);
-                continue;
-            }
-        }
-        // No identity bridge: keep the candidate for the directory fallback below.
-        identityMissed.push_back(&track);
-    }
-
-    // Fallback for filesystems where the platform file identity is unavailable or
-    // unstable (cloud placeholders, exotic volumes, network shares): if exactly one old
-    // track vanished from a folder while exactly one new track appeared there and the
-    // two are indistinguishable except for the name, treat it as the same file renamed.
-    std::map<std::wstring, std::vector<const library::Track*>> removedByDirectory;
-    for (const auto* removed : identityMissed) {
-        const auto key = LowerKey(removed->filePath.parent_path());
-        if (key.empty()) continue;
-        removedByDirectory[key].push_back(removed);
-    }
-    std::map<std::wstring, std::vector<const library::Track*>> addedByDirectory;
-    for (const auto& track : newTracks) {
-        if (oldIds.contains(track.id) || bridgedAddedIds.contains(track.id)) continue;
-        const auto key = LowerKey(track.filePath.parent_path());
-        if (key.empty()) continue;
-        addedByDirectory[key].push_back(&track);
-    }
-    for (const auto& [directory, removedTracks] : removedByDirectory) {
-        const auto addedIt = addedByDirectory.find(directory);
-        if (addedIt == addedByDirectory.end() || addedIt->second.size() != 1 ||
-            removedTracks.size() != 1) {
-            continue;
-        }
-        const library::Track* removedTrack = removedTracks.front();
-        const library::Track* addedTrack = addedIt->second.front();
-        if (!FallbackRenameMatches(*removedTrack, *addedTrack)) continue;
-        renames.push_back(
-            TrackRename{removedTrack->id, removedTrack->filePath, *addedTrack});
-        bridgedAddedIds.insert(addedTrack->id);
+        if (!track.fileIdentity.HasValue()) continue;  // cannot prove a rename, do not guess
+        const auto found = newByIdentity.find(track.fileIdentity);
+        if (found == newByIdentity.end() || found->second == nullptr) continue;
+        const auto* replacement = found->second;
+        if (replacement->id == track.id) continue;  // defensive
+        renames.push_back(TrackRename{track.id, track.filePath, *replacement});
     }
     return renames;
 }
@@ -568,6 +493,14 @@ std::vector<const Playlist*> PlaylistManager::UserPlaylists() const {
         if (playlist.kind == PlaylistKind::User) result.push_back(&playlist);
     }
     return result;
+}
+
+void PlaylistManager::SetStartupCatalog(std::vector<library::Track> previousCatalog) {
+    // A catalog may already be present when a session restarts in-process (for example
+    // Settings reloads); only the truly first scan of a run may consume the snapshot.
+    if (!tracks_.empty() || previousCatalog.empty()) return;
+    tracks_ = std::move(previousCatalog);
+    RebuildIndexes();
 }
 
 Playlist* PlaylistManager::FindMutableUserPlaylist(PlaylistId id) noexcept {

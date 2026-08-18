@@ -157,6 +157,30 @@ private:
     // else the configured settings_.Settings().musicRoot. Never persisted; the configured
     // root always stays in settings_ and on disk.
     [[nodiscard]] std::filesystem::path EffectiveMusicRoot() const noexcept;
+    // Shared shape for settings setters: copy the current settings, apply mutate()
+    // (returning false means nothing changed = no-op), then validate+store, persist,
+    // bump the revision, and refresh. Returns true only when the change was accepted,
+    // so callers can gate side effects on it. ApplyTransientSettingsChange skips the
+    // disk write (live previews that must not persist).
+    template <typename Mutate>
+    bool ApplySettingsChange(Mutate&& mutate) {
+        auto settings = settings_.Settings();
+        if (!mutate(settings)) return false;
+        if (!settings_.SetSettings(std::move(settings), nullptr)) return false;
+        (void)settings_.SaveSettings(nullptr);
+        ++revision_;
+        if (window_) window_->Refresh();
+        return true;
+    }
+    template <typename Mutate>
+    bool ApplyTransientSettingsChange(Mutate&& mutate) {
+        auto settings = settings_.Settings();
+        if (!mutate(settings)) return false;
+        if (!settings_.SetSettings(std::move(settings), nullptr)) return false;
+        ++revision_;
+        if (window_) window_->Refresh();
+        return true;
+    }
     void ApplyCompletedScan();
     void RestoreSessionAfterScan();
     void HandleAudioSignals();
@@ -304,6 +328,10 @@ private:
     std::string discordPresenceStateKey_;
     std::string discordPresenceBaseKey_;
     library::TrackId discordPresenceTrackId_{};
+    // Last time a verse-bearing activity reached Discord. A newer line is dropped
+    // (never queued) while the shield below is active so quick verses do not spam
+    // the Rich Presence with sub-2 s visible text.
+    std::chrono::steady_clock::time_point discordLastLyricSend_{};
     // Keeps the transient audio Load state from clearing the new track presence.
     bool discordTrackTransitionPending_{};
     bool discordTrackTransitionPublished_{};

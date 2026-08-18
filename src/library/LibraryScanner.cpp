@@ -199,13 +199,18 @@ std::wstring DirectoryName(const std::filesystem::path& root,
 // are invalidated by changed modification time or size. Access is serialized by
 // cacheMutex; only the single scan thread reads/writes at run time.
 constexpr std::uint32_t DurationCacheMagic = 0x44524156u;  // "VARD" bytes, arbitrary
-constexpr std::uint32_t DurationCacheVersion = 1u;
+constexpr std::uint32_t DurationCacheVersion = 2u;
 constexpr std::size_t DurationCacheMaxEntries = 100000;
 
 struct DurationCacheEntry {
     std::filesystem::file_time_type modified{};
     std::uintmax_t size{};
     double seconds{};
+    // Backing-file identity (volume serial + file index) captured for the scan's Track
+    // model. Persisted so a file renamed while the app was closed can still be bridged
+    // back to its previous catalog entry on the next startup.
+    std::uint64_t volume{};
+    std::uint64_t index{};
 };
 
 struct DurationProbeResult {
@@ -220,13 +225,16 @@ std::filesystem::path gDurationCachePath;
 
 // Binary format: magic u32, version u32, count u64, then per entry:
 //   pathCharCount u32 (chars INCLUDING null), wchar_t path[pathCharCount],
-//   modifiedRep i64, size u64, seconds f64.
+//   modifiedRep i64, size u64, seconds f64, volume u64, index u64.
 // Corrupt/partial/older files are ignored and simply yield an empty cache; the
 // next completed scan rewrites the file.
 void LoadDurationCacheFromDisk() {
     std::scoped_lock lock(gDurationCacheMutex);
     if (gDurationCacheLoaded || gDurationCachePath.empty()) return;
     gDurationCacheLoaded = true;
+    // The on-disk snapshot is the source of truth for the previous-session catalog;
+    // anything already in memory is stale probe data from an earlier path setting.
+    gDurationCache.clear();
     std::ifstream in(gDurationCachePath, std::ios::binary);
     if (!in) return;
     std::uint32_t magic = 0;
@@ -248,15 +256,19 @@ void LoadDurationCacheFromDisk() {
         std::int64_t modifiedRep = 0;
         std::uint64_t size = 0;
         double seconds = 0.0;
+        std::uint64_t volume = 0;
+        std::uint64_t index = 0;
         in.read(reinterpret_cast<char*>(&modifiedRep), sizeof(modifiedRep));
         in.read(reinterpret_cast<char*>(&size), sizeof(size));
         in.read(reinterpret_cast<char*>(&seconds), sizeof(seconds));
+        in.read(reinterpret_cast<char*>(&volume), sizeof(volume));
+        in.read(reinterpret_cast<char*>(&index), sizeof(index));
         if (!in) return;
         gDurationCache.insert_or_assign(
             std::filesystem::path(std::move(pathText)),
             DurationCacheEntry{std::filesystem::file_time_type(
                                    std::filesystem::file_time_type::duration(modifiedRep)),
-                               size, seconds});
+                               size, seconds, volume, index});
     }
 }
 
@@ -291,7 +303,25 @@ void SaveDurationCacheToDisk() {
         out.write(reinterpret_cast<const char*>(&size), sizeof(size));
         const double seconds = entry.seconds;
         out.write(reinterpret_cast<const char*>(&seconds), sizeof(seconds));
+        out.write(reinterpret_cast<const char*>(&entry.volume), sizeof(entry.volume));
+        out.write(reinterpret_cast<const char*>(&entry.index), sizeof(entry.index));
     }
+}
+
+// Records the backing-file identity on an existing duration-cache entry so the next
+// startup can rebuild the previous-session catalog for rename bridging. The probe
+// already owns the entry (a scan just probed this path); no entry means the probe was
+// stopped or failed, and a future run will retry. Never stores identity-only entries.
+void MergeCacheIdentity(const std::filesystem::path& path, const FileIdentity& identity) {
+    if (!identity.HasValue()) return;
+    std::scoped_lock lock(gDurationCacheMutex);
+    const auto found = gDurationCache.find(path);
+    if (found == gDurationCache.end() || found->second.volume != 0 ||
+        found->second.index != 0) {
+        return;
+    }
+    found->second.volume = identity.volume;
+    found->second.index = identity.index;
 }
 
 #ifdef _WIN32
@@ -389,6 +419,25 @@ void LibraryScanner::SetDurationCachePath(std::filesystem::path path) {
 
 void LibraryScanner::SaveDurationCache() {
     SaveDurationCacheToDisk();
+}
+
+std::vector<Track> LibraryScanner::LoadPreviousCatalog() {
+    if (gDurationCachePath.empty()) return {};
+    // Forces a real disk read (or no-op when the cache was already loaded this run); the
+    // in-memory map is replaced by the on-disk snapshot so the returned catalog reflects
+    // exactly what the previous session persisted.
+    LoadDurationCacheFromDisk();
+    std::scoped_lock lock(gDurationCacheMutex);
+    std::vector<Track> previous;
+    previous.reserve(gDurationCache.size());
+    for (const auto& [path, entry] : gDurationCache) {
+        if (entry.volume == 0 && entry.index == 0) continue;
+        auto track = Track::FromPathOnly(path);
+        track.fileIdentity.volume = entry.volume;
+        track.fileIdentity.index = entry.index;
+        previous.push_back(std::move(track));
+    }
+    return previous;
 }
 
 bool LibraryScanner::IsSupported(const std::filesystem::path& path) noexcept {
@@ -498,6 +547,9 @@ LibraryScanResult LibraryScanner::Scan(std::span<const std::filesystem::path> re
                 track.durationSeconds = probe.seconds;
                 probedBytes = probe.fileSize;
             }
+            // Persist the backing-file identity alongside the probe record so a future
+            // startup can bridge a file renamed while the app was closed.
+            MergeCacheIdentity(track.filePath, track.fileIdentity);
 #endif
             if (track.durationSeconds > 0.0 && probedBytes > 0) {
                 const double kbps = static_cast<double>(probedBytes) * 8.0 /

@@ -154,7 +154,7 @@ void Win32Ui::Impl::UpdateModuleDrag(float x, float y) {
         // Detach as soon as the movement threshold is crossed.  The detached panel
         // then follows the pointer during the drag, while a drop on another panel
         // can re-create the tab group in FinishModuleDrag.
-        DetachModuleFromTabs(moduleLayoutDraft, draggedId);
+        moduleLayoutDraft.DetachModuleFromTabs(draggedId);
     }
     if (moduleGesture == ModuleGesture::Move && !moduleDetachTabOnMove) {
         moduleMoveTabbedGroup = moduleLayoutDraft.IsTabbed(draggedId);
@@ -530,7 +530,7 @@ void Win32Ui::Impl::FinishModuleDrag() noexcept {
             }
         } else if (moving) {
             if (detachTabOnMove || (!moveTabbedGroup && !moveSnapGroup)) {
-                DetachModuleFromTabs(moduleLayoutDraft, *dragged);
+                moduleLayoutDraft.DetachModuleFromTabs(*dragged);
             }
             if (auto* item = moduleLayoutDraft.Find(*dragged)) {
                 if (detachTabOnMove || (!moveTabbedGroup && !moveSnapGroup)) {
@@ -542,27 +542,6 @@ void Win32Ui::Impl::FinishModuleDrag() noexcept {
     }
     if (GetCapture() == window) ReleaseCapture();
     InvalidateRect(window, nullptr, FALSE);
-}
-
-void Win32Ui::Impl::DetachModuleFromTabs(ModuleLayout& layout, ModuleId id) const noexcept {
-    if (!layout.IsTabbed(id)) return;
-    const auto* root = layout.Find(layout.TabRoot(id));
-    if (!root) return;
-    const auto geometry = *root;
-    // When the root tab is removed, the remaining tab must keep the group's
-    // visible rectangle instead of reverting to its old hidden rectangle.
-    const auto tabCount = layout.GroupTabCount(id);
-    for (std::size_t index = 0; index < tabCount; ++index) {
-        const auto tab = layout.GroupMember(id, index);
-        if (tab == id) continue;
-        if (auto* item = layout.Find(tab)) {
-            item->x = geometry.x;
-            item->y = geometry.y;
-            item->width = geometry.width;
-            item->height = geometry.height;
-        }
-    }
-    layout.RemoveTab(id);
 }
 
 [[nodiscard]] HCURSOR Win32Ui::Impl::ModuleCursor(float x, float y) const noexcept {

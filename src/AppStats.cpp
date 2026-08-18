@@ -5,18 +5,15 @@
 namespace rivan {
 
 void App::SetStatsEnabled(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.statsEnabled == enabled) return;
-    settings.statsEnabled = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            if (settings.statsEnabled == enabled) return false;
+            settings.statsEnabled = enabled;
+            return true;
+        })) return;
     stats_.SetEnabled(enabled);
     if (!enabled && settingsCategory_ == ui::SettingCategory::Statistics) {
         settingsCategory_ = ui::SettingCategory::Integrations;
     }
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::SetStatisticsPeriod(const stats::DashboardPeriod period) {

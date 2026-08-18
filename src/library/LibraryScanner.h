@@ -26,6 +26,11 @@ public:
     // the path is empty.
     static void SetDurationCachePath(std::filesystem::path path);
     static void SaveDurationCache();
+    // Rebuilds the previous-session catalog snapshot (path + id + backing-file identity)
+    // from the persisted duration cache, so a file renamed while the app was closed can
+    // be bridged back to its previous catalog entry on the next startup scan. Empty when
+    // no usable snapshot exists. Call after SetDurationCachePath.
+    [[nodiscard]] static std::vector<Track> LoadPreviousCatalog();
 
     [[nodiscard]] static bool IsSupported(const std::filesystem::path& path) noexcept;
     [[nodiscard]] LibraryScanResult Scan(const std::filesystem::path& root,

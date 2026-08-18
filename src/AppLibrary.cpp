@@ -48,12 +48,11 @@ std::pair<std::wstring, std::wstring> App::LyricsMetadata(const library::Track& 
 }
 
 void App::SetDiscordEnabled(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.discordEnabled == enabled) return;
-    settings.discordEnabled = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            if (settings.discordEnabled == enabled) return false;
+            settings.discordEnabled = enabled;
+            return true;
+        })) return;
     discordPresencePublished_ = false;
     discordPresenceStateKey_.clear();
     discordPresenceBaseKey_.clear();
@@ -64,7 +63,8 @@ void App::SetDiscordEnabled(bool enabled) {
     discordTimestampRefreshRequested_.store(false, std::memory_order_release);
     discordTrackTransitionLoadingObserved_.store(false, std::memory_order_release);
     discordPositionUpdatesEnabled_.store(
-        enabled && settings.discordSecondaryText == config::DiscordSecondaryText::SyncLyrics,
+        enabled && settings_.Settings().discordSecondaryText ==
+                       config::DiscordSecondaryText::SyncLyrics,
         std::memory_order_release);
     discord_.SetEnabled(enabled);
     if (enabled) {
@@ -72,59 +72,45 @@ void App::SetDiscordEnabled(bool enabled) {
     } else {
         discord_.Clear();
     }
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::SetDiscordShowArtist(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.discordShowArtist == enabled) return;
-    settings.discordShowArtist = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            if (settings.discordShowArtist == enabled) return false;
+            settings.discordShowArtist = enabled;
+            return true;
+        })) return;
     UpdateDiscordPresence();
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::SetDiscordSecondaryText(config::DiscordSecondaryText mode) {
-    auto settings = settings_.Settings();
-    if (settings.discordSecondaryText == mode) return;
-    settings.discordSecondaryText = mode;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([mode](config::AppSettings& settings) {
+            if (settings.discordSecondaryText == mode) return false;
+            settings.discordSecondaryText = mode;
+            return true;
+        })) return;
     discordPositionUpdatesEnabled_.store(
-        settings.discordEnabled && mode == config::DiscordSecondaryText::SyncLyrics,
+        settings_.Settings().discordEnabled && mode == config::DiscordSecondaryText::SyncLyrics,
         std::memory_order_release);
     UpdateDiscordPresence();
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::SetDiscordFallbackToTotalStreams(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.discordFallbackToTotalStreams == enabled) return;
-    settings.discordFallbackToTotalStreams = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            if (settings.discordFallbackToTotalStreams == enabled) return false;
+            settings.discordFallbackToTotalStreams = enabled;
+            return true;
+        })) return;
     UpdateDiscordPresence();
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::SetDiscordShowGithubButton(bool enabled) {
-    auto settings = settings_.Settings();
-    if (settings.discordShowGithubButton == enabled) return;
-    settings.discordShowGithubButton = enabled;
-    std::string error;
-    if (!settings_.SetSettings(settings, &error)) return;
-    (void)settings_.SaveSettings(&error);
+    if (!ApplySettingsChange([enabled](config::AppSettings& settings) {
+            if (settings.discordShowGithubButton == enabled) return false;
+            settings.discordShowGithubButton = enabled;
+            return true;
+        })) return;
     UpdateDiscordPresence();
-    ++revision_;
-    if (window_) window_->Refresh();
 }
 
 void App::StartLibraryScan() {
@@ -447,10 +433,23 @@ void App::UpdateDiscordPresence() {
     const bool lyricOnlyUpdate = !refreshTimestamp && discordPresencePublished_ &&
                                   discordPresenceTrackId_ == track->id &&
                                   discordPresenceBaseKey_ == baseKey;
+    if (lyricOnlyUpdate) {
+        // Shield: a verse must stay visible on Discord for at least 2 s before a newer
+        // line may replace it. Rapid verse changes are dropped, never queued; the
+        // current line simply stays until the shield lifts.
+        constexpr auto kLyricShield = std::chrono::seconds{2};
+        const auto now = std::chrono::steady_clock::now();
+        if (now - discordLastLyricSend_ < kLyricShield) return;
+    }
     discordPresencePublished_ = true;
     discordPresenceStateKey_ = key;
     discordPresenceBaseKey_ = baseKey;
     discordPresenceTrackId_ = track->id;
+    if (!activity.imageText.empty()) {
+        // Any verse-bearing publish (track start or lyric switch) restarts the shield;
+        // the newly visible text deserves the same 2 s hold.
+        discordLastLyricSend_ = std::chrono::steady_clock::now();
+    }
     discord_.SetActivity(std::move(activity), lyricOnlyUpdate
                                                   ? discord::ActivityUpdateKind::Lyric
                                                   : discord::ActivityUpdateKind::Track);

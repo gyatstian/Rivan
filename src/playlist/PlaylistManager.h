@@ -85,6 +85,10 @@ public:
     // Replaces all user playlists (used when restoring persisted playlists at startup).
     void SetUserPlaylists(std::vector<Playlist> users,
                           std::vector<library::Track> externalTracks);
+    // Seeds the previous-session catalog snapshot so the first ApplyScan of a run can
+    // bridge files renamed while the app was closed (the live previous catalog does not
+    // exist until the first scan applies). No-op once any catalog is present.
+    void SetStartupCatalog(std::vector<library::Track> previousCatalog);
     // Snapshot of user playlists in tree order, for persistence.
     [[nodiscard]] std::vector<const Playlist*> UserPlaylists() const;
 
@@ -92,7 +96,10 @@ private:
     void ReplaceLibrary(std::vector<library::Track> tracks,
                         std::vector<Playlist> generatedPlaylists);
     // Matches renamed backing files between the current catalog and a fresh scan by
-    // file identity. Reported before ReplaceLibrary so empty user playlists stay intact.
+    // platform file identity only. A vanished/appeared pair without a matching identity
+    // is never bridged, because the rescan cannot distinguish a rename from a deletion
+    // plus an unrelated addition and a wrong guess would corrupt per-song stores.
+    // Reported before ReplaceLibrary so empty user playlists stay intact.
     [[nodiscard]] std::vector<TrackRename> DetectRenames(
         std::span<const library::Track> newTracks);
     [[nodiscard]] Playlist* FindMutableUserPlaylist(PlaylistId id) noexcept;
